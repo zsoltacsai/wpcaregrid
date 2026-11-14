@@ -58,6 +58,22 @@ _LEGACY_AGENT_RECORD = re.compile(
     r"evidence_sha256=([0-9a-f]{64})\n?\Z"
 )
 _AGENT = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
+_LEGACY_CORRECTION_ALLOWLIST = {
+    6834079554: {
+        "body_sha256": "5be3d840822759a7815917851e2f73707890173979074b8bd7b752f5bc82e94e",
+        "pr": 377,
+        "head_sha": "4196dab735b2f73dd2b207afa960596741eda8c5",
+        "role": "integration_qa",
+        "agent": "Hermione",
+    },
+    6834080385: {
+        "body_sha256": "1f77060825e45c86fe693ce5290d96dd4e14877f8854fa378006c399353608fb",
+        "pr": 377,
+        "head_sha": "4196dab735b2f73dd2b207afa960596741eda8c5",
+        "role": "appsec",
+        "agent": "Mad-Eye Moody",
+    },
+}
 
 
 class ReviewRefused(ValueError):
@@ -109,7 +125,7 @@ def _correction_target_fields(body: object):
     role, pr, sha, agent, reviewer_kind, decision, digest = match.groups()
     if _AGENT.fullmatch(agent) is not None:
         return None
-    return role, int(pr), sha
+    return role, int(pr), sha, agent
 
 
 def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dict[str, object]]:
@@ -140,16 +156,21 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
         raw_id, digest, raw_pr, target_sha, role, disposition = match.groups()
         target_id, target_pr = int(raw_id), int(raw_pr)
         target = by_id.get(target_id)
+        allowed = _LEGACY_CORRECTION_ALLOWLIST.get(target_id)
         if (not isinstance(target, Mapping) or not _owner_comment(target, owner)
                 or not isinstance(target.get("body"), str)
                 or hashlib.sha256(target["body"].encode("utf-8")).hexdigest() != digest):
             raise ReviewRefused("review_correction_target_invalid")
+        if allowed is None or digest != allowed["body_sha256"]:
+            raise ReviewRefused("review_correction_target_invalid")
         if (item["id"] <= target_id or item["created_at"] <= target["created_at"]):
             raise ReviewRefused("review_correction_not_append_only")
         fields = _correction_target_fields(target["body"])
-        if fields is None:
+        if (fields is None or fields != (allowed["role"], allowed["pr"],
+                                         allowed["head_sha"], allowed["agent"])):
             raise ReviewRefused("review_correction_target_invalid")
-        if fields != (role, target_pr, target_sha):
+        if (role, target_pr, target_sha) != (allowed["role"], allowed["pr"],
+                                              allowed["head_sha"]):
             raise ReviewRefused("review_correction_subject_mismatch")
         if target_id in corrections:
             raise ReviewRefused("review_correction_ambiguous")

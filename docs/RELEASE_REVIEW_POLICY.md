@@ -61,9 +61,11 @@ content and reviewer provenance therefore cannot be independently authenticated 
 available records. These entries must not be normalized into new agent IDs or counted as
 PASS. Preserve both original comments unchanged.
 
-This proposed V3.1-compatible parser supports only an explicit Owner-authored,
-append-only **invalidation** record for a recognizable legacy record whose sole schema
-defect is an invalid `agent` token:
+This proposed V3.1-compatible parser supports an explicit Owner-authored, append-only
+**invalidation** record only for the two exact comment IDs and body hashes in the table
+above. A syntactically similar malformed record—even with the same PR, head, role, or
+agent text—is not eligible. The allowlist also binds expected PR, head, role, and agent;
+the body digest binds every original field byte-for-byte:
 
 ```
 WPCG_RELEASE_CORRECTION_V3
@@ -78,9 +80,9 @@ reason_code=legacy_agent_identifier_schema
 
 The verifier accepts a correction only when the Owner identity and GitHub `OWNER`
 association are present, the correction's comment ID and creation time are later than
-the target's, the target comment exists and is still malformed for exactly that
-legacy-agent reason, the body digest and subject match byte-for-byte, and there is only
-one correction for the target. A correction invalidates the old claim; it cannot
+the target's, the target comment exists and exactly matches one allowlisted comment,
+the body digest and subject match, and there is only one correction for the target. A
+correction invalidates the old claim; it cannot
 create, repair, or supersede it with PASS. It also becomes the latest `INVALIDATED`
 decision for that exact role/PR/head, so it cannot reveal an earlier PASS that the bad
 record followed. Only a new, valid PASS comment created after the correction can restore

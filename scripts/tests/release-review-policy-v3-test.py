@@ -174,7 +174,15 @@ class AgentReviewTests(unittest.TestCase):
     def test_historical_agent_label_records_need_exact_append_only_invalidation(self):
         old_qa, old_appsec = actual_pr377_legacy_records()
         current_appsec, current_qa = actual_pr383_records()
-        comments = [old_qa, old_appsec, current_appsec, current_qa]
+        old_pass_qa = record("integration_qa", pr=377,
+                             sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                             agent="qa-agent-historical")
+        old_pass_appsec = record("appsec", pr=377,
+                                 sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                                 agent="appsec-agent-historical")
+        old_pass_qa.update(id=6834079001, created_at="2026-11-11T10:00:00Z")
+        old_pass_appsec.update(id=6834080001, created_at="2026-11-11T10:00:01Z")
+        comments = [old_pass_qa, old_pass_appsec, old_qa, old_appsec, current_appsec, current_qa]
         self.assertEqual(refusal(comments, pr=383, sha=SHA), "review_record_invalid")
         comments.extend([correction(old_qa, 7_000_000_001, sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
                          correction(old_appsec, 7_000_000_002, sha="4196dab735b2f73dd2b207afa960596741eda8c5")])
@@ -185,25 +193,55 @@ class AgentReviewTests(unittest.TestCase):
                          "e45a6d40c66ed643d277b88261af237d336829e5bb76896837e34e960a073c5d")
         self.assertEqual(accepted["integration_qa"]["evidence_sha256"],
                          "93ddca4b09fbf52c8c7f65fc13221950280c561b05e17fc988aebdca685e504b")
-        # Invalidation cannot turn the old claims into evidence for their own subject.
-        self.assertEqual(refusal(comments, pr=377, sha=NEW), "review_evidence_missing")
+        # Invalidation supersedes earlier PASS; only PASS records posted after
+        # the correction can restore the affected roles.
+        self.assertEqual(refusal(comments, pr=377,
+                                 sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+                         "review_not_pass")
+        fresh_qa = record("integration_qa", pr=377,
+                          sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                          agent="qa-agent-fresh", created="2026-11-14T13:00:00Z")
+        fresh_appsec = record("appsec", pr=377,
+                              sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                              agent="appsec-agent-fresh", created="2026-11-14T13:00:01Z")
+        fresh_qa["id"], fresh_appsec["id"] = 7_000_000_003, 7_000_000_004
+        restored = verify(comments + [fresh_qa, fresh_appsec], pr=377,
+                          sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        self.assertEqual(restored["integration_qa"]["agent"], "qa-agent-fresh")
+        self.assertEqual(restored["appsec"]["agent"], "appsec-agent-fresh")
+
+    def test_unrelated_malformed_owner_records_remain_blocking(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        corrections = [
+            correction(old_qa, 7_000_000_001, sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+            correction(old_appsec, 7_000_000_002, sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+        ]
+        for decision in ("CHANGES_REQUIRED", "BLOCKED"):
+            other = legacy_malformed(6834080400, "appsec", "Other Agent", decision=decision)
+            other["created_at"] = "2026-11-12T20:00:00Z"
+            comments = [old_qa, old_appsec, *corrections, other, *actual_pr383_records()]
+            self.assertEqual(refusal(comments, pr=383,
+                                     sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                             "review_record_invalid")
+            forged_correction = correction(
+                other, 7_000_000_010, sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+            self.assertEqual(refusal(comments + [forged_correction], pr=383,
+                                     sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                             "review_correction_target_invalid")
 
     def test_invalidation_supersedes_prior_pass_until_fresh_role_pass(self):
-        for decision in ("CHANGES_REQUIRED", "BLOCKED"):
-            old_bad = legacy_malformed(8000, "appsec", "Bad Agent", decision=decision)
-            old_qa_pass = record("integration_qa", pr=377, sha=NEW)
-            old_appsec_pass = record("appsec", pr=377, sha=NEW)
-            correction_id = 8_000_001
-            invalidation = correction(old_bad, correction_id)
-            with self.subTest(decision=decision):
-                self.assertEqual(refusal([old_qa_pass, old_appsec_pass, old_bad, invalidation],
-                                         pr=377, sha=NEW), "review_not_pass")
-                fresh_appsec = record("appsec", pr=377, sha=NEW,
-                                      created="2026-11-14T13:00:00Z")
-                fresh_appsec["id"] = 8_000_002
-                accepted = verify([old_qa_pass, old_appsec_pass, old_bad, invalidation, fresh_appsec],
-                                  pr=377, sha=NEW)
-                self.assertEqual(accepted["appsec"]["id"], fresh_appsec["id"])
+        old = actual_pr377_legacy_records()[0]
+        invalidation = correction(old, 7_000_000_001,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        prior = record("integration_qa", pr=377,
+                       sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        prior.update(id=6834079001, created_at="2026-11-11T10:00:00Z")
+        appsec = record("appsec", pr=377,
+                        sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        appsec.update(id=6834080001, created_at="2026-11-11T10:00:01Z")
+        self.assertEqual(refusal([prior, appsec, old, invalidation], pr=377,
+                                 sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+                         "review_not_pass")
 
     def test_correction_is_exact_owner_bound_and_cannot_rewrite_history(self):
         old = legacy_malformed(7003, "integration_qa", "Hermione")
@@ -227,9 +265,10 @@ class AgentReviewTests(unittest.TestCase):
         self.assertEqual(refusal([valid, forged, record("appsec")]), "review_correction_target_invalid")
 
     def test_duplicate_corrections_are_ambiguous_and_fail_closed(self):
-        old = legacy_malformed(7007, "integration_qa", "Hermione")
-        first = correction(old, 7107)
-        second = correction(old, 7108)
+        old = actual_pr377_legacy_records()[0]
+        sha = "4196dab735b2f73dd2b207afa960596741eda8c5"
+        first = correction(old, 7_000_000_007, sha=sha)
+        second = correction(old, 7_000_000_008, sha=sha)
         self.assertEqual(refusal([old, first, second]), "review_correction_ambiguous")
         self.assertEqual(refusal([old, dict(old), first]), "review_evidence_ambiguous")
 
