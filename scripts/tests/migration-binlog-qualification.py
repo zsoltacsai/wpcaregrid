@@ -77,10 +77,14 @@ def binlog_trigger_identifier(info):
 def mysqlbinlog_query_statement(event):
     lines = [line for line in event.splitlines() if not line.lstrip().startswith('#')]
     body = '\n'.join(lines).strip()
+    # mysqlbinlog prefixes this Query form with a line-continuation backslash.
     current_schema = None
     use_pattern = re.compile(r"(?is)^USE\s+[\x60']?([A-Za-z0-9_]+)[\x60']?\s*;\s*")
     set_pattern = re.compile(r"(?is)^SET\b.*?;\s*")
     while body:
+        if body.startswith('\\'):
+            body = body[1:].lstrip()
+            continue
         use = use_pattern.match(body)
         if use:
             current_schema = use.group(1)
@@ -215,6 +219,10 @@ def self_test():
         assert len(query_events) == 1
         assert mysqlbinlog_logged_trigger_names(mysqlbinlog_text, expected,
                                                 'wpcg_qual_a', 'u') == {'guard_x'}
+        escaped_query = ('# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
+                         'use wpcg_qual_a;\n\\CREATE TRIGGER guard_x BEFORE INSERT')
+        assert mysqlbinlog_logged_trigger_names(
+            escaped_query, expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert mysqlbinlog_logged_trigger_names(
             '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse wpcg_qual_a;\n'
             '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8\n'
