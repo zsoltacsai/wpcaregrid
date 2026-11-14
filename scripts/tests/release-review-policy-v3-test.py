@@ -351,6 +351,44 @@ class AgentReviewTests(unittest.TestCase):
                                  sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
                          "review_record_invalid")
 
+    def test_quarantined_comment_requires_both_valid_original_invalidations(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        malformed = published_malformed_correction()
+        valid_qa = correction(old_qa, 7_000_000_001,
+                              sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        valid_appsec = correction(old_appsec, 7_000_000_002,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        for records in ([old_qa, old_appsec, malformed, valid_appsec],
+                        [old_qa, old_appsec, malformed, valid_qa]):
+            self.assertEqual(refusal([*records, *actual_pr383_records()], pr=383,
+                                     sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                             "review_record_invalid")
+
+    def test_quarantine_fails_closed_for_missing_target_ordering_duplicate_or_unicode(self):
+        old_qa = actual_pr377_legacy_records()[0]
+        malformed = published_malformed_correction()
+        good = correction(old_qa, 7_000_000_001,
+                          sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        self.assertEqual(refusal([malformed, good]), "review_correction_invalid")
+
+        before_target = dict(malformed, created_at="2026-11-12T19:42:46Z")
+        self.assertEqual(refusal([old_qa, before_target, good]), "review_correction_invalid")
+        duplicate = dict(malformed)
+        self.assertEqual(refusal([old_qa, malformed, duplicate, good]),
+                         "review_evidence_ambiguous")
+        unicode_body = dict(malformed, body=malformed["body"].replace(
+            "\nreason_code=", "\ninvalid=\ud800\nreason_code="))
+        self.assertEqual(refusal([old_qa, unicode_body, good]), "review_correction_invalid")
+
+    def test_quarantined_comment_wrong_author_cannot_replace_valid_correction(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        malformed = dict(published_malformed_correction(),
+                         user={"login": "untrusted"}, author_association="NONE")
+        valid_appsec = correction(old_appsec, 7_000_000_002,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        self.assertEqual(refusal([old_qa, old_appsec, malformed, valid_appsec]),
+                         "review_record_invalid")
+
     def test_render_rejects_what_the_verifier_would_reject(self):
         good = dict(role="appsec", pr=1, head_sha=SHA, agent="agent-appsec-01", decision="PASS",
                     evidence_sha256=DIGEST)

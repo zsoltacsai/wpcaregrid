@@ -163,9 +163,12 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
         match = _CORRECTION.fullmatch(body)
         if match is None:
             quarantine = _MALFORMED_CORRECTION_QUARANTINE.get(item["id"])
+            try:
+                malformed_body_digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            except UnicodeEncodeError:
+                raise ReviewRefused("review_correction_invalid") from None
             if (quarantine is not None
-                    and hashlib.sha256(body.encode("utf-8")).hexdigest()
-                    == quarantine["body_sha256"]):
+                    and malformed_body_digest == quarantine["body_sha256"]):
                 target = by_id.get(quarantine["target_comment_id"])
                 allowed_target = _LEGACY_CORRECTION_ALLOWLIST.get(
                     quarantine["target_comment_id"])
