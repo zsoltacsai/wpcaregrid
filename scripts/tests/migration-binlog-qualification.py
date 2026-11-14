@@ -160,7 +160,9 @@ def split_sql_statements(text):
         elif char in ("'", '"', '`'):
             quote = char
         elif char == ';':
-            statements.append(text[start:index].strip())
+            statement = text[start:index].strip()
+            if statement:
+                statements.append(statement)
             start = index + 1
         index += 1
     tail = text[start:].strip()
@@ -377,6 +379,9 @@ def self_test():
             'Query', '/* comment ; CREATE PROCEDURE p() */ '
             'CREATE TRIGGER guard_x BEFORE INSERT', expected,
             'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', '; /* comment */ ;; CREATE TRIGGER guard_x BEFORE INSERT ;;',
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not logged_trigger_names(
             'Query', "SET @@session.sql_mode='x; CREATE TRIGGER guard_x'",
             expected, 'wpcg_qual_a', 'u')
