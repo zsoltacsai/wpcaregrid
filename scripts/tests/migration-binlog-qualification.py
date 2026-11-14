@@ -138,6 +138,10 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                     stats[name]['first'] = first.group(1).upper() if first else 'EMPTY'
                     stripped_statement = statement.lstrip()
                     stats[name]['leadcp'] = ord(stripped_statement[0]) if stripped_statement else 0
+                    without_leading_ticks = stripped_statement.lstrip('`')
+                    next_word = re.match(r'([A-Za-z_]+)', without_leading_ticks.lstrip())
+                    stats[name]['next_word'] = next_word.group(1).upper() if next_word else 'EMPTY'
+                    stats[name]['leading_ticks'] = len(stripped_statement) - len(stripped_statement.lstrip('`'))
                     stats[name]['create_token'] = bool(re.search(r'\bCREATE\b', statement, re.IGNORECASE))
                     stats[name]['definer_token'] = bool(re.search(r'\bDEFINER\b', statement, re.IGNORECASE))
                     stats[name]['trigger_token'] = bool(re.search(r'\bTRIGGER\b', statement, re.IGNORECASE))
@@ -409,12 +413,14 @@ def trigger_ddl_logged(expected_names, schema, dba):
         for name in expected_names:
             for key in ('events', 'schema', 'ddl'):
                 diagnostics[name][key] += file_stats[name][key]
-            for key in ('first', 'leadcp', 'create_token', 'definer_token', 'trigger_token', 'after_trigger'):
+            for key in ('first', 'leadcp', 'next_word', 'leading_ticks', 'create_token',
+                        'definer_token', 'trigger_token', 'after_trigger'):
                 if key in file_stats[name]:
                     diagnostics[name][key] = file_stats[name][key]
     for name in sorted(expected_names):
         detail = ','.join(f'{key}={diagnostics[name].get(key, 0)}' for key in
-                          ('events', 'schema', 'ddl', 'first', 'leadcp', 'create_token', 'definer_token',
+                          ('events', 'schema', 'ddl', 'first', 'leadcp', 'next_word', 'leading_ticks',
+                           'create_token', 'definer_token',
                            'trigger_token', 'after_trigger'))
         record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
