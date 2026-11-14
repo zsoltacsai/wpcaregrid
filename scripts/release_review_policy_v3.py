@@ -74,6 +74,16 @@ _LEGACY_CORRECTION_ALLOWLIST = {
         "agent": "Mad-Eye Moody",
     },
 }
+# One malformed Owner correction comment was published during the authorized
+# recovery attempt. Pin its exact bytes and its intended original target so it
+# can never be mistaken for a correction or broaden the two-record target list.
+# The original target remains blocking until one valid correction is appended.
+_MALFORMED_CORRECTION_QUARANTINE = {
+    6880748416: {
+        "body_sha256": "60283180a007514373b50d90bc49400fefbdf91495d28435777640b1293a750d",
+        "target_comment_id": 6834079554,
+    },
+}
 
 
 class ReviewRefused(ValueError):
@@ -116,6 +126,16 @@ def _owner_comment(item: object, owner: str) -> bool:
             and type(item.get("id")) is int and item["id"] > 0)
 
 
+def _body_sha256(body: object) -> str | None:
+    """Hash a UTF-8 comment body, treating invalid Unicode as unavailable evidence."""
+    if not isinstance(body, str):
+        return None
+    try:
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:
+        return None
+
+
 def _correction_target_fields(body: object):
     if not isinstance(body, str):
         return None
@@ -152,6 +172,22 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
             raise ReviewRefused("review_correction_invalid")
         match = _CORRECTION.fullmatch(body)
         if match is None:
+            quarantine = _MALFORMED_CORRECTION_QUARANTINE.get(item["id"])
+            malformed_body_digest = _body_sha256(body)
+            if (quarantine is not None
+                    and malformed_body_digest == quarantine["body_sha256"]):
+                target = by_id.get(quarantine["target_comment_id"])
+                allowed_target = _LEGACY_CORRECTION_ALLOWLIST.get(
+                    quarantine["target_comment_id"])
+                if (isinstance(target, Mapping) and _owner_comment(target, owner)
+                        and allowed_target is not None
+                        and isinstance(target.get("body"), str)
+                        and _body_sha256(target["body"]) == allowed_target["body_sha256"]
+                        and item["id"] > target["id"]
+                        and item["created_at"] > target["created_at"]):
+                    # This pins only the known malformed submission. It does
+                    # not authorize or perform its intended invalidation.
+                    continue
             raise ReviewRefused("review_correction_invalid")
         raw_id, digest, raw_pr, target_sha, role, disposition = match.groups()
         target_id, target_pr = int(raw_id), int(raw_pr)
@@ -159,7 +195,7 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
         allowed = _LEGACY_CORRECTION_ALLOWLIST.get(target_id)
         if (not isinstance(target, Mapping) or not _owner_comment(target, owner)
                 or not isinstance(target.get("body"), str)
-                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest() != digest):
+                or _body_sha256(target["body"]) != digest):
             raise ReviewRefused("review_correction_target_invalid")
         if allowed is None or digest != allowed["body_sha256"]:
             raise ReviewRefused("review_correction_target_invalid")
@@ -224,7 +260,7 @@ def verify_agent_release_reviews(
             correction = corrections.get(comment_id) if type(comment_id) is int else None
             target_fields = _correction_target_fields(body)
             if (correction is not None and target_fields is not None
-                    and correction["digest"] == hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    and correction["digest"] == _body_sha256(body)
                     and (correction["pr"], correction["head_sha"], correction["role"])
                     == (target_fields[1], target_fields[2], target_fields[0])):
                 # A valid correction is an explicit Owner invalidation, never a

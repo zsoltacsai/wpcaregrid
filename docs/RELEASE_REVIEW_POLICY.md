@@ -87,11 +87,31 @@ create, repair, or supersede it with PASS. It also becomes the latest `INVALIDAT
 decision for that exact role/PR/head, so it cannot reveal an earlier PASS that the bad
 record followed. Only a new, valid PASS comment created after the correction can restore
 that role. Malformed, ambiguous, forged, stale-subject, duplicate, or non-Owner
-corrections do not suppress the original fail-closed error. No historical comment is
-deleted, rewritten, whitelisted, or silently ignored.
+corrections do not suppress the original fail-closed error. The single exact malformed
+submission below is quarantined as a malformed submission only; it does not suppress
+the original target's fail-closed error. No historical comment is deleted, rewritten,
+or converted into review evidence.
 
-The parser change is a proposal pending independent QA/AppSec review and separate Owner
-authorization before integration. It does not post correction comments automatically.
+### Quarantine of one malformed correction submission
+
+During the authorized recovery attempt, Owner comment `6880748416` was submitted with
+a truncated digest for target `6834079554`. Its exact body SHA-256 is
+`60283180a007514373b50d90bc49400fefbdf91495d28435777640b1293a750d`. This comment is
+not an invalidation and does not authorize either historical target. The parser pins
+only this exact comment ID and body digest, requires its Owner metadata and append-only
+ordering, and excludes it from the correction set. A changed body, another ID, or any
+other malformed Owner correction remains blocking. The two original target IDs and
+their digest/subject allowlist above is unchanged; each still requires its own valid
+append-only correction before its historical record can be ignored as invalidated. As
+verified in the live #174 ledger on 2026-11-14, the Owner posted the integration-QA
+invalidation as comment [`6880762648`](https://github.com/zsoltacsai/wpcaregrid/issues/174#issuecomment-6880762648)
+and the AppSec invalidation as comment [`6880763941`](https://github.com/zsoltacsai/wpcaregrid/issues/174#issuecomment-6880763941).
+Both bind the exact target ID, original body digest, PR #377, original head, role, and
+`INVALIDATED` disposition. The malformed submission `6880748416` remains preserved and
+does not substitute for either valid record.
+
+The parser change is a proposal pending independent exact-HEAD QA/AppSec review and
+protected-branch integration. It does not post correction comments automatically.
 
 ## Not changed by this policy
 
