@@ -266,6 +266,11 @@ def logged_trigger_match(event_type, info, expected_names, schema):
 
 
 def mysqlbinlog_query_events(log_text):
+    return [event for event, error_code in mysqlbinlog_query_blocks(log_text)
+            if error_code == '0']
+
+
+def mysqlbinlog_query_blocks(log_text):
     blocks = re.split(r'(?m)(?=^# at [0-9]+\s*$)', log_text)
     events = []
     for block in blocks:
@@ -275,8 +280,8 @@ def mysqlbinlog_query_events(log_text):
             r'thread_id=[0-9]+\b.*\berror_code=([0-9]+)\b',
             block,
         )
-        if header and header.group(1) == '0':
-            events.append(block)
+        if header:
+            events.append((block, header.group(1)))
     return events
 
 
@@ -284,8 +289,15 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
     current_schema = None
     matched = set()
     stats = {name: {'events': 0, 'schema': 0, 'ddl': 0} for name in expected_names}
-    for event in mysqlbinlog_query_events(log_text):
+    for event, error_code in mysqlbinlog_query_blocks(log_text):
         event_schema, statement = mysqlbinlog_query_statement(event)
+        if error_code != '0':
+            # A failed Query event containing a USE leaves the stream's schema
+            # attribution uncertain. Drop it rather than attributing later DDL
+            # to the stale schema and accepting a false match.
+            if event_schema is not None:
+                current_schema = None
+            continue
         if event_schema is not None:
             current_schema = event_schema
         for name in expected_names:
@@ -363,6 +375,12 @@ def self_test():
         assert not mysqlbinlog_logged_trigger_names(
             '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1419\n'
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
+            'use another;\n'
+            '# at 200\n#260101 00:00:01 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
             '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7\n'
