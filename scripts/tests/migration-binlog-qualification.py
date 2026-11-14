@@ -214,7 +214,8 @@ def logged_trigger_match(event_type, info, expected_names, schema):
                 return set(), 'malformed_use_prelude'
             if first_word:
                 return set(), f"unrecognized_prelude_{first_word.group(1).upper()}"
-            return set(), 'unrecognized_prelude'
+            return set(), (f"unrecognized_prelude_cp_{ord(statement[0])}"
+                           if statement else 'unrecognized_prelude_empty')
         for name in expected_names:
             name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
             if re.match(rf"{name_token}(?:\s|$)", statement[create.end():], re.IGNORECASE):
