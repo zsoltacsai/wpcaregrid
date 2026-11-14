@@ -174,7 +174,22 @@ jobs:
           npm run build
 
       - name: Install Chromium and required system libraries
-        run: npx playwright install --with-deps chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp "$RUNNER_TEMP/playwright-install.XXXXXX")"
+          trap 'rm -f "$log_file"' EXIT
+          for attempt in 1 2; do
+            if npx playwright install --with-deps chromium 2>&1 | tee "$log_file"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ] || ! grep -Fq 'Temporary failure resolving' "$log_file"; then
+              echo "::error::Chromium installation failed (attempt $attempt/2)"
+              exit 1
+            fi
+            echo "::warning::Temporary Ubuntu repository DNS failure; retrying Chromium installation once"
+            sleep 20
+          done
 
       - name: Prepare isolated synthetic SQLite application
         run: |
