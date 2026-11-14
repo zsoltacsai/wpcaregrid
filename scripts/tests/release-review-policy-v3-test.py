@@ -229,6 +229,51 @@ class AgentReviewTests(unittest.TestCase):
                                      sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
                              "review_correction_target_invalid")
 
+    def test_exact_malformed_duplicate_correction_is_inert_and_hash_pinned(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        target_sha = "4196dab735b2f73dd2b207afa960596741eda8c5"
+        valid_corrections = [
+            correction(old_qa, 7_000_000_001, sha=target_sha),
+            correction(old_appsec, 7_000_000_002, sha=target_sha),
+        ]
+        malformed = {
+            "id": 6880748416,
+            "created_at": "2026-11-14T16:34:20Z",
+            "author_association": "OWNER",
+            "user": {"login": OWNER},
+            "body": (
+                "WPCG_RELEASE_CORRECTION_V3\n"
+                "target_comment_id=6834079554\n"
+                "target_body_sha256=5be3d840822759a7815917851e2f73707890173979074b8bd7b752f5bc82e\n"
+                "target_pr=377\n"
+                "target_head_sha=4196dab735b2f73dd2b207afa960596741eda8c5\n"
+                "target_role=integration_qa\n"
+                "disposition=INVALIDATED\n"
+                "reason_code=legacy_agent_identifier_schema\n"
+            ),
+        }
+        comments = [old_qa, old_appsec, *valid_corrections, malformed,
+                    *actual_pr383_records()]
+        accepted = verify(comments, pr=383,
+                          sha="aecc24e679de7537385d2625bbf6ef9455a89303")
+        self.assertEqual(set(accepted), {"integration_qa", "appsec"})
+
+        # The inert duplicate cannot replace the required valid invalidation.
+        without_qa_correction = [old_qa, old_appsec, valid_corrections[1], malformed]
+        self.assertEqual(refusal(without_qa_correction, pr=377, sha=target_sha),
+                         "review_record_invalid")
+
+        altered = dict(malformed, body=malformed["body"].replace("target_pr=377", "target_pr=378"))
+        edited_comments = [altered if item is malformed else item for item in comments]
+        self.assertEqual(refusal(edited_comments, pr=383,
+                                 sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                         "review_correction_invalid")
+
+        copied = dict(malformed, id=6_880_748_417)
+        self.assertEqual(refusal([*comments, copied], pr=383,
+                                 sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                         "review_correction_invalid")
+
     def test_only_exact_allowlisted_comment_ids_and_body_hashes_are_correctable(self):
         allowed = actual_pr377_legacy_records()[0]
         target_sha = "4196dab735b2f73dd2b207afa960596741eda8c5"

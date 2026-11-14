@@ -75,6 +75,14 @@ _LEGACY_CORRECTION_ALLOWLIST = {
     },
 }
 
+# This Owner comment is an accidental, malformed duplicate attempt to correct
+# the already allowlisted PR #377 QA record. Ignore only its exact immutable
+# GitHub ID and body digest. It does not invalidate the target record and does
+# not excuse any other malformed Owner correction.
+_INERT_MALFORMED_CORRECTION_ALLOWLIST = {
+    6880748416: "60283180a007514373b50d90bc49400fefbdf91495d28435777640b1293a750d",
+}
+
 
 class ReviewRefused(ValueError):
     """Stable, non-sensitive reason the release review evidence was rejected."""
@@ -150,6 +158,13 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
             continue
         if not _owner_comment(item, owner):
             raise ReviewRefused("review_correction_invalid")
+        inert_digest = _INERT_MALFORMED_CORRECTION_ALLOWLIST.get(item["id"])
+        if inert_digest is not None:
+            if hashlib.sha256(body.encode("utf-8")).hexdigest() != inert_digest:
+                raise ReviewRefused("review_correction_invalid")
+            # This is not an operative correction. The separately valid
+            # allowlisted correction for the target is still required.
+            continue
         match = _CORRECTION.fullmatch(body)
         if match is None:
             raise ReviewRefused("review_correction_invalid")
