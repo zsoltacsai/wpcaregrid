@@ -98,6 +98,35 @@ def mysqlbinlog_query_statement(event):
     return current_schema, body
 
 
+def split_sql_statements(text):
+    """Split at semicolons outside quoted strings and identifiers."""
+    statements = []
+    start = 0
+    quote = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == '\\' and quote in ("'", '"'):
+                index += 2
+                continue
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif char in ("'", '"', '`'):
+            quote = char
+        elif char == ';':
+            statements.append(text[start:index].strip())
+            start = index + 1
+        index += 1
+    tail = text[start:].strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 def logged_trigger_names(event_type, info, expected_names, schema, definer):
     if event_type != 'Query':
         return set()
@@ -113,13 +142,14 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
         r"^\s*CREATE\s+(?:DEFINER\s*=\s*.+?\s+)?TRIGGER\s+",
         re.IGNORECASE | re.DOTALL,
     )
-    create = create_pattern.match(info)
-    if create is None:
-        return set()
-    for name in expected_names:
-        name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
-        if re.match(rf"{name_token}(?:\s|$)", info[create.end():], re.IGNORECASE):
-            return {name}
+    for statement in split_sql_statements(info):
+        create = create_pattern.match(statement)
+        if create is None:
+            continue
+        for name in expected_names:
+            name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
+            if re.match(rf"{name_token}(?:\s|$)", statement[create.end():], re.IGNORECASE):
+                return {name}
     return set()
 
 
@@ -276,6 +306,10 @@ def self_test():
         assert logged_trigger_names(
             'Query', "CREATE TRIGGER 'guard_x' BEFORE INSERT", expected,
             'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', 'C utf8mb4 ; SET @@session.character_set_client=33; '
+            'CREATE DEFINER=`u`@`%` TRIGGER `guard_x` BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         # Binlog spelling is syntax evidence only; final object metadata verifies the DBA.
         assert logged_trigger_names(
             'Query', 'CREATE DEFINER=other@% TRIGGER guard_x BEFORE INSERT', expected,
