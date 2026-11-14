@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import inspect
 import sys
 import unittest
@@ -41,6 +42,58 @@ def refusal(comments, **kw):
     with unittest.TestCase().assertRaises(R.ReviewRefused) as ctx:
         verify(comments, **kw)
     return str(ctx.exception)
+
+
+def legacy_malformed(comment_id, role, agent):
+    body = (f"{R.RECORD_PREFIX}\nrole={role}\npr=377\nhead_sha={NEW}\nagent={agent}\n"
+            f"reviewer_kind=ai_agent\ndecision=PASS\nevidence_sha256={DIGEST}")
+    return {"id": comment_id, "created_at": "2026-11-12T19:42:46Z",
+            "author_association": "OWNER", "user": {"login": OWNER}, "body": body}
+
+
+def correction(target, correction_id, *, digest=None, pr=377, sha=NEW, role=None,
+               login=OWNER, association="OWNER", created="2026-11-14T12:00:00Z"):
+    body = R.render_correction(
+        target_comment_id=target["id"],
+        target_body_sha256=digest or hashlib.sha256(target["body"].encode()).hexdigest(),
+        target_pr=pr, target_head_sha=sha, target_role=role or
+        ("integration_qa" if "role=integration_qa" in target["body"] else "appsec"))
+    return {"id": correction_id, "created_at": created,
+            "author_association": association, "user": {"login": login}, "body": body}
+
+
+def actual_pr377_legacy_records():
+    return [
+        {"id": 6834079554, "created_at": "2026-11-12T19:42:46Z",
+         "author_association": "OWNER", "user": {"login": OWNER},
+         "body": "WPCG_RELEASE_REVIEW_V3\nrole=integration_qa\npr=377\n"
+                 "head_sha=4196dab735b2f73dd2b207afa960596741eda8c5\n"
+                 "agent=Hermione\nreviewer_kind=ai_agent\ndecision=PASS\n"
+                 "evidence_sha256=7ba0b9d471cd4a771f25f80763cffa40e94f7715069beaac7fd95731111accb5"},
+        {"id": 6834080385, "created_at": "2026-11-12T19:42:48Z",
+         "author_association": "OWNER", "user": {"login": OWNER},
+         "body": "WPCG_RELEASE_REVIEW_V3\nrole=appsec\npr=377\n"
+                 "head_sha=4196dab735b2f73dd2b207afa960596741eda8c5\n"
+                 "agent=Mad-Eye Moody\nreviewer_kind=ai_agent\ndecision=PASS\n"
+                 "evidence_sha256=6cfd2b49cc3ffdc6f012a6469bf4cc54637dd89dc6b739b2cebaabe0c477ffe4"},
+    ]
+
+
+def actual_pr383_records():
+    return [
+        {"id": 6865700799, "created_at": "2026-11-13T21:45:57Z",
+         "author_association": "OWNER", "user": {"login": OWNER},
+         "body": "WPCG_RELEASE_REVIEW_V3\nrole=appsec\npr=383\n"
+                 "head_sha=aecc24e679de7537385d2625bbf6ef9455a89303\n"
+                 "agent=mad-eye-moody-appsec-gpt-6-astra\nreviewer_kind=ai_agent\n"
+                 "decision=PASS\nevidence_sha256=e45a6d40c66ed643d277b88261af237d336829e5bb76896837e34e960a073c5d"},
+        {"id": 6868980658, "created_at": "2026-11-14T01:01:36Z",
+         "author_association": "OWNER", "user": {"login": OWNER},
+         "body": "WPCG_RELEASE_REVIEW_V3\nrole=integration_qa\npr=383\n"
+                 "head_sha=aecc24e679de7537385d2625bbf6ef9455a89303\n"
+                 "agent=codex-gpt-6-luna-pr383-integration-qa\nreviewer_kind=ai_agent\n"
+                 "decision=PASS\nevidence_sha256=93ddca4b09fbf52c8c7f65fc13221950280c561b05e17fc988aebdca685e504b"},
+    ]
 
 
 class AgentReviewTests(unittest.TestCase):
@@ -117,6 +170,51 @@ class AgentReviewTests(unittest.TestCase):
         ]
         for body in bodies:
             self.assertEqual(refusal([record(body=body)]), "review_record_invalid", body)
+
+    def test_historical_agent_label_records_need_exact_append_only_invalidation(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        current_appsec, current_qa = actual_pr383_records()
+        comments = [old_qa, old_appsec, current_appsec, current_qa]
+        self.assertEqual(refusal(comments, pr=383, sha=SHA), "review_record_invalid")
+        comments.extend([correction(old_qa, 7_000_000_001, sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+                         correction(old_appsec, 7_000_000_002, sha="4196dab735b2f73dd2b207afa960596741eda8c5")])
+        accepted = verify(comments, pr=383,
+                          sha="aecc24e679de7537385d2625bbf6ef9455a89303")
+        self.assertEqual(set(accepted), {"integration_qa", "appsec"})
+        self.assertEqual(accepted["appsec"]["evidence_sha256"],
+                         "e45a6d40c66ed643d277b88261af237d336829e5bb76896837e34e960a073c5d")
+        self.assertEqual(accepted["integration_qa"]["evidence_sha256"],
+                         "93ddca4b09fbf52c8c7f65fc13221950280c561b05e17fc988aebdca685e504b")
+        # Invalidation cannot turn the old claims into evidence for their own subject.
+        self.assertEqual(refusal(comments, pr=377, sha=NEW), "review_evidence_missing")
+
+    def test_correction_is_exact_owner_bound_and_cannot_rewrite_history(self):
+        old = legacy_malformed(7003, "integration_qa", "Hermione")
+        cases = [
+            correction(old, 7101, digest="0" * 64),
+            correction(old, 7102, pr=378),
+            correction(old, 7103, sha=SHA),
+            correction(old, 7104, role="appsec"),
+            correction(old, 7108, created="2026-11-01T00:00:00Z"),
+        ]
+        for invalid in cases:
+            self.assertIn(refusal([old, invalid]), {
+                "review_correction_target_invalid", "review_correction_subject_mismatch",
+                "review_correction_not_append_only"})
+        outsider = correction(old, 7105, login="mallory", association="NONE")
+        self.assertEqual(refusal([old, outsider]), "review_record_invalid")
+        malformed_owner = correction(old, 7109, association="COLLABORATOR")
+        self.assertEqual(refusal([old, malformed_owner]), "review_correction_invalid")
+        valid = record("integration_qa")
+        forged = correction(valid, 7106)
+        self.assertEqual(refusal([valid, forged, record("appsec")]), "review_correction_target_invalid")
+
+    def test_duplicate_corrections_are_ambiguous_and_fail_closed(self):
+        old = legacy_malformed(7007, "integration_qa", "Hermione")
+        first = correction(old, 7107)
+        second = correction(old, 7108)
+        self.assertEqual(refusal([old, first, second]), "review_correction_ambiguous")
+        self.assertEqual(refusal([old, dict(old), first]), "review_evidence_ambiguous")
 
     def test_render_rejects_what_the_verifier_would_reject(self):
         good = dict(role="appsec", pr=1, head_sha=SHA, agent="agent-appsec-01", decision="PASS",

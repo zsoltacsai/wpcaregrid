@@ -18,6 +18,7 @@ permission: privileged host operations still need separate Owner approval.
 from __future__ import annotations
 
 import re
+import hashlib
 from typing import Iterable, Mapping
 
 RECORD_PREFIX = "WPCG_RELEASE_REVIEW_V3"
@@ -35,6 +36,28 @@ _RECORD = re.compile(
     r"decision=(PASS|CHANGES_REQUIRED|BLOCKED)\n"
     r"evidence_sha256=([0-9a-f]{64})\n?\Z"
 )
+CORRECTION_PREFIX = "WPCG_RELEASE_CORRECTION_V3"
+_CORRECTION = re.compile(
+    r"WPCG_RELEASE_CORRECTION_V3\n"
+    r"target_comment_id=([1-9][0-9]{0,19})\n"
+    r"target_body_sha256=([0-9a-f]{64})\n"
+    r"target_pr=([1-9][0-9]{0,8})\n"
+    r"target_head_sha=([0-9a-f]{40})\n"
+    r"target_role=(integration_qa|appsec)\n"
+    r"disposition=INVALIDATED\n"
+    r"reason_code=(legacy_agent_identifier_schema)\n?\Z"
+)
+_LEGACY_AGENT_RECORD = re.compile(
+    r"WPCG_RELEASE_REVIEW_V3\n"
+    r"role=(integration_qa|appsec)\n"
+    r"pr=([1-9][0-9]{0,8})\n"
+    r"head_sha=([0-9a-f]{40})\n"
+    r"agent=([^\n]{1,128})\n"
+    r"reviewer_kind=(ai_agent)\n"
+    r"decision=(PASS|CHANGES_REQUIRED|BLOCKED)\n"
+    r"evidence_sha256=([0-9a-f]{64})\n?\Z"
+)
+_AGENT = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
 
 
 class ReviewRefused(ValueError):
@@ -53,6 +76,85 @@ def render_record(*, role: str, pr: int, head_sha: str, agent: str, decision: st
 
 def _sort_key(item: Mapping[str, object]):
     return (item["created_at"], item["id"])
+
+
+def render_correction(*, target_comment_id: int, target_body_sha256: str,
+                      target_pr: int, target_head_sha: str, target_role: str) -> str:
+    """Render the narrow append-only invalidation record for legacy agent labels."""
+    body = (f"{CORRECTION_PREFIX}\ntarget_comment_id={target_comment_id}\n"
+            f"target_body_sha256={target_body_sha256}\ntarget_pr={target_pr}\n"
+            f"target_head_sha={target_head_sha}\ntarget_role={target_role}\n"
+            "disposition=INVALIDATED\nreason_code=legacy_agent_identifier_schema\n")
+    if _CORRECTION.fullmatch(body) is None:
+        raise ReviewRefused("review_correction_invalid")
+    return body
+
+
+def _owner_comment(item: object, owner: str) -> bool:
+    if not isinstance(item, Mapping):
+        return False
+    user = item.get("user")
+    return (isinstance(user, Mapping) and user.get("login") == owner
+            and item.get("author_association") == "OWNER"
+            and isinstance(item.get("created_at"), str) and bool(item.get("created_at"))
+            and type(item.get("id")) is int and item["id"] > 0)
+
+
+def _correction_target_fields(body: object):
+    if not isinstance(body, str):
+        return None
+    match = _LEGACY_AGENT_RECORD.fullmatch(body)
+    if match is None:
+        return None
+    role, pr, sha, agent, reviewer_kind, decision, digest = match.groups()
+    if _AGENT.fullmatch(agent) is not None:
+        return None
+    return role, int(pr), sha
+
+
+def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, tuple[str, int, str, str]]:
+    by_id: dict[int, object] = {}
+    for item in items:
+        if not isinstance(item, Mapping) or type(item.get("id")) is not int:
+            continue
+        comment_id = item["id"]
+        if comment_id in by_id:
+            raise ReviewRefused("review_evidence_ambiguous")
+        by_id[comment_id] = item
+    corrections: dict[int, tuple[str, int, str, str]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        body = item.get("body")
+        if not isinstance(body, str) or not body.startswith(CORRECTION_PREFIX):
+            continue
+        user = item.get("user")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        if login != owner:
+            continue
+        if not _owner_comment(item, owner):
+            raise ReviewRefused("review_correction_invalid")
+        match = _CORRECTION.fullmatch(body)
+        if match is None:
+            raise ReviewRefused("review_correction_invalid")
+        raw_id, digest, raw_pr, target_sha, role, disposition = match.groups()
+        target_id, target_pr = int(raw_id), int(raw_pr)
+        target = by_id.get(target_id)
+        if (not isinstance(target, Mapping) or not _owner_comment(target, owner)
+                or not isinstance(target.get("body"), str)
+                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest() != digest):
+            raise ReviewRefused("review_correction_target_invalid")
+        if (item["id"] <= target_id or item["created_at"] <= target["created_at"]):
+            raise ReviewRefused("review_correction_not_append_only")
+        fields = _correction_target_fields(target["body"])
+        if fields is None:
+            raise ReviewRefused("review_correction_target_invalid")
+        if fields != (role, target_pr, target_sha):
+            raise ReviewRefused("review_correction_subject_mismatch")
+        if target_id in corrections:
+            raise ReviewRefused("review_correction_ambiguous")
+        corrections[target_id] = (digest, target_pr, target_sha, role)
+    return corrections
 
 
 def verify_agent_release_reviews(
@@ -75,8 +177,10 @@ def verify_agent_release_reviews(
     if isinstance(comments, (str, bytes, Mapping)) or not isinstance(comments, Iterable):
         raise ReviewRefused("review_evidence_invalid")
 
+    items = list(comments)
+    corrections = _authorized_corrections(items, owner=repository_owner)
     latest: dict[str, dict[str, object]] = {}
-    for item in comments:
+    for item in items:
         if not isinstance(item, Mapping):
             continue
         body = item.get("body")
@@ -93,6 +197,14 @@ def verify_agent_release_reviews(
         if (match is None or item.get("author_association") != "OWNER"
                 or not isinstance(created, str) or not created
                 or type(comment_id) is not int or comment_id <= 0):
+            correction = corrections.get(comment_id) if type(comment_id) is int else None
+            target_fields = _correction_target_fields(body)
+            if (correction is not None and target_fields is not None
+                    and correction[0] == hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    and correction[1:] == (target_fields[1], target_fields[2], target_fields[0])):
+                # A valid correction is an explicit Owner invalidation, never a
+                # replacement PASS. Fresh well-formed evidence is still needed.
+                continue
             raise ReviewRefused("review_record_invalid")
         role, record_pr, record_sha, agent, kind, decision, digest = match.groups()
         if int(record_pr) != pr_number or record_sha != head_sha:
