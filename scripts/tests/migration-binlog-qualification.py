@@ -205,7 +205,14 @@ def logged_trigger_match(event_type, info, expected_names, schema):
             return set(), 'unsupported_charset_marker'
         create = create_pattern.match(statement)
         if create is None:
-            return set(), 'non_create_statement'
+            first_word = re.match(r'(?is)^\s*([A-Za-z_]+)', statement)
+            if first_word and first_word.group(1).upper() == 'CREATE':
+                return set(), 'create_syntax_mismatch'
+            if first_word and first_word.group(1).upper() == 'USE':
+                return set(), 'malformed_use_prelude'
+            if first_word:
+                return set(), f"unrecognized_prelude_{first_word.group(1).upper()}"
+            return set(), 'unrecognized_prelude'
         for name in expected_names:
             name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
             if re.match(rf"{name_token}(?:\s|$)", statement[create.end():], re.IGNORECASE):
