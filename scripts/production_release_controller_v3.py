@@ -31,7 +31,9 @@ REPOSITORY = "zsoltacsai/wpcaregrid"
 LEDGER_ISSUE = 174
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 MAX_RESPONSE_BYTES = 4_000_000
-MAX_PAGES = 20
+MAX_PAGES = 100
+LEDGER_PAGE_SIZE = 25
+MAX_LEDGER_COMMENTS = MAX_PAGES * LEDGER_PAGE_SIZE
 
 
 class EvidenceUnavailable(RuntimeError):
@@ -46,10 +48,17 @@ def _request_json(path: str):
         def redirect_request(self, request, response, code, message, headers, new_url):
             return None
 
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "WPCG-release-controller-v3",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    token = os.environ.get("WPCG_GITHUB_TOKEN")
+    if token is not None:
+        if (not token or len(token) > 4096
+                or any(ord(character) < 33 or ord(character) > 126 for character in token)):
+            raise EvidenceUnavailable("api_token_invalid")
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         API + path,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "WPCG-release-controller-v3",
-                 "X-GitHub-Api-Version": "2022-11-28"},
+        headers=headers,
         method="GET")
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=8) as response:
@@ -69,17 +78,32 @@ def _request_json(path: str):
     return value
 
 
-def _list(path: str):
+def _list(path: str, *, expected_total: int, per_page: int = LEDGER_PAGE_SIZE):
+    if (type(expected_total) is not int or expected_total < 0
+            or expected_total > MAX_PAGES * per_page
+            or type(per_page) is not int or per_page < 1 or per_page > 100):
+        raise EvidenceUnavailable("api_list_count_invalid")
     output = []
     for page in range(1, MAX_PAGES + 1):
         separator = "&" if "?" in path else "?"
-        batch = _request_json(f"{path}{separator}per_page=100&page={page}")
-        if not isinstance(batch, list) or len(batch) > 100:
+        batch = _request_json(f"{path}{separator}per_page={per_page}&page={page}")
+        if not isinstance(batch, list) or len(batch) > per_page:
             raise EvidenceUnavailable("api_list_invalid")
         output.extend(batch)
-        if len(batch) < 100:
+        if len(output) == expected_total:
             return output
+        if len(output) > expected_total or len(batch) < per_page:
+            raise EvidenceUnavailable("api_list_incomplete")
     raise EvidenceUnavailable("api_list_incomplete")
+
+
+def _ledger_comments():
+    issue = _request_json(f"/repos/{REPOSITORY}/issues/{LEDGER_ISSUE}")
+    expected_total = issue.get("comments") if isinstance(issue, dict) else None
+    if type(expected_total) is not int:
+        raise EvidenceUnavailable("ledger_count_unavailable")
+    return _list(f"/repos/{REPOSITORY}/issues/{LEDGER_ISSUE}/comments",
+                 expected_total=expected_total)
 
 
 def _workflow_jobs(run_id: int, attempt: int, head_sha: str):
@@ -116,7 +140,8 @@ def _workflow_jobs(run_id: int, attempt: int, head_sha: str):
     return output
 
 
-def _matching_workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None):
+def _matching_workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None,
+                           pr_identity: tuple[str, str] | None = None):
     query = urllib.parse.urlencode({"head_sha": commit_sha, "event": event, "per_page": 100})
     runs = []
     expected_total = None
@@ -148,11 +173,24 @@ def _matching_workflow_run(commit_sha: str, *, event: str, pr_number: int | None
             continue
         if pr_number is not None:
             prs = run.get("pull_requests")
-            if not isinstance(prs, list) or not any(
-                isinstance(pr, dict) and pr.get("number") == pr_number
-                and isinstance(pr.get("base"), dict)
-                and pr["base"].get("ref") == PRIMARY_BRANCH for pr in prs):
+            if not isinstance(prs, list):
                 continue
+            matching = [pr for pr in prs if isinstance(pr, dict)
+                        and pr.get("number") == pr_number]
+            # GitHub omits pull_requests for completed runs after a PR merges.
+            # In that case bind the immutable head SHA plus its repository/ref.
+            if prs and not matching:
+                continue
+            if matching and any(not isinstance(pr.get("base"), dict)
+                                or pr["base"].get("ref") != PRIMARY_BRANCH for pr in matching):
+                continue
+            if pr_identity is not None:
+                expected_ref, expected_repo = pr_identity
+                head_repo = run.get("head_repository")
+                if (run.get("head_branch") != expected_ref
+                        or not isinstance(head_repo, dict)
+                        or head_repo.get("full_name") != expected_repo):
+                    continue
         elif run.get("head_branch") != PRIMARY_BRANCH:
             continue
         candidates.append(run)
@@ -161,8 +199,10 @@ def _matching_workflow_run(commit_sha: str, *, event: str, pr_number: int | None
     return max(candidates, key=lambda run: (run["created_at"], run["id"]))
 
 
-def _workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None):
-    selected = _matching_workflow_run(commit_sha, event=event, pr_number=pr_number)
+def _workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None,
+                  pr_identity: tuple[str, str] | None = None):
+    selected = _matching_workflow_run(commit_sha, event=event, pr_number=pr_number,
+                                      pr_identity=pr_identity)
     run_id = selected.get("id")
     attempt = selected.get("run_attempt")
     if (type(run_id) is not int or run_id <= 0
@@ -171,11 +211,13 @@ def _workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None):
     jobs = _workflow_jobs(run_id, attempt, commit_sha)
     attempt_data = _request_json(
         f"/repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
-    snapshot_fields = ("id", "run_attempt", "head_sha", "event", "path", "status", "conclusion")
+    snapshot_fields = ("id", "run_attempt", "head_sha", "head_branch", "head_repository",
+                       "event", "path", "status", "conclusion")
     if (not isinstance(attempt_data, dict)
             or any(attempt_data.get(field) != selected.get(field) for field in snapshot_fields)):
         raise EvidenceUnavailable("ci_attempt_changed_during_read")
-    latest = _matching_workflow_run(commit_sha, event=event, pr_number=pr_number)
+    latest = _matching_workflow_run(commit_sha, event=event, pr_number=pr_number,
+                                    pr_identity=pr_identity)
     if latest.get("id") != run_id or latest.get("run_attempt") != attempt:
         raise EvidenceUnavailable("ci_run_changed_during_read")
     return attempt_data, jobs
@@ -187,9 +229,11 @@ def _ledger_snapshot(comments: object):
     output = []
     seen_ids = set()
     for comment in comments:
-        user = comment.get("user") if isinstance(comment, dict) else None
+        if not isinstance(comment, dict):
+            raise EvidenceUnavailable("ledger_snapshot_invalid")
+        user = comment.get("user")
         login = user.get("login") if isinstance(user, dict) else None
-        comment_id = comment.get("id") if isinstance(comment, dict) else None
+        comment_id = comment.get("id")
         values = (comment_id, comment.get("author_association"), login,
                   comment.get("created_at"), comment.get("updated_at"), comment.get("body"))
         if (type(comment_id) is not int or comment_id <= 0 or comment_id in seen_ids
@@ -211,7 +255,8 @@ def _ci_snapshot(run: object, jobs: object):
              (pr.get("base") or {}).get("sha"))
             for pr in prs if isinstance(pr, dict) and isinstance(pr.get("base"), dict)))
     run_identity = tuple(run.get(field) for field in (
-        "id", "run_attempt", "head_sha", "event", "path", "status", "conclusion"))
+        "id", "run_attempt", "head_sha", "head_branch", "head_repository",
+        "event", "path", "status", "conclusion"))
     job_identity = tuple(sorted(
         (job.get("id"), job.get("run_id"), job.get("run_attempt"), job.get("head_sha"),
          job.get("name"), job.get("status"), job.get("conclusion"))
@@ -244,7 +289,16 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
     pr_head_sha = pr_head.get("sha") if isinstance(pr_head, dict) else None
     if pr_head_sha != expected_pr_head_sha:
         raise AdmissionRefused("merged_pr_identity_invalid")
-    pr_run, pr_jobs = _workflow_run(pr_head_sha, event="pull_request", pr_number=pr_number)
+    head = pr.get("head") if isinstance(pr, dict) else None
+    head_ref = head.get("ref") if isinstance(head, dict) else None
+    head_repository = head.get("repo") if isinstance(head, dict) else None
+    head_repository_name = (head_repository.get("full_name")
+                            if isinstance(head_repository, dict) else None)
+    if not isinstance(head_ref, str) or not isinstance(head_repository_name, str):
+        raise EvidenceUnavailable("merged_pr_head_repository_unavailable")
+    pr_run, pr_jobs = _workflow_run(
+        pr_head_sha, event="pull_request", pr_number=pr_number,
+        pr_identity=(head_ref, head_repository_name))
     candidate_run, candidate_jobs = _workflow_run(candidate_sha, event="push")
     if primary_sha == candidate_sha:
         primary_run, primary_jobs = candidate_run, candidate_jobs
@@ -255,7 +309,7 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
     owner_login = owner.get("login") if isinstance(owner, dict) else None
     if not isinstance(owner_login, str) or not owner_login:
         raise EvidenceUnavailable("repository_owner_unavailable")
-    comments = _list(f"/repos/{REPOSITORY}/issues/{LEDGER_ISSUE}/comments")
+    comments = _ledger_comments()
     snapshot = _ledger_snapshot(comments)
     result = verify_release_admission(
         candidate_sha=candidate_sha, primary_sha=primary_sha,
@@ -266,7 +320,8 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
         primary_ci_run=primary_run, primary_ci_jobs=primary_jobs,
         ledger_comments=comments, repository_owner=owner_login)
     latest_pr_run, latest_pr_jobs = _workflow_run(
-        pr_head_sha, event="pull_request", pr_number=pr_number)
+        pr_head_sha, event="pull_request", pr_number=pr_number,
+        pr_identity=(head_ref, head_repository_name))
     latest_candidate_run, latest_candidate_jobs = _workflow_run(candidate_sha, event="push")
     if primary_sha == candidate_sha:
         latest_primary_run, latest_primary_jobs = latest_candidate_run, latest_candidate_jobs
@@ -279,7 +334,7 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
                  _ci_snapshot(latest_primary_run, latest_primary_jobs))
     if latest_ci != original_ci:
         raise EvidenceUnavailable("ci_changed_during_evidence_read")
-    final_comments = _list(f"/repos/{REPOSITORY}/issues/{LEDGER_ISSUE}/comments")
+    final_comments = _ledger_comments()
     if _ledger_snapshot(final_comments) != snapshot:
         raise EvidenceUnavailable("ledger_changed_during_read")
     final_branch = _request_json(f"/repos/{REPOSITORY}/branches/{branch}")

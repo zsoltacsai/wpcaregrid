@@ -83,6 +83,7 @@ def fixture():
     pr_run = {
         "id": 1, "run_attempt": 1,
         "head_sha": HEAD, "event": "pull_request", "path": ".github/workflows/ci.yml",
+        "head_branch": "feature/release", "head_repository": {"full_name": OWNER + "/wpcaregrid"},
         "status": "completed", "conclusion": "success",
         "pull_requests": [{"number": 383, "base": {
             "ref": "claude/ecstatic-wozniak-oemyuf", "sha": BASE}}],
@@ -90,18 +91,21 @@ def fixture():
     candidate_run = {
         "id": 2, "run_attempt": 1,
         "head_sha": CANDIDATE, "event": "push", "path": ".github/workflows/ci.yml",
+        "head_branch": "claude/ecstatic-wozniak-oemyuf",
         "status": "completed", "conclusion": "success",
     }
     primary_run = {
         "id": 3, "run_attempt": 1,
         "head_sha": PRIMARY, "event": "push", "path": ".github/workflows/ci.yml",
+        "head_branch": "claude/ecstatic-wozniak-oemyuf",
         "status": "completed", "conclusion": "success",
     }
     pr = {
         "number": 383, "state": "closed", "merged": True,
         "merge_commit_sha": CANDIDATE,
-        "base": {"ref": "claude/ecstatic-wozniak-oemyuf"},
-        "head": {"sha": HEAD},
+        "base": {"ref": "claude/ecstatic-wozniak-oemyuf", "sha": BASE},
+        "head": {"sha": HEAD, "ref": "feature/release",
+                 "repo": {"full_name": OWNER + "/wpcaregrid"}},
     }
     merge = {"sha": CANDIDATE, "parents": [{"sha": BASE}, {"sha": HEAD}]}
     comments = [
@@ -212,7 +216,11 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         self.assertEqual(refusal_reason(expected_pr_head_sha="d" * 40), "merged_pr_target_invalid")
 
     def test_merge_base_mismatch_is_refused(self):
-        self.assertEqual(refusal_reason(expected_base_sha="d" * 40), "merged_pr_base_mismatch")
+        args = fixture()
+        args["expected_base_sha"] = "d" * 40
+        args["pr"] = {**args["pr"], "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
+                                                "sha": "d" * 40}}
+        self.assertEqual(refusal_reason(**args), "merged_pr_base_mismatch")
 
     def test_pr_must_be_merged_to_protected_primary_name(self):
         args = fixture()
@@ -338,6 +346,27 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
                              "pull_requests": [{"number": 382,
                                                 "base": {"ref": "claude/ecstatic-wozniak-oemyuf"}}]}
         self.assertEqual(refusal_reason(pr_ci_run=args["pr_ci_run"]), "ci_pr_binding_invalid")
+        args = fixture()
+        args["pr"] = {**args["pr"], "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
+                                                "sha": "e" * 40}}
+        self.assertEqual(refusal_reason(pr=args["pr"]), "merged_pr_target_invalid")
+
+    def test_pr_ci_without_merged_pull_requests_envelope_binds_head_repo_and_ref(self):
+        args = fixture()
+        args["pr_ci_run"] = {**args["pr_ci_run"], "pull_requests": []}
+        self.assertEqual(verify_release_admission(**args)["result"], "PASS")
+        args = fixture()
+        args["pr_ci_run"] = {**args["pr_ci_run"],
+                             "head_repository": {"full_name": "attacker/wpcaregrid"}}
+        self.assertEqual(refusal_reason(**{"pr_ci_run": args["pr_ci_run"]}),
+                         "ci_pr_binding_invalid")
+
+    def test_push_ci_must_be_from_protected_primary_branch(self):
+        args = fixture()
+        args["candidate_ci_run"] = {**args["candidate_ci_run"],
+                                    "head_branch": "feature/release"}
+        self.assertEqual(refusal_reason(candidate_ci_run=args["candidate_ci_run"]),
+                         "ci_branch_binding_invalid")
 
 
 class ReadOnlyControllerTests(unittest.TestCase):
@@ -360,7 +389,7 @@ class ReadOnlyControllerTests(unittest.TestCase):
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
              patch.object(CONTROLLER, "_workflow_run",
                           side_effect=controller_ci_responses(data)), \
-             patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
+             patch.object(CONTROLLER, "_ledger_comments", return_value=data["ledger_comments"]):
             result = CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["candidate_sha"], CANDIDATE)
@@ -395,7 +424,7 @@ class ReadOnlyControllerTests(unittest.TestCase):
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
              patch.object(CONTROLLER, "_workflow_run",
                           side_effect=controller_ci_responses(data)), \
-             patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
+             patch.object(CONTROLLER, "_ledger_comments", return_value=data["ledger_comments"]):
             with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "primary_changed_during_read")
@@ -422,7 +451,7 @@ class ReadOnlyControllerTests(unittest.TestCase):
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
              patch.object(CONTROLLER, "_workflow_run",
                           side_effect=controller_ci_responses(data)), \
-             patch.object(CONTROLLER, "_list", side_effect=[data["ledger_comments"], revoked]):
+             patch.object(CONTROLLER, "_ledger_comments", side_effect=[data["ledger_comments"], revoked]):
             with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "ledger_changed_during_read")
@@ -448,7 +477,7 @@ class ReadOnlyControllerTests(unittest.TestCase):
                         data["candidate_ci_jobs"])
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
              patch.object(CONTROLLER, "_workflow_run", side_effect=responses), \
-             patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
+             patch.object(CONTROLLER, "_ledger_comments", return_value=data["ledger_comments"]):
             with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "ci_changed_during_evidence_read")
@@ -464,6 +493,49 @@ class ReadOnlyControllerTests(unittest.TestCase):
             CONTROLLER._request_json("/repos/zsoltacsai/other")
         self.assertEqual(str(caught.exception), "api_path_invalid")
 
+    def test_request_json_adds_optional_bearer_token_without_exposing_it(self):
+        with patch.dict(CONTROLLER.os.environ, {"WPCG_GITHUB_TOKEN": "ghs_secret_token"}):
+            with patch.object(CONTROLLER.urllib.request, "build_opener") as opener:
+                response = opener.return_value.open.return_value.__enter__.return_value
+                response.status = 200
+                response.read.return_value = b'{"ok":true}'
+                self.assertEqual(CONTROLLER._request_json("/repos/zsoltacsai/wpcaregrid"),
+                                 {"ok": True})
+                request = opener.return_value.open.call_args.args[0]
+                self.assertEqual(request.get_header("Authorization"), "Bearer ghs_secret_token")
+        with patch.dict(CONTROLLER.os.environ, {"WPCG_GITHUB_TOKEN": "bad token"}):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER._request_json("/repos/zsoltacsai/wpcaregrid")
+        self.assertEqual(str(caught.exception), "api_token_invalid")
+
+    def test_ledger_pages_use_bounded_payloads_and_match_issue_comment_count(self):
+        comments = [{"id": index} for index in range(1, 27)]
+        calls = []
+
+        def request(path):
+            calls.append(path)
+            if path.endswith("/issues/174"):
+                return {"comments": len(comments)}
+            if "page=1" in path:
+                return comments[:25]
+            if "page=2" in path:
+                return comments[25:]
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=request):
+            self.assertEqual(CONTROLLER._ledger_comments(), comments)
+        self.assertIn("per_page=25&page=1", calls[1])
+        with patch.object(CONTROLLER, "_request_json", side_effect=[
+                {"comments": 26}, comments[:25], []]):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER._ledger_comments()
+        self.assertEqual(str(caught.exception), "api_list_incomplete")
+
+    def test_ledger_snapshot_rejects_non_object_entries(self):
+        with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+            CONTROLLER._ledger_snapshot([None])
+        self.assertEqual(str(caught.exception), "ledger_snapshot_invalid")
+
     def test_workflow_run_parses_github_jobs_envelope_without_mocking_workflow_run(self):
         data = fixture()
         jobs = data["pr_ci_jobs"]
@@ -471,9 +543,9 @@ class ReadOnlyControllerTests(unittest.TestCase):
                "head_sha": HEAD, "event": "pull_request",
                "path": ".github/workflows/ci.yml", "created_at": "2026-11-14T01:00:00Z",
                "status": "completed", "conclusion": "success",
-               "pull_requests": [{"number": 383,
-                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
-                                            "sha": BASE}}]}
+               "head_branch": "feature/release",
+               "head_repository": {"full_name": OWNER + "/wpcaregrid"},
+               "pull_requests": []}
         jobs = [{"id": 501 + index, "run_id": 123, "run_attempt": 1,
                  "head_sha": HEAD, "name": name, "status": "completed",
                  "conclusion": "success"} for index, name in enumerate(REQUIRED_CI_JOBS)]
@@ -488,7 +560,9 @@ class ReadOnlyControllerTests(unittest.TestCase):
             raise AssertionError(path)
 
         with patch.object(CONTROLLER, "_request_json", side_effect=request):
-            selected, actual_jobs = CONTROLLER._workflow_run(HEAD, event="pull_request", pr_number=383)
+            selected, actual_jobs = CONTROLLER._workflow_run(
+                HEAD, event="pull_request", pr_number=383,
+                pr_identity=("feature/release", OWNER + "/wpcaregrid"))
         self.assertEqual(selected, run)
         self.assertEqual(actual_jobs, jobs)
 
@@ -496,7 +570,8 @@ class ReadOnlyControllerTests(unittest.TestCase):
         run = {"id": 123, "run_attempt": 1, "head_sha": HEAD,
                "event": "pull_request", "path": ".github/workflows/ci.yml",
                "created_at": "2026-11-14T01:00:00Z", "status": "completed",
-               "conclusion": "success",
+               "conclusion": "success", "head_branch": "feature/release",
+               "head_repository": {"full_name": OWNER + "/wpcaregrid"},
                "pull_requests": [{"number": 383,
                                    "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
                                             "sha": BASE}}]}

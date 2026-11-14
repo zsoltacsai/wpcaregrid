@@ -21,7 +21,7 @@ The operator supplies four immutable identities to the verifier:
 
 ```text
 /usr/bin/python3 -I -B scripts/production_release_controller_v3.py \
-  verify-release <candidate-merge-sha> <merged-pr-number> <reviewed-pr-head-sha> <merge-base-sha>
+  verify-release <candidate-merge-sha> <merged-pr-number> <reviewed-pr-head-sha> <first-parent-base-sha>
 ```
 
 The controller and its two verifier modules must remain together in the same
@@ -82,8 +82,12 @@ earlier PASS.
 
 Three exact workflow snapshots are required:
 
-1. `pull_request` CI on the exact reviewed PR head, bound to the PR number and
-   protected primary base.
+1. `pull_request` CI on the exact reviewed PR head. When GitHub includes the PR
+   association in the workflow run, its number and protected base ref are
+   checked. For completed runs where GitHub omits that association after merge,
+   the run must still bind the exact immutable head SHA, head branch and head
+   repository from the merged PR object. The merge commit's first parent and
+   the review artifact bind the original base SHA.
 2. `push` CI on the immutable candidate merge SHA, captured when that commit
    was on primary.
 3. `push` CI on the current protected primary SHA. A later documentation
@@ -101,11 +105,20 @@ must be complete without a failed conclusion, in addition to all seven
 required jobs passing. The release manifest must pin the candidate SHA; an
 operator must not substitute the latest primary SHA after review.
 
-The complete #174 comment snapshot is fetched again after policy evaluation;
-any identity, body, association, creation/update timestamp or pagination
-difference returns HOLD. The protected primary is also reread. A change after
+The #174 comment total is checked against issue metadata. Comments are fetched
+in pages of 25 (bounded to 2,500 entries) to keep the largest permitted Base64
+review envelopes below the response-size cap. The complete snapshot is fetched
+again after policy evaluation; any identity, body, association, creation/update
+timestamp or pagination difference returns HOLD. The protected primary is also reread. A change after
 the final read cannot be ruled out by this read-only prototype, so a privileged
 successor must rerun admission immediately before its first mutation.
+
+Set `WPCG_GITHUB_TOKEN` to a short-lived, read-only GitHub token for reliable
+API access. A fine-grained token should be limited to this repository with
+Actions, Contents, Issues, Pull requests and Metadata read permissions. The
+token is sent only as an HTTPS Bearer header and is never printed. Without it,
+the controller can use the public unauthenticated API, but GitHub's lower rate
+limit may cause a fail-closed HOLD.
 
 ## Fail-closed and rollback contract
 
@@ -128,6 +141,12 @@ non-PASS or same-agent reviews, malformed V3 records, missing/modified report
 artifacts, stale or failed CI, missing/duplicate/failed required jobs, and
 incorrect PR binding. The test is deterministic and uses synthetic snapshots;
 it is not staging or production evidence.
+
+The report envelope verifies complete UTF-8 bytes, identity bindings and the
+decision-record digest. It cannot independently prove that the report's human
+or agent-authored assessment is correct; that remains the role of independent
+review and Owner-authenticated ledger publication. A matching hash alone is
+not a review verdict.
 
 ## Known integration blockers
 

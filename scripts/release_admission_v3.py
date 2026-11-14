@@ -118,7 +118,10 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
 
 def _verify_ci_run(run: object, jobs: object, *, commit_sha: str, event: str,
                    pr_number: int | None = None,
-                   pr_base_sha: str | None = None) -> None:
+                   pr_base_sha: str | None = None,
+                   pr_head_ref: str | None = None,
+                   pr_head_repository: str | None = None,
+                   expected_branch: str | None = None) -> None:
     _require(isinstance(run, Mapping) and run.get("head_sha") == commit_sha
              and run.get("event") == event and run.get("path") == ".github/workflows/ci.yml"
              and run.get("status") == "completed" and run.get("conclusion") == "success",
@@ -129,13 +132,23 @@ def _verify_ci_run(run: object, jobs: object, *, commit_sha: str, event: str,
              and type(attempt) is int and attempt > 0, "ci_run_identity_invalid")
     if pr_number is not None:
         pull_requests = run.get("pull_requests")
-        _require(isinstance(pull_requests, list) and any(
-            isinstance(item, Mapping) and item.get("number") == pr_number
-            and isinstance(item.get("base"), Mapping)
-            and item["base"].get("ref") == PRIMARY_BRANCH
-            and (pr_base_sha is None or item["base"].get("sha") == pr_base_sha)
-            for item in pull_requests),
-            "ci_pr_binding_invalid")
+        _require(isinstance(pull_requests, list), "ci_pr_binding_invalid")
+        if pull_requests:
+            _require(any(
+                isinstance(item, Mapping) and item.get("number") == pr_number
+                and isinstance(item.get("base"), Mapping)
+                and item["base"].get("ref") == PRIMARY_BRANCH
+                and (pr_base_sha is None or item["base"].get("sha") == pr_base_sha)
+                for item in pull_requests), "ci_pr_binding_invalid")
+        head_repository = run.get("head_repository")
+        _require(isinstance(pr_head_ref, str) and pr_head_ref
+                 and isinstance(pr_head_repository, str) and pr_head_repository
+                 and run.get("head_branch") == pr_head_ref
+                 and isinstance(head_repository, Mapping)
+                 and head_repository.get("full_name") == pr_head_repository,
+                 "ci_pr_binding_invalid")
+    elif expected_branch is not None:
+        _require(run.get("head_branch") == expected_branch, "ci_branch_binding_invalid")
     _require(isinstance(jobs, list), "ci_jobs_invalid")
     grouped: dict[str, list[object]] = {}
     job_ids = set()
@@ -208,6 +221,7 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str,
     base = pr.get("base")
     head = pr.get("head")
     _require(isinstance(base, Mapping) and base.get("ref") == PRIMARY_BRANCH
+             and base.get("sha") == expected_base_sha
              and isinstance(head, Mapping) and head.get("sha") == expected_pr_head_sha,
              "merged_pr_target_invalid")
     _require(isinstance(merge_commit, Mapping) and merge_commit.get("sha") == candidate_sha,
@@ -224,10 +238,16 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str,
 
     _verify_ci_run(pr_ci_run, pr_ci_jobs, commit_sha=head["sha"],
                    event="pull_request", pr_number=pr_number,
-                   pr_base_sha=expected_base_sha)
+                   pr_base_sha=expected_base_sha,
+                   pr_head_ref=(head.get("ref") if isinstance(head, Mapping) else None),
+                   pr_head_repository=((head.get("repo") or {}).get("full_name")
+                                       if isinstance(head, Mapping)
+                                       and isinstance(head.get("repo"), Mapping) else None))
     _verify_ci_run(candidate_ci_run, candidate_ci_jobs,
-                   commit_sha=candidate_sha, event="push")
-    _verify_ci_run(primary_ci_run, primary_ci_jobs, commit_sha=primary_sha, event="push")
+                   commit_sha=candidate_sha, event="push",
+                   expected_branch=PRIMARY_BRANCH)
+    _verify_ci_run(primary_ci_run, primary_ci_jobs, commit_sha=primary_sha, event="push",
+                   expected_branch=PRIMARY_BRANCH)
 
     try:
         records = verify_agent_release_reviews(
