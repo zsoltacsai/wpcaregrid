@@ -103,6 +103,7 @@ final class SystemStatus
             'mail' => __('owner.system.staging.mail'),
             'connector' => __('owner.system.staging.connector'),
             'external' => __('owner.system.staging.external'),
+            'platform_updates' => __('owner.system.staging.platform_updates'),
             'scheduler' => __('owner.system.staging.scheduler'),
         ];
         $codes = fn (array $problems): string => $problems === [] ? __('owner.system.staging.proven') : implode(', ', $problems);
@@ -120,6 +121,7 @@ final class SystemStatus
             $labels['mail'] => $mail,
             $labels['connector'] => $this->onOff(config('marketing_release.staging_active_features.connector_api') === true),
             $labels['external'] => $this->onOff(config('marketing_release.staging_active_features.external_services') === true),
+            $labels['platform_updates'] => $this->onOff(config('marketing_release.staging_active_features.platform_updates_outbound') === true),
             $labels['scheduler'] => $this->schedulerSummary(),
         ];
 

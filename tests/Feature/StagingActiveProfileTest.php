@@ -20,7 +20,7 @@ class StagingActiveProfileTest extends TestCase
     private const ENV_KEYS = [
         'MARKETING_RELEASE_PROFILE', 'MARKETING_RELEASE_ENFORCEMENT_MODE', 'APP_ENV', 'CAREGRID_DEPLOYMENT_ENV',
         'APP_URL', 'APP_DEBUG', 'DB_CONNECTION', 'DB_DATABASE', 'STRIPE_ALLOW_LIVE_MODE', 'STAGING_MAIL_ALLOWLIST',
-        'STAGING_ACTIVE_CONNECTOR_API', 'STAGING_ACTIVE_EXTERNAL_SERVICES', 'STAGING_ADMIN_QA_ENABLED',
+        'STAGING_ACTIVE_CONNECTOR_API', 'STAGING_ACTIVE_EXTERNAL_SERVICES', 'STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND', 'STAGING_ADMIN_QA_ENABLED',
     ];
 
     /** @var array<string, string|null> */
@@ -127,6 +127,25 @@ class StagingActiveProfileTest extends TestCase
         $this->assertTrue($config['staging_active_features']['connector_api']);
         $this->assertFalse($config['staging_active_features']['external_services']);
         $this->assertSame(['owner@example.test', '@sink.test'], $config['staging_mail_allowlist']);
+    }
+
+    public function test_the_platform_update_opt_in_is_closed_by_default_strictly_parsed_and_independent_of_external_services(): void
+    {
+        $this->assertFalse($this->loadConfig($this->stagingEnv())['staging_active_features']['platform_updates_outbound']);
+
+        foreach (['false', 'no', 'off', '0', '', 'disabled', 'ture', 'maybe'] as $value) {
+            $config = $this->loadConfig(['STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND' => $value] + $this->stagingEnv());
+            $this->assertFalse($config['staging_active_features']['platform_updates_outbound'], 'value '.var_export($value, true));
+        }
+
+        $config = $this->loadConfig(['STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND' => 'true'] + $this->stagingEnv());
+        $this->assertTrue($config['staging_active_features']['platform_updates_outbound']);
+        $this->assertFalse($config['staging_active_features']['external_services'], 'opening it does not open external services');
+        $this->assertFalse($config['staging_active_features']['connector_api']);
+
+        $config = $this->loadConfig(['STAGING_ACTIVE_EXTERNAL_SERVICES' => 'true'] + $this->stagingEnv());
+        $this->assertTrue($config['staging_active_features']['external_services']);
+        $this->assertFalse($config['staging_active_features']['platform_updates_outbound'], 'external services do not open it');
     }
 
     // ---- the gate: full application on the proven staging-next origin ----
