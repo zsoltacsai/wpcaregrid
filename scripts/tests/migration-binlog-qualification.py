@@ -198,18 +198,43 @@ def trigger_rows(schema):
 
 def trigger_ddl_logged(expected_names):
     logs = admin('SHOW BINARY LOGS').splitlines()
-    if not logs:
+    if not logs or len(logs) > 20:
         return False
-    log_name = logs[0].split('\t', 1)[0]
-    if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
-        return False
-    # Explicit bounded read: SHOW BINLOG EVENTS without LIMIT can scan an unbounded log.
-    events = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM 4 LIMIT 10000").splitlines()
     matched = set()
-    for row in events:
-        columns = row.split('\t', 5)
-        if len(columns) == 6 and columns[2] == 'Query' and 'CREATE TRIGGER' in columns[5].upper():
-            matched.update(name for name in expected_names if name.upper() in columns[5].upper())
+    for entry in logs:
+        log_name = entry.split('\t', 1)[0]
+        if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
+            return False
+        position = 4
+        for _ in range(100):
+            # Explicitly paginated and bounded: never scan an unbounded binary log.
+            result = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM {position} LIMIT 1000").splitlines()
+            if not result:
+                break
+            last_position = position
+            for row in result:
+                columns = row.split('\t', 5)
+                if len(columns) != 6:
+                    return False
+                try:
+                    last_position = max(last_position, int(columns[4]))
+                except ValueError:
+                    return False
+                if columns[2] == 'Query' and 'CREATE TRIGGER' in columns[5].upper():
+                    matched.update(name for name in expected_names if name.upper() in columns[5].upper())
+            if matched == set(expected_names):
+                return True
+            if last_position <= position:
+                return False
+            position = last_position
+            if len(result) < 1000:
+                break
+        else:
+            # The per-file page limit was reached. Missing evidence must not be accepted.
+            if matched != set(expected_names):
+                return False
+        if matched == set(expected_names):
+            return True
     return matched == set(expected_names)
 
 
@@ -473,6 +498,7 @@ def main():
         admin(f"REVOKE ALL PRIVILEGES ON `{schema}`.* FROM '{dba}'@'%'")
         admin(f"GRANT SELECT ON `{schema}`.deployment_transition_fences TO '{dba}'@'%'")
         admin(f"GRANT SELECT ON `{schema}`.transition_v2_requests TO '{dba}'@'%'")
+        admin(f"GRANT TRIGGER ON `{schema}`.* TO '{dba}'@'%'")
         admin(f"ALTER USER '{dba}'@'%' ACCOUNT LOCK")
         definer_grants = admin(f"SHOW GRANTS FOR '{dba}'@'%'").splitlines()
         normalized_grants = [line.replace('`', '').upper() for line in definer_grants]
@@ -480,6 +506,7 @@ def main():
             (line.startswith('GRANT USAGE ON *.* TO ') and 'WITH GRANT OPTION' not in line)
             or line.startswith(f'GRANT SELECT ON {schema.upper()}.DEPLOYMENT_TRANSITION_FENCES TO ')
             or line.startswith(f'GRANT SELECT ON {schema.upper()}.TRANSITION_V2_REQUESTS TO ')
+            or line.startswith(f'GRANT TRIGGER ON {schema.upper()}.* TO ')
             for line in normalized_grants
         )
         ok &= require_contract('definer_locked_with_select_dependencies_only', allowed_definer)
