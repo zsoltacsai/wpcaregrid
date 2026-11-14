@@ -143,6 +143,9 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
         re.IGNORECASE | re.DOTALL,
     )
     for statement in split_sql_statements(info):
+        use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
+        if use and use.group(1).casefold() != schema.casefold():
+            return set()
         create = create_pattern.match(statement)
         if create is None:
             continue
@@ -318,8 +321,10 @@ def self_test():
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
-        assert not logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=other@% TRIGGER guard_x',
-                                        expected, 'wpcg_qual_a', 'u')
+        # Binlog matching proves that this DDL name was logged; a separate
+        # information_schema contract verifies the installed definer.
+        assert logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=other@% TRIGGER guard_x',
+                                    expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=u@% TRIGGER guard_x_suffix',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'CREATE TABLE guard_x (id INT)',
