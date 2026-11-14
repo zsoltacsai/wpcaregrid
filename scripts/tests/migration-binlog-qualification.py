@@ -170,8 +170,13 @@ def split_sql_statements(text):
 
 
 def logged_trigger_names(event_type, info, expected_names, schema, definer):
+    matches, _ = logged_trigger_match(event_type, info, expected_names, schema)
+    return matches
+
+
+def logged_trigger_match(event_type, info, expected_names, schema):
     if event_type != 'Query':
-        return set()
+        return set(), 'not_query'
     # Session prelude may be included in the same Query event. Permit only USE,
     # timestamp/session SETs, and mysqlbinlog's observed charset marker.
     user_part = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$-]+)"
@@ -184,7 +189,7 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
     for statement in split_sql_statements(info):
         use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
         if use and use.group(1).casefold() != schema.casefold():
-            return set()
+            return set(), 'wrong_schema'
         allowed_set = re.fullmatch(
             r'(?is)SET\s+(?:TIMESTAMP\s*=\s*[^;]+|@@SESSION\.[A-Za-z0-9_]+\s*=\s*.+)',
             statement,
@@ -193,13 +198,13 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
             continue
         create = create_pattern.match(statement)
         if create is None:
-            return set()
+            return set(), 'non_create_statement'
         for name in expected_names:
             name_token = rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})"
             if re.match(rf"{name_token}(?:\s|$)", statement[create.end():], re.IGNORECASE):
-                return {name}
-        return set()
-    return set()
+                return {name}, 'matched'
+        return set(), 'trigger_name_mismatch'
+    return set(), 'no_ddl_statement'
 
 
 def mysqlbinlog_query_events(log_text):
@@ -225,10 +230,13 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                 stats[name]['events'] += 1
                 if current_schema is not None and current_schema.casefold() == schema.casefold():
                     stats[name]['schema'] += 1
-                if logged_trigger_names('Query', statement, [name], schema, definer):
+                name_matches, reason = logged_trigger_match('Query', statement, [name], schema)
+                if name_matches:
                     stats[name]['ddl'] += 1
                     if current_schema is not None and current_schema.casefold() == schema.casefold():
                         matched.add(name)
+                else:
+                    stats[name]['reason'] = reason
     return matched, stats
 
 
@@ -538,9 +546,13 @@ def trigger_ddl_logged(expected_names, schema, dba):
         for name in expected_names:
             for key in ('events', 'schema', 'ddl'):
                 diagnostics[name][key] += file_stats[name][key]
+            if file_stats[name].get('reason'):
+                diagnostics[name]['reason'] = file_stats[name]['reason']
     for name in sorted(expected_names):
         detail = ','.join(f'{key}={diagnostics[name].get(key, 0)}' for key in
                           ('events', 'schema', 'ddl'))
+        if name not in matched:
+            detail += f",reason={diagnostics[name].get('reason', 'no_matching_event')}"
         record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
