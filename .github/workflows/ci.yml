@@ -52,7 +52,8 @@ jobs:
           test -x "$verifier"
           echo "f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  $verifier" | sha256sum --check
           gh actions-lock --verify .github/workflows/ci.yml
-          git diff --exit-code -- .github/workflows/ci.yml .github/workflows/actions.lock
+          gh actions-lock --verify .github/workflows/migration-binlog-qualification.yml
+          git diff --exit-code -- .github/workflows/ci.yml .github/workflows/migration-binlog-qualification.yml .github/workflows/actions.lock
           test -z "$(git status --porcelain -- .github/workflows/actions.lock)"
 
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = ROOT / 'database' / 'migrations'
 NAME = re.compile(r'^[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]{1,160}\.php$')
 APP_GRANTS = 'SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, REFERENCES, TRIGGER'
+RUNTIME_GRANTS = 'SELECT, INSERT, UPDATE, DELETE'
 APP_KEY = 'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 KNOWN_GUARDED_TABLES = {'transition_v2_requests', 'transition_history_events'}
 RESULTS = []
@@ -54,6 +55,18 @@ def migration_inventory(directory):
 
 def trigger_migrations(directory, names):
     return [n for n in names if 'CREATE TRIGGER' in (Path(directory) / n).read_text(encoding='utf-8')]
+
+
+def contiguous_trigger_migrations(names, trigger_names):
+    positions = [names.index(name) for name in trigger_names]
+    return len(positions) == 2 and positions[1] == positions[0] + 1
+
+
+def clean_global_grants(lines):
+    global_lines = [line for line in lines if ' ON *.* ' in line.upper()]
+    return len(global_lines) == 1 and re.fullmatch(
+        r'GRANT USAGE ON [*][.][*] TO .+', global_lines[0].strip(), re.IGNORECASE
+    ) is not None
 
 
 def created_tables(directory, name):
@@ -85,6 +98,10 @@ def self_test():
         names = migration_inventory(d)
         assert names == ['2026_01_01_000001_a.php', '2026_01_01_000002_b.php']
         assert trigger_migrations(d, names) == ['2026_01_01_000002_b.php']
+        assert not contiguous_trigger_migrations(names, ['2026_01_01_000002_b.php'])
+        assert clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'"])
+        assert not clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'", "GRANT FILE ON *.* TO 'u'@'%' "])
+        assert not clean_global_grants(["GRANT ALL PRIVILEGES ON *.* TO 'u'@'%' WITH GRANT OPTION"])
         assert created_tables(d, names[1]) == ['t_b']
         (d / 'bad name.php').write_text('x', encoding='utf-8')
         try:
@@ -164,11 +181,7 @@ def require_contract(label, ok, detail=''):
 
 def global_grants_clean(account):
     lines = admin(f"SHOW GRANTS FOR '{account}'@'%'").splitlines()
-    first = lines[0] if lines else ''
-    joined = ' '.join(lines).upper()
-    return bool(re.match(r'^GRANT USAGE ON \*\.\* TO ', first)) and 'SUPER' not in joined \
-        and 'ALL PRIVILEGES' not in joined and 'GRANT OPTION' not in joined and 'SET_USER_ID' not in joined \
-        and 'SET_ANY_DEFINER' not in joined
+    return clean_global_grants(lines)
 
 
 def ledger(schema):
@@ -181,6 +194,23 @@ def trigger_rows(schema):
                 f"DEFINER, SHA2(ACTION_STATEMENT,256) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='{schema}' "
                 'ORDER BY TRIGGER_NAME')
     return [line.split('\t') for line in out.splitlines()] if out else []
+
+
+def trigger_ddl_logged(expected_names):
+    logs = admin('SHOW BINARY LOGS').splitlines()
+    if not logs:
+        return False
+    log_name = logs[0].split('\t', 1)[0]
+    if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
+        return False
+    # Explicit bounded read: SHOW BINLOG EVENTS without LIMIT can scan an unbounded log.
+    events = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM 4 LIMIT 10000").splitlines()
+    matched = set()
+    for row in events:
+        columns = row.split('\t', 5)
+        if len(columns) == 6 and columns[2] == 'Query' and 'CREATE TRIGGER' in columns[5].upper():
+            matched.update(name for name in expected_names if name.upper() in columns[5].upper())
+    return matched == set(expected_names)
 
 
 def table_exists(schema, table):
@@ -226,8 +256,9 @@ def main():
 
     suffix = secrets.token_hex(5)
     schema, probe_schema = f'wpcg_qual_{suffix}', f'wpcg_qualp_{suffix}'
-    app, dba = f'wpcg_qual_app_{suffix}', f'wpcg_qual_dba_{suffix}'
-    app_pw, dba_pw = secrets.token_hex(16), secrets.token_hex(16)
+    app, runtime, dba = (f'wpcg_qual_migrate_{suffix}', f'wpcg_qual_runtime_{suffix}',
+                        f'wpcg_qual_dba_{suffix}')
+    app_pw, runtime_pw, dba_pw = secrets.token_hex(16), secrets.token_hex(16), secrets.token_hex(16)
     ok = True
     privilege = None
     path_label = 'UNRESOLVED_NONE'
@@ -245,6 +276,8 @@ def main():
         record('inventory', 'OBSERVED', f'count={len(names)},list_sha256={digest}')
         trig = trigger_migrations(MIGRATIONS, names)
         ok &= require_contract('trigger_migrations_derived', len(trig) >= 1, f'count={len(trig)}')
+        ok &= require_contract('trigger_migrations_are_adjacent', contiguous_trigger_migrations(names, trig),
+                               'the harness requires the two guarded migrations to be consecutive')
         guarded = {t for n in trig for t in created_tables(MIGRATIONS, n)}
         ok &= require_contract('guarded_tables_known_to_harness', guarded == KNOWN_GUARDED_TABLES,
                                'extend_harness_if_this_fails')
@@ -254,7 +287,7 @@ def main():
         # 1. disposable service contract, readback BEFORE
         before = settings()
         ok &= require_contract('service_contract_before',
-                               before['version'].startswith('8.4.') and before['log_bin'] == 'ON'
+                               before['version'] == '8.4.11' and before['log_bin'] == 'ON'
                                and before['format'] == 'ROW' and before['trust'] == 'OFF',
                                f"version={before['version']},log_bin={before['log_bin']},"
                                f"format={before['format']},trust={before['trust']}")
@@ -264,15 +297,17 @@ def main():
                       "(SELECT COUNT(*) FROM mysql.user WHERE user LIKE 'wpcg\\_qual%')")
         ok &= require_contract('no_identity_collision', clash == '0\t0')
 
-        # 2. disposable schema and two separate accounts (neither has a global privilege)
+        # 2. disposable schema and separate migration, definer, and restricted runtime identities.
         admin(f'CREATE DATABASE `{schema}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
         admin(f'CREATE DATABASE `{probe_schema}`')
         admin(f'CREATE TABLE `{probe_schema}`.probe_t (id INT)')
-        for account, pw in ((app, app_pw), (dba, dba_pw)):
+        for account, pw in ((app, app_pw), (dba, dba_pw), (runtime, runtime_pw)):
             admin(f"CREATE USER '{account}'@'%' IDENTIFIED BY '{pw}'")
+        for account in (app, dba):
             admin(f"GRANT {APP_GRANTS} ON `{schema}`.* TO '{account}'@'%'")
+        admin(f"GRANT {RUNTIME_GRANTS} ON `{schema}`.* TO '{runtime}'@'%'")
         ok &= require_contract('accounts_have_no_global_privilege',
-                               global_grants_clean(app) and global_grants_clean(dba))
+                               all(global_grants_clean(a) for a in (app, dba, runtime)))
 
         # 3. privilege probe in a separate disposable schema (never the application account)
         ladder = [
@@ -337,7 +372,15 @@ def main():
                 ok &= require_contract('trigger_migration_copy_identical', same, n[:-4])
             admin(f"GRANT {privilege} ON *.* TO '{dba}'@'%'")
             try:
+                active_before = settings()
+                ok &= require_contract('trust_off_while_global_privilege_active',
+                                       active_before['version'] == '8.4.11' and active_before['log_bin'] == 'ON'
+                                       and active_before['format'] == 'ROW' and active_before['trust'] == 'OFF')
                 rc, _, (_, errno) = artisan(dba, dba_pw, schema, 'migrate', '--force', '--realpath', f'--path={only}')
+                active_after = settings()
+                ok &= require_contract('trust_off_after_trigger_migrations_before_revoke',
+                                       active_after['version'] == '8.4.11' and active_after['log_bin'] == 'ON'
+                                       and active_after['format'] == 'ROW' and active_after['trust'] == 'OFF')
             finally:
                 admin(f"REVOKE {privilege} ON *.* FROM '{dba}'@'%'")
             ok &= require_contract('dba_installs_trigger_migrations', rc == 0,
@@ -369,6 +412,8 @@ def main():
         ok &= require_contract('trigger_definer_is_dba_account', definers == [f'{dba}@%'], f'distinct_definers={len(definers)}')
         record('trigger_definition_sha256', 'OBSERVED',
                hashlib.sha256('|'.join(f'{r[0]}:{r[6]}' for r in rows).encode()).hexdigest())
+        ok &= require_contract('trigger_ddl_present_in_bounded_binlog_read',
+                               trigger_ddl_logged([r[0] for r in rows]))
 
         # 10. idempotence: reviewed up() re-run as the app account verifies definitions without SUPER/trust
         for n in trig:
@@ -377,7 +422,7 @@ def main():
         rc, text, _ = artisan(app, app_pw, schema, 'migrate', '--force')
         ok &= require_contract('migrate_rerun_nothing_to_migrate', rc == 0 and ledger(schema) == stems)
 
-        # 11. guard semantics with synthetic data only (fixture by disposable root; checks by the app account)
+        # 11. guard semantics use a separate DML-only runtime account, never the migration account.
         op, boot, rid, h1, h2, tup = ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
                                       '33333333-3333-4333-8333-333333333333', 'a' * 64, 'b' * 64, 'c' * 64)
         admin("INSERT INTO deployment_transition_fences (fence_key, state, operation_id, generation, boot_id, journal_seq,"
@@ -396,51 +441,62 @@ def main():
                     " request_digest, event_type, source_tuple_digest, target_tuple_digest, occurred_at, created_at,"
                     f" updated_at) VALUES ({seq},'{op}',1,'{rid_}','{h1}','{event}',NULL,'{tup}',NOW(6),NOW(6),NOW(6))")
 
-        def as_app(sql):
-            return run_mysql(app, app_pw, sql, schema)
+        def as_runtime(sql):
+            return run_mysql(runtime, runtime_pw, sql, schema)
 
-        rc, _, (_, errno) = as_app(req(rid, op_name='other_operation'))
+        rc, _, (_, errno) = as_runtime(req(rid, op_name='other_operation'))
         ok &= require_contract('guard_rejects_invalid_request_insert', rc != 0 and errno == '1644', f'errno={errno}')
-        rc, _, (_, errno) = as_app(req(rid))
+        rc, _, (_, errno) = as_runtime(req(rid))
         ok &= require_contract('guard_accepts_valid_request_insert', rc == 0, f'errno={errno}')
-        rc, _, (_, errno) = as_app(req(rid))
+        rc, _, (_, errno) = as_runtime(req(rid))
         # the MySQL guard has no conflict clause (SQLite only): a duplicate is stopped by the unique key instead
         ok &= require_contract('duplicate_request_insert_rejected', rc != 0 and errno in ('1062', '1644'), f'errno={errno}')
-        rc, _, (_, errno) = as_app("UPDATE transition_v2_requests SET receipt_digest = receipt_digest")
+        rc, _, (_, errno) = as_runtime("UPDATE transition_v2_requests SET receipt_digest = receipt_digest")
         ok &= require_contract('guard_rejects_request_update', rc != 0 and errno == '1644', f'errno={errno}')
-        rc, _, (_, errno) = as_app('DELETE FROM transition_v2_requests')
+        rc, _, (_, errno) = as_runtime('DELETE FROM transition_v2_requests')
         ok &= require_contract('guard_rejects_request_delete', rc != 0 and errno == '1644', f'errno={errno}')
-        rc, _, (_, errno) = as_app(hist(rid, event='OTHER_EVENT'))
+        rc, _, (_, errno) = as_runtime(hist(rid, event='OTHER_EVENT'))
         ok &= require_contract('guard_rejects_invalid_history_insert', rc != 0 and errno == '1644', f'errno={errno}')
-        rc, _, (_, errno) = as_app(hist(rid))
+        rc, _, (_, errno) = as_runtime(hist(rid))
         ok &= require_contract('guard_accepts_valid_history_insert', rc == 0, f'errno={errno}')
-        rc, _, (_, errno) = as_app('UPDATE transition_history_events SET event_type = event_type')
+        rc, _, (_, errno) = as_runtime('UPDATE transition_history_events SET event_type = event_type')
         ok &= require_contract('guard_rejects_history_update', rc != 0 and errno == '1644', f'errno={errno}')
-        rc, _, (_, errno) = as_app('DELETE FROM transition_history_events')
+        rc, _, (_, errno) = as_runtime('DELETE FROM transition_history_events')
         ok &= require_contract('guard_rejects_history_delete', rc != 0 and errno == '1644', f'errno={errno}')
+        rc, _, (_, errno) = as_runtime('DROP TRIGGER transition_v2_requests_immutable_insert')
+        ok &= require_contract('runtime_cannot_drop_guard_trigger', rc != 0 and errno in ('1142', '1227'),
+                               f'errno={errno}')
+        ok &= require_contract('guard_count_unchanged_after_runtime_drop_attempt',
+                               len(trigger_rows(schema)) == expected_triggers)
 
-        # 12. definer semantics (observations; the harness asserts nothing it has not measured)
-        rid2, rid3 = '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555'
+        # 12. Definer lifecycle: retain only its read dependencies and lock the account.
+        admin(f"REVOKE ALL PRIVILEGES ON `{schema}`.* FROM '{dba}'@'%'")
+        admin(f"GRANT SELECT ON `{schema}`.deployment_transition_fences TO '{dba}'@'%'")
+        admin(f"GRANT SELECT ON `{schema}`.transition_v2_requests TO '{dba}'@'%'")
+        admin(f"ALTER USER '{dba}'@'%' ACCOUNT LOCK")
+        definer_grants = admin(f"SHOW GRANTS FOR '{dba}'@'%'").splitlines()
+        normalized_grants = [line.replace('`', '').upper() for line in definer_grants]
+        allowed_definer = global_grants_clean(dba) and all(
+            (line.startswith('GRANT USAGE ON *.* TO ') and 'WITH GRANT OPTION' not in line)
+            or line.startswith(f'GRANT SELECT ON {schema.upper()}.DEPLOYMENT_TRANSITION_FENCES TO ')
+            or line.startswith(f'GRANT SELECT ON {schema.upper()}.TRANSITION_V2_REQUESTS TO ')
+            for line in normalized_grants
+        )
+        ok &= require_contract('definer_locked_with_select_dependencies_only', allowed_definer)
+        rid2 = '44444444-4444-4444-8444-444444444444'
         admin("UPDATE deployment_transition_fences SET phase2b_event_sequence = 2 WHERE fence_key = 'global'", schema)
-        admin(f"REVOKE TRIGGER ON `{schema}`.* FROM '{dba}'@'%'")
-        rc, _, (_, errno) = as_app(req(rid2, seq=2))
-        record('definer_without_trigger_privilege_request_insert', 'OBSERVED', f'rc={rc},errno={errno}')
-        admin(f"GRANT TRIGGER ON `{schema}`.* TO '{dba}'@'%'")
-        if rc != 0:
-            rc, _, (_, errno) = as_app(req(rid2, seq=2))
-            ok &= require_contract('definer_privilege_restored_insert_works', rc == 0, f'errno={errno}')
-        else:
-            record('definer_privilege_restored_insert_works', 'OBSERVED', 'not_needed_insert_succeeded_without_privilege')
-        admin(f"DROP USER '{dba}'@'%'")
-        admin("UPDATE deployment_transition_fences SET phase2b_event_sequence = 3 WHERE fence_key = 'global'", schema)
-        rc, _, (_, errno) = as_app(req(rid3, seq=3))
-        record('definer_account_dropped_request_insert', 'OBSERVED', f'rc={rc},errno={errno}')
+        rc, _, (_, errno) = as_runtime(req(rid2, seq=2))
+        ok &= require_contract('locked_minimal_definer_request_insert', rc == 0, f'errno={errno}')
+        rc, _, (_, errno) = as_runtime(hist(rid2, seq=2))
+        ok &= require_contract('locked_minimal_definer_history_insert', rc == 0, f'errno={errno}')
+
     except Exception as error:  # noqa: BLE001 - report a code, never raw output
         record('harness_exception', 'FAIL', type(error).__name__)
         ok = False
     finally:
         for sql in (f'DROP DATABASE IF EXISTS `{schema}`', f'DROP DATABASE IF EXISTS `{probe_schema}`',
-                    f"DROP USER IF EXISTS '{app}'@'%'", f"DROP USER IF EXISTS '{dba}'@'%'"):
+                    f"DROP USER IF EXISTS '{app}'@'%'", f"DROP USER IF EXISTS '{dba}'@'%'",
+                    f"DROP USER IF EXISTS '{runtime}'@'%'"):
             try:
                 admin(sql)
             except Exception:  # noqa: BLE001
@@ -457,7 +513,7 @@ def main():
         except Exception:  # noqa: BLE001
             record('cleanup_complete', 'FAIL', 'readback_failed')
             ok = False
-    print(f'WPCG_QUAL|summary|verdict={"PASS" if ok else "FAIL"}|least_privilege_path={path_label}', flush=True)
+    print(f'WPCG_QUAL|summary|harness={"PASS" if ok else "FAIL"}|migration_privilege_result={path_label}', flush=True)
     return 0 if ok else 1
 
 
