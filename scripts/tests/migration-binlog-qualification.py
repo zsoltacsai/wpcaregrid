@@ -270,7 +270,8 @@ def mysqlbinlog_query_events(log_text):
     events = []
     for block in blocks:
         header = re.search(
-            r'(?m)^#.*\bserver\s+id\s+[0-9]+\s+Query\s+'
+            r'(?m)^#.*\bserver\s+id\s+[0-9]+\s+end_log_pos\s+[0-9]+\s+'
+            r'(?:CRC32\s+0x[0-9a-fA-F]+\s+)?Query\s+'
             r'thread_id=[0-9]+\b.*\berror_code=([0-9]+)\b',
             block,
         )
@@ -352,7 +353,7 @@ def self_test():
         assert binlog_trigger_identifier('use db; DROP TRIGGER guard_name') == 'guard_name'
         assert binlog_trigger_identifier('QUERY WITHOUT DDL') is None
         mysqlbinlog_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1',
-                                  '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\n'
+                                  '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=0\n'
                                   'use wpcg_qual_a/*!*/;\nSET TIMESTAMP=1/*!*/;\n'
                                   'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT/*!*/;')
         query_events = mysqlbinlog_query_events(mysqlbinlog_text)
@@ -360,33 +361,33 @@ def self_test():
         assert mysqlbinlog_logged_trigger_names(mysqlbinlog_text, expected,
                                                 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=1419\n'
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1419\n'
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7\n'
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Table_map Query thread_id=7 error_code=0\n'
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Table_map Query thread_id=7 error_code=0\n'
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
-        escaped_query = ('# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\n'
+        escaped_query = ('# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=0\n'
                          'use wpcg_qual_a;\n\\CREATE TRIGGER guard_x BEFORE INSERT')
         assert mysqlbinlog_logged_trigger_names(
             escaped_query, expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\nuse wpcg_qual_a;\n'
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=0\nuse wpcg_qual_a;\n'
+            '# at 200\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\nuse another;\n'
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
+            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=0\nuse another;\n'
+            '# at 200\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8 error_code=0\n'
+            '# at 200\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
             expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names(
