@@ -194,8 +194,15 @@ def logged_trigger_match(event_type, info, expected_names, schema):
             r'(?is)SET\s+(?:TIMESTAMP\s*=\s*[^;]+|@@SESSION\.[A-Za-z0-9_]+\s*=\s*.+)',
             statement,
         )
-        if use or allowed_set or re.fullmatch(r'(?i)C\s+utf8mb4', statement):
+        if use or allowed_set:
             continue
+        if re.match(r'(?is)^SET\b', statement):
+            variable = re.match(r'(?is)^SET\s+@@SESSION\.([A-Za-z0-9_]+)', statement)
+            return set(), f"disallowed_set_{variable.group(1).lower() if variable else 'other'}"
+        if re.fullmatch(r'(?i)C\s+utf8mb4', statement):
+            continue
+        if re.match(r'(?i)^C\b', statement):
+            return set(), 'unsupported_charset_marker'
         create = create_pattern.match(statement)
         if create is None:
             return set(), 'non_create_statement'
