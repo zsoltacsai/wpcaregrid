@@ -11,7 +11,7 @@ How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT 
 > here. Treat the rows as the 5e0e784 candidate snapshot, not as current primary,
 > staging or production evidence. Production remains NO-GO.
 
-## Current release evidence snapshot — 2026-11-13
+## Historical candidate `5e0e784` evidence snapshot — 2026-11-13
 
 This snapshot was refreshed from GitHub repository and workflow records. It contains
 no fresh production or staging host observation. Treat all runtime values below as
@@ -22,7 +22,7 @@ results as current acceptance evidence.
 
 | Gate | Current evidence | Status / acceptance |
 | --- | --- | --- |
-| Protected primary | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline; proposed candidate only, not a release tag or approval. |
+| Protected primary at snapshot time | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline on 2026-11-13; proposed candidate only, not a release tag or approval. Current primary is `198e32d127c782bf80ff7ca837f06df82d50655a`; see the GO-8 notice above. |
 | Exact-SHA CI | [Workflow 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), event `push`, exact `head_sha=5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`, `completed/success`; 38/38 check runs `completed/success` | PASS for repository CI only. It does not prove staging behavior or production readiness. |
 | Candidate source review | Exact-SHA reports are preserved at [`QA`](release-evidence/qa-5e0e784.md) (PASS for static route isolation; report SHA-256 `82d6b3ebef14fdde464fa173fbf5a91e11c496577647f4977ac8d3272a17dca4`) and [`AppSec`](release-evidence/appsec-5e0e784.md) (BLOCKED for production acceptance pending runtime worker/scheduler fence evidence; report SHA-256 `c58201104e2170cbc7f73db9da80f02ff596d515ce614eba8bb2e7a4357f6409`). Both reviewed `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`. | HOLD. The AppSec result is not PASS. V3 ledger records are not published: policy V3 requires an exact PR number/head pair, while `5e0e784…` is the protected-primary merge baseline and is not the head of an open release PR. Do not associate the reports with a different PR/head to force a record. |
 | Staging acceptance | No fresh runtime or browser evidence for this exact SHA is recorded in this snapshot | UNKNOWN / HOLD. Run the staging checklist only after its backup, restore, migration, and deployment gates are separately satisfied. |
