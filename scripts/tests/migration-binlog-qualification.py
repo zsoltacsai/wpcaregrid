@@ -119,18 +119,28 @@ def mysqlbinlog_query_events(log_text):
     return [block for block in blocks if re.search(r'(?m)^#.*\bQuery\b', block)]
 
 
-def mysqlbinlog_logged_trigger_names(log_text, expected_names, schema, definer):
+def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, definer):
     current_schema = None
     matched = set()
+    stats = {name: {'events': 0, 'schema': 0, 'ddl': 0} for name in expected_names}
     for event in mysqlbinlog_query_events(log_text):
         event_schema, statement = mysqlbinlog_query_statement(event)
         if event_schema is not None:
             current_schema = event_schema
-        if current_schema is None or current_schema.casefold() != schema.casefold():
-            continue
-        matched.update(logged_trigger_names(
-            'Query', statement, expected_names, schema, definer,
-        ))
+        for name in expected_names:
+            if re.search(rf'\b{re.escape(name)}\b', event, re.IGNORECASE):
+                stats[name]['events'] += 1
+                if current_schema is not None and current_schema.casefold() == schema.casefold():
+                    stats[name]['schema'] += 1
+                if logged_trigger_names('Query', statement, [name], schema, definer):
+                    stats[name]['ddl'] += 1
+                    if current_schema is not None and current_schema.casefold() == schema.casefold():
+                        matched.add(name)
+    return matched, stats
+
+
+def mysqlbinlog_logged_trigger_names(log_text, expected_names, schema, definer):
+    matched, _ = mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, definer)
     return matched
 
 
@@ -372,11 +382,19 @@ def trigger_ddl_logged(expected_names, schema, dba):
     record('mysqlbinlog_trigger_candidates', 'OBSERVED', '+'.join(candidates) or 'none')
     record('mysqlbinlog_expected_name_hits', 'OBSERVED', '+'.join(name_hits) or 'none')
     matched = set()
+    diagnostics = {name: {'events': 0, 'schema': 0, 'ddl': 0} for name in expected_names}
     for output in output_parts:
         file_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1', output, flags=re.DOTALL)
-        matched.update(mysqlbinlog_logged_trigger_names(file_text, expected_names, schema, dba))
+        file_matches, file_stats = mysqlbinlog_trigger_match_diagnostics(
+            file_text, expected_names, schema, dba,
+        )
+        matched.update(file_matches)
+        for name in expected_names:
+            for key in diagnostics[name]:
+                diagnostics[name][key] += file_stats[name][key]
     for name in sorted(expected_names):
-        record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL')
+        detail = ','.join(f'{key}={diagnostics[name][key]}' for key in ('events', 'schema', 'ddl'))
+        record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
