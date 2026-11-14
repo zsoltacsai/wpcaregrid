@@ -79,6 +79,25 @@ def actual_pr377_legacy_records():
     ]
 
 
+def published_malformed_correction():
+    return {
+        "id": 6880748416,
+        "created_at": "2026-11-14T16:34:20Z",
+        "author_association": "OWNER",
+        "user": {"login": OWNER},
+        "body": (
+            "WPCG_RELEASE_CORRECTION_V3\n"
+            "target_comment_id=6834079554\n"
+            "target_body_sha256=5be3d840822759a7815917851e2f73707890173979074b8bd7b752f5bc82e\n"
+            "target_pr=377\n"
+            "target_head_sha=4196dab735b2f73dd2b207afa960596741eda8c5\n"
+            "target_role=integration_qa\n"
+            "disposition=INVALIDATED\n"
+            "reason_code=legacy_agent_identifier_schema\n"
+        ),
+    }
+
+
 def actual_pr383_records():
     return [
         {"id": 6865700799, "created_at": "2026-11-13T21:45:57Z",
@@ -292,6 +311,45 @@ class AgentReviewTests(unittest.TestCase):
         second = correction(old, 7_000_000_008, sha=sha)
         self.assertEqual(refusal([old, first, second]), "review_correction_ambiguous")
         self.assertEqual(refusal([old, dict(old), first]), "review_evidence_ambiguous")
+
+    def test_exact_known_malformed_submission_is_quarantined_but_not_authorized(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        malformed = published_malformed_correction()
+        valid_qa = correction(old_qa, 7_000_000_001,
+                              sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                              created="2026-11-14T17:00:00Z")
+        valid_appsec = correction(old_appsec, 7_000_000_002,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5",
+                                  created="2026-11-14T17:00:01Z")
+        comments = [old_qa, old_appsec, malformed, valid_qa, valid_appsec]
+        self.assertEqual(refusal(comments, pr=377,
+                                 sha="4196dab735b2f73dd2b207afa960596741eda8c5"),
+                         "review_not_pass")
+
+        valid_subject_records = [*comments, *actual_pr383_records()]
+        accepted = verify(valid_subject_records, pr=383,
+                          sha="aecc24e679de7537385d2625bbf6ef9455a89303")
+        self.assertEqual(accepted["integration_qa"]["decision"], "PASS")
+        self.assertEqual(accepted["appsec"]["decision"], "PASS")
+
+    def test_malformed_correction_quarantine_is_exact_and_unrelated_owner_errors_block(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        malformed = published_malformed_correction()
+        valid_qa = correction(old_qa, 7_000_000_001,
+                              sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        valid_appsec = correction(old_appsec, 7_000_000_002,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        for changed in (dict(malformed, id=6880748417),
+                        dict(malformed, body=malformed["body"].replace("5be3d840", "0be3d840")),
+                        dict(malformed, author_association="COLLABORATOR")):
+            self.assertIn(refusal([old_qa, old_appsec, changed, valid_qa, valid_appsec]),
+                          {"review_correction_invalid", "review_correction_target_invalid"})
+
+        unrelated = legacy_malformed(6880748420, "appsec", "Unrelated Agent", "BLOCKED")
+        self.assertEqual(refusal([old_qa, old_appsec, malformed, valid_qa, valid_appsec,
+                                  unrelated, *actual_pr383_records()], pr=383,
+                                 sha="aecc24e679de7537385d2625bbf6ef9455a89303"),
+                         "review_record_invalid")
 
     def test_render_rejects_what_the_verifier_would_reject(self):
         good = dict(role="appsec", pr=1, head_sha=SHA, agent="agent-appsec-01", decision="PASS",

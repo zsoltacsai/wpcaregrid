@@ -74,6 +74,16 @@ _LEGACY_CORRECTION_ALLOWLIST = {
         "agent": "Mad-Eye Moody",
     },
 }
+# One malformed Owner correction comment was published during the authorized
+# recovery attempt. Pin its exact bytes and its intended original target so it
+# can never be mistaken for a correction or broaden the two-record target list.
+# The original target remains blocking until one valid correction is appended.
+_MALFORMED_CORRECTION_QUARANTINE = {
+    6880748416: {
+        "body_sha256": "60283180a007514373b50d90bc49400fefbdf91495d28435777640b1293a750d",
+        "target_comment_id": 6834079554,
+    },
+}
 
 
 class ReviewRefused(ValueError):
@@ -152,6 +162,23 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dic
             raise ReviewRefused("review_correction_invalid")
         match = _CORRECTION.fullmatch(body)
         if match is None:
+            quarantine = _MALFORMED_CORRECTION_QUARANTINE.get(item["id"])
+            if (quarantine is not None
+                    and hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    == quarantine["body_sha256"]):
+                target = by_id.get(quarantine["target_comment_id"])
+                allowed_target = _LEGACY_CORRECTION_ALLOWLIST.get(
+                    quarantine["target_comment_id"])
+                if (isinstance(target, Mapping) and _owner_comment(target, owner)
+                        and allowed_target is not None
+                        and isinstance(target.get("body"), str)
+                        and hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
+                        == allowed_target["body_sha256"]
+                        and item["id"] > target["id"]
+                        and item["created_at"] > target["created_at"]):
+                    # This pins only the known malformed submission. It does
+                    # not authorize or perform its intended invalidation.
+                    continue
             raise ReviewRefused("review_correction_invalid")
         raw_id, digest, raw_pr, target_sha, role, disposition = match.groups()
         target_id, target_pr = int(raw_id), int(raw_pr)
