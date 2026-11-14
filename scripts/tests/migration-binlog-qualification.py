@@ -131,8 +131,9 @@ def self_test():
         assert binlog_trigger_identifier('use db; CREATE DEFINER=u@% TRIGGER guard_name BEFORE INSERT') == 'guard_name'
         assert binlog_trigger_identifier('use db; DROP TRIGGER guard_name') == 'guard_name'
         assert binlog_trigger_identifier('QUERY WITHOUT DDL') is None
-        assert logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
-                                    expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        mysqlbinlog_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1',
+                                  'use wpcg_qual_a/*!*/;\nCREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT/*!*/;')
+        assert logged_trigger_names('Query', mysqlbinlog_text, expected, 'wpcg_qual_a', 'u') == {'guard_x'}
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
@@ -161,6 +162,7 @@ HOST = os.environ.get('WPCG_QUAL_MYSQL_HOST', '127.0.0.1')
 PORT = os.environ.get('WPCG_QUAL_MYSQL_PORT', '3309')
 ROOT_PW = os.environ.get('WPCG_QUAL_MYSQL_ROOT_PASSWORD', '')
 MYSQL = shutil.which('mysql')
+MYSQLBINLOG = shutil.which('mysqlbinlog')
 PHP = shutil.which('php')
 
 
@@ -244,74 +246,58 @@ def trigger_rows(schema):
 
 
 def trigger_ddl_logged(expected_names, schema, dba):
-    logs = admin('SHOW BINARY LOGS').splitlines()
-    stats = {'logs': len(logs), 'events': 0, 'query_events': 0, 'create_queries': 0,
-             'trigger_mentions': 0, 'schema_mentions': 0, 'definer_mentions': 0,
-             'expected_name_mentions': 0, 'trigger_name_candidates': set(), 'trigger_name_intersections': 0,
-             'schema_name_intersections': 0, 'definer_name_intersections': 0,
-             'trigger_schema_definer_intersections': 0, 'trigger_events': 0, 'matched': 0,
-             'trigger_info_event_types': set(), 'trigger_name_candidates': set()}
-    def result(ok):
-        record('binlog_trigger_info_types', 'OBSERVED',
-               '+'.join(sorted(stats['trigger_info_event_types'])) or 'none')
-        record('binlog_trigger_name_candidates', 'OBSERVED',
-               '+'.join(sorted(stats['trigger_name_candidates'])) or 'none')
-        detail = (f"logs={stats['logs']},events={stats['events']},queries={stats['query_events']},"
-                  f"trigger_queries={stats['trigger_mentions']},names={stats['matched']},expected={len(expected_names)}")
-        return ok, detail
-    if not logs or len(logs) > 20:
-        return result(False)
-    matched = set()
-    for entry in logs:
-        log_name = entry.split('\t', 1)[0]
-        if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
-            return result(False)
-        offset = 0
-        for _ in range(100):
-            # Offset/count pagination is bounded per file; never scan an unbounded binary log.
-            rows = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM 4 LIMIT {offset},1000").splitlines()
-            if not rows:
-                break
-            for row in rows:
-                columns = row.split('\t', 5)
-                if len(columns) != 6:
-                    return result(False)
-                stats['events'] += 1
-                info_upper = columns[5].upper()
-                if 'TRIGGER' in info_upper:
-                    stats['trigger_info_event_types'].add(columns[2])
-                    trigger_id = binlog_trigger_identifier(columns[5])
-                    if trigger_id:
-                        stats['trigger_name_candidates'].add(trigger_id)
-                if columns[2] == 'Query':
-                    stats['query_events'] += 1
-                    stats['create_queries'] += int('CREATE' in info_upper)
-                    stats['trigger_mentions'] += int('TRIGGER' in info_upper)
-                    stats['schema_mentions'] += int(schema.upper() in info_upper)
-                    stats['definer_mentions'] += int(dba.upper() in info_upper)
-                    has_trigger = 'TRIGGER' in info_upper
-                    has_schema = schema.upper() in info_upper
-                    has_definer = dba.upper() in info_upper
-                    has_expected = any(name.upper() in info_upper for name in expected_names)
-                    stats['expected_name_mentions'] += int(has_expected)
-                    stats['trigger_name_intersections'] += int(has_trigger and has_expected)
-                    stats['schema_name_intersections'] += int(has_schema and has_expected)
-                    stats['definer_name_intersections'] += int(has_definer and has_expected)
-                    stats['trigger_schema_definer_intersections'] += int(has_trigger and has_schema and has_definer)
-                names = logged_trigger_names(columns[2], columns[5], expected_names, schema, dba)
-                if names:
-                    stats['trigger_events'] += 1
-                    matched.update(names)
-                    stats['matched'] = len(matched)
-            if matched == set(expected_names):
-                return result(True)
-            if len(rows) < 1000:
-                break
-            offset += 1000
-        else:
-            # The per-file page limit was reached. Missing evidence must not be accepted.
-            return result(False)
-    return result(matched == set(expected_names))
+    rows = admin('SHOW BINARY LOGS').splitlines()
+    if not rows or len(rows) > 20 or not MYSQLBINLOG:
+        return False, 'binlog_reader_or_file_count_invalid'
+    files = []
+    total_bytes = 0
+    for row in rows:
+        columns = row.split('\t')
+        if len(columns) < 2 or re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', columns[0]) is None:
+            return False, 'binlog_file_row_invalid'
+        try:
+            size = int(columns[1])
+        except ValueError:
+            return False, 'binlog_file_size_invalid'
+        if size < 4:
+            return False, 'binlog_file_size_invalid'
+        total_bytes += size
+        if total_bytes > 32 * 1024 * 1024:
+            return False, 'binlog_read_size_limit'
+        files.append((columns[0], size))
+
+    env = {key: value for key, value in os.environ.items()
+           if key != 'WPCG_QUAL_MYSQL_ROOT_PASSWORD'}
+    env['MYSQL_PWD'] = ROOT_PW
+    output_parts = []
+    output_bytes = 0
+    for log_name, size in files:
+        command = [MYSQLBINLOG, '--read-from-remote-server', '--protocol=tcp',
+                   f'--host={HOST}', f'--port={PORT}', '--user=root',
+                   f'--stop-position={size}', log_name]
+        try:
+            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return False, 'mysqlbinlog_read_failed'
+        if result.returncode:
+            return False, 'mysqlbinlog_read_failed'
+        output_bytes += len(result.stdout.encode('utf-8'))
+        if output_bytes > 64 * 1024 * 1024:
+            return False, 'mysqlbinlog_output_size_limit'
+        output_parts.append(result.stdout)
+
+    # mysqlbinlog decorates statements with version comments such as /*!*/;.
+    # Remove those wrappers only in memory; never emit raw log content.
+    log_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1', ''.join(output_parts), flags=re.DOTALL)
+    matched = {
+        name for name in expected_names
+        if logged_trigger_names('Query', log_text, [name], schema, dba)
+    }
+    return matched == set(expected_names), (
+        f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
+    )
 
 
 def table_exists(schema, table):
@@ -351,7 +337,7 @@ def main():
     self_test()
     if '--self-test' in sys.argv:
         return 0
-    if not (ROOT_PW and PHP and MYSQL):
+    if not (ROOT_PW and PHP and MYSQL and MYSQLBINLOG):
         record('prerequisites', 'FAIL', 'php_mysql_client_or_root_password_missing')
         return 1
 
