@@ -375,6 +375,8 @@ def trigger_ddl_logged(expected_names, schema, dba):
     for output in output_parts:
         file_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1', output, flags=re.DOTALL)
         matched.update(mysqlbinlog_logged_trigger_names(file_text, expected_names, schema, dba))
+    for name in sorted(expected_names):
+        record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL')
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
