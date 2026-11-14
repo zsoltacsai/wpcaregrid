@@ -201,9 +201,9 @@ def logged_trigger_match(event_type, info, expected_names, schema):
         if re.match(r'(?is)^SET\b', statement):
             variable = re.match(r'(?is)^SET\s+@@SESSION\.([A-Za-z0-9_]+)', statement)
             return set(), f"disallowed_set_{variable.group(1).lower() if variable else 'other'}"
-        if re.fullmatch(r'(?i)C\s+utf8mb4', statement):
+        if re.fullmatch(r'(?i)(?:\\C|C)\s+utf8mb4', statement):
             continue
-        if re.match(r'(?i)^C\b', statement):
+        if re.match(r'(?i)^(?:\\C|C)\b', statement):
             return set(), 'unsupported_charset_marker'
         create = create_pattern.match(statement)
         if create is None:
@@ -358,6 +358,12 @@ def self_test():
             'Query', 'C utf8mb4 ; SET @@session.character_set_client=33; '
             'CREATE DEFINER=`u`@`%` TRIGGER `guard_x` BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', r'\C utf8mb4; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names(
+            'Query', r'\C latin1; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
         # Binlog spelling is syntax evidence only; final object metadata verifies the DBA.
         assert logged_trigger_names(
             'Query', 'CREATE DEFINER=other@% TRIGGER guard_x BEFORE INSERT', expected,
