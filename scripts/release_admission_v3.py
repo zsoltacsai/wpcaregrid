@@ -117,27 +117,47 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
 
 
 def _verify_ci_run(run: object, jobs: object, *, commit_sha: str, event: str,
-                   pr_number: int | None = None) -> None:
+                   pr_number: int | None = None,
+                   pr_base_sha: str | None = None) -> None:
     _require(isinstance(run, Mapping) and run.get("head_sha") == commit_sha
              and run.get("event") == event and run.get("path") == ".github/workflows/ci.yml"
              and run.get("status") == "completed" and run.get("conclusion") == "success",
              "ci_run_invalid")
+    run_id = run.get("id")
+    attempt = run.get("run_attempt")
+    _require(type(run_id) is int and run_id > 0
+             and type(attempt) is int and attempt > 0, "ci_run_identity_invalid")
     if pr_number is not None:
         pull_requests = run.get("pull_requests")
         _require(isinstance(pull_requests, list) and any(
             isinstance(item, Mapping) and item.get("number") == pr_number
             and isinstance(item.get("base"), Mapping)
-            and item["base"].get("ref") == PRIMARY_BRANCH for item in pull_requests),
+            and item["base"].get("ref") == PRIMARY_BRANCH
+            and (pr_base_sha is None or item["base"].get("sha") == pr_base_sha)
+            for item in pull_requests),
             "ci_pr_binding_invalid")
     _require(isinstance(jobs, list), "ci_jobs_invalid")
     grouped: dict[str, list[object]] = {}
+    job_ids = set()
     for job in jobs:
-        _require(isinstance(job, Mapping) and isinstance(job.get("name"), str), "ci_jobs_invalid")
+        _require(isinstance(job, Mapping) and isinstance(job.get("name"), str)
+                 and job.get("run_id") == run_id and job.get("run_attempt") == attempt
+                 and job.get("head_sha") == commit_sha, "ci_job_identity_mismatch")
+        job_id = job.get("id")
+        _require(type(job_id) is int and job_id > 0 and job_id not in job_ids,
+                 "ci_jobs_invalid")
+        job_ids.add(job_id)
         grouped.setdefault(job["name"], []).append(job)
     for name in REQUIRED_CI_JOBS:
         instances = grouped.get(name, [])
         _require(len(instances) == 1 and instances[0].get("status") == "completed"
                  and instances[0].get("conclusion") == "success", "required_ci_check_failed")
+    required_names = set(REQUIRED_CI_JOBS)
+    for job in jobs:
+        if job["name"] not in required_names:
+            _require(job.get("status") == "completed"
+                     and job.get("conclusion") in {"success", "skipped", "neutral"},
+                     "ci_job_failed")
 
 
 def _candidate_is_on_protected_primary(candidate_sha: str, primary_sha: str,
@@ -146,14 +166,12 @@ def _candidate_is_on_protected_primary(candidate_sha: str, primary_sha: str,
     if not isinstance(comparison, Mapping):
         return False
     base = comparison.get("base_commit")
-    head = comparison.get("head_commit")
     merge_base = comparison.get("merge_base_commit")
     ahead_by = comparison.get("ahead_by")
     behind_by = comparison.get("behind_by")
     status = comparison.get("status")
     return (
         isinstance(base, Mapping) and base.get("sha") == candidate_sha
-        and isinstance(head, Mapping) and head.get("sha") == primary_sha
         and isinstance(merge_base, Mapping) and merge_base.get("sha") == candidate_sha
         and type(ahead_by) is int and ahead_by >= 0
         and type(behind_by) is int and behind_by == 0
@@ -171,7 +189,7 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str,
                              candidate_ci_jobs: object, primary_ci_run: object,
                              primary_ci_jobs: object, ledger_comments: Iterable[object],
                              repository_owner: str) -> dict[str, object]:
-    """Validate exact merged PR, V3 report bytes, and both required CI runs.
+    """Validate exact merged PR, V3 report bytes, and required CI snapshots.
 
     All inputs are snapshots fetched by the caller. Any absent, malformed,
     stale, or conflicting evidence raises ``AdmissionRefused``.
@@ -205,7 +223,8 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str,
              "merged_pr_head_mismatch")
 
     _verify_ci_run(pr_ci_run, pr_ci_jobs, commit_sha=head["sha"],
-                   event="pull_request", pr_number=pr_number)
+                   event="pull_request", pr_number=pr_number,
+                   pr_base_sha=expected_base_sha)
     _verify_ci_run(candidate_ci_run, candidate_ci_jobs,
                    commit_sha=candidate_sha, event="push")
     _verify_ci_run(primary_ci_run, primary_ci_jobs, commit_sha=primary_sha, event="push")

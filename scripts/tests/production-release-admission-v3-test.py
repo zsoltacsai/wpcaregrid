@@ -32,7 +32,7 @@ def primary_comparison(candidate=CANDIDATE, primary=PRIMARY, *, status="ahead",
                        ahead_by=3, behind_by=0, merge_base=None):
     return {
         "status": status, "ahead_by": ahead_by, "behind_by": behind_by,
-        "base_commit": {"sha": candidate}, "head_commit": {"sha": primary},
+        "base_commit": {"sha": candidate},
         "merge_base_commit": {"sha": merge_base or candidate},
     }
 REPORT_QA = b"independent QA report\n"
@@ -44,6 +44,7 @@ def ledger_record(role, agent, report, comment_id, *, decision="PASS", sha=HEAD,
     return {
         "id": comment_id,
         "created_at": f"2026-11-14T01:00:{comment_id % 60:02d}Z",
+        "updated_at": f"2026-11-14T01:00:{comment_id % 60:02d}Z",
         "author_association": "OWNER",
         "user": {"login": OWNER},
         "body": render_record(role=role, pr=pr, head_sha=sha, agent=agent,
@@ -65,23 +66,34 @@ def artifact(role, agent, report, comment_id, *, sha=HEAD, base=BASE, pr=383, di
         f"report_base64={base64.b64encode(report).decode('ascii')}\n"
     )
     return {"id": comment_id, "created_at": f"2026-11-14T02:00:{comment_id % 60:02d}Z",
+            "updated_at": f"2026-11-14T02:00:{comment_id % 60:02d}Z",
             "author_association": association, "user": {"login": login}, "body": body}
 
 
 def fixture():
-    pr_jobs = [{"id": index, "name": name, "status": "completed", "conclusion": "success"}
-               for index, name in enumerate(REQUIRED_CI_JOBS, start=1)]
-    primary_jobs = [dict(job) for job in pr_jobs]
+    def jobs(run_id, head_sha):
+        return [{"id": index + (run_id * 100), "run_id": run_id,
+                 "run_attempt": 1, "head_sha": head_sha, "name": name,
+                 "status": "completed", "conclusion": "success"}
+                for index, name in enumerate(REQUIRED_CI_JOBS, start=1)]
+
+    pr_jobs = jobs(1, HEAD)
+    candidate_jobs = jobs(2, CANDIDATE)
+    primary_jobs = jobs(3, PRIMARY)
     pr_run = {
+        "id": 1, "run_attempt": 1,
         "head_sha": HEAD, "event": "pull_request", "path": ".github/workflows/ci.yml",
         "status": "completed", "conclusion": "success",
-        "pull_requests": [{"number": 383, "base": {"ref": "claude/ecstatic-wozniak-oemyuf"}}],
+        "pull_requests": [{"number": 383, "base": {
+            "ref": "claude/ecstatic-wozniak-oemyuf", "sha": BASE}}],
     }
     candidate_run = {
+        "id": 2, "run_attempt": 1,
         "head_sha": CANDIDATE, "event": "push", "path": ".github/workflows/ci.yml",
         "status": "completed", "conclusion": "success",
     }
     primary_run = {
+        "id": 3, "run_attempt": 1,
         "head_sha": PRIMARY, "event": "push", "path": ".github/workflows/ci.yml",
         "status": "completed", "conclusion": "success",
     }
@@ -104,10 +116,19 @@ def fixture():
         "expected_pr_head_sha": HEAD, "expected_base_sha": BASE,
         "pr": pr, "merge_commit": merge,
         "pr_ci_run": pr_run, "pr_ci_jobs": pr_jobs,
-        "candidate_ci_run": candidate_run, "candidate_ci_jobs": primary_jobs,
+        "candidate_ci_run": candidate_run, "candidate_ci_jobs": candidate_jobs,
         "primary_ci_run": primary_run, "primary_ci_jobs": primary_jobs,
         "ledger_comments": comments, "repository_owner": OWNER,
     }
+
+
+def controller_ci_responses(data):
+    run_set = [
+        (data["pr_ci_run"], data["pr_ci_jobs"]),
+        (data["candidate_ci_run"], data["candidate_ci_jobs"]),
+        (data["primary_ci_run"], data["primary_ci_jobs"]),
+    ]
+    return run_set + run_set
 
 
 def refusal_reason(**changes):
@@ -135,6 +156,17 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         self.assertEqual(result["candidate_sha"], CANDIDATE)
         self.assertEqual(result["protected_primary_sha"], PRIMARY)
 
+    def test_identical_protected_primary_is_valid_for_candidate(self):
+        comparison = primary_comparison(candidate=CANDIDATE, primary=CANDIDATE,
+                                        status="identical", ahead_by=0)
+        args = fixture()
+        args["primary_sha"] = CANDIDATE
+        args["primary_comparison"] = comparison
+        args["primary_ci_run"] = args["candidate_ci_run"]
+        args["primary_ci_jobs"] = args["candidate_ci_jobs"]
+        result = verify_release_admission(**args)
+        self.assertEqual(result["result"], "PASS")
+
     def test_candidate_not_in_primary_history_is_refused(self):
         self.assertEqual(refusal_reason(primary_comparison=primary_comparison(
             status="diverged", behind_by=2, merge_base="e" * 40)),
@@ -145,6 +177,28 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         args["primary_ci_run"] = {**args["primary_ci_run"], "head_sha": CANDIDATE}
         self.assertEqual(refusal_reason(primary_ci_run=args["primary_ci_run"]),
                          "ci_run_invalid")
+
+    def test_jobs_from_a_different_attempt_cannot_pair_with_green_run(self):
+        args = fixture()
+        args["candidate_ci_jobs"] = [
+            {**job, "run_attempt": 2} for job in args["candidate_ci_jobs"]]
+        self.assertEqual(refusal_reason(candidate_ci_jobs=args["candidate_ci_jobs"]),
+                         "ci_job_identity_mismatch")
+
+    def test_failed_nonrequired_job_cannot_be_hidden_by_required_successes(self):
+        args = fixture()
+        args["candidate_ci_jobs"].append({
+            "id": 999, "run_id": 2, "run_attempt": 1, "head_sha": CANDIDATE,
+            "name": "optional-security-scan", "status": "completed", "conclusion": "failure"})
+        self.assertEqual(refusal_reason(candidate_ci_jobs=args["candidate_ci_jobs"]),
+                         "ci_job_failed")
+
+    def test_pr_ci_must_bind_exact_base_sha(self):
+        args = fixture()
+        args["pr_ci_run"] = {**args["pr_ci_run"], "pull_requests": [{
+            "number": 383,
+            "base": {"ref": "claude/ecstatic-wozniak-oemyuf", "sha": "e" * 40}}]}
+        self.assertEqual(refusal_reason(pr_ci_run=args["pr_ci_run"]), "ci_pr_binding_invalid")
 
     def test_malformed_primary_comparison_is_refused(self):
         self.assertEqual(refusal_reason(primary_comparison={}),
@@ -272,7 +326,9 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         args["pr_ci_jobs"][0] = {**args["pr_ci_jobs"][0], "conclusion": "cancelled"}
         self.assertEqual(refusal_reason(pr_ci_jobs=args["pr_ci_jobs"]), "required_ci_check_failed")
         args = fixture()
-        args["primary_ci_jobs"].append(dict(args["primary_ci_jobs"][0]))
+        duplicate_name = dict(args["primary_ci_jobs"][0])
+        duplicate_name["id"] += 1000
+        args["primary_ci_jobs"].append(duplicate_name)
         self.assertEqual(refusal_reason(primary_ci_jobs=args["primary_ci_jobs"]),
                          "required_ci_check_failed")
 
@@ -302,10 +358,8 @@ class ReadOnlyControllerTests(unittest.TestCase):
             raise AssertionError(path)
 
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
-             patch.object(CONTROLLER, "_workflow_run", side_effect=[
-                 (data["pr_ci_run"], data["pr_ci_jobs"]),
-                 (data["candidate_ci_run"], data["candidate_ci_jobs"]),
-                 (data["primary_ci_run"], data["primary_ci_jobs"])]), \
+             patch.object(CONTROLLER, "_workflow_run",
+                          side_effect=controller_ci_responses(data)), \
              patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
             result = CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(result["result"], "PASS")
@@ -339,14 +393,65 @@ class ReadOnlyControllerTests(unittest.TestCase):
             raise AssertionError(path)
 
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
-             patch.object(CONTROLLER, "_workflow_run", side_effect=[
-                 (data["pr_ci_run"], data["pr_ci_jobs"]),
-                 (data["candidate_ci_run"], data["candidate_ci_jobs"]),
-                 (data["primary_ci_run"], data["primary_ci_jobs"])]), \
+             patch.object(CONTROLLER, "_workflow_run",
+                          side_effect=controller_ci_responses(data)), \
              patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
             with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "primary_changed_during_read")
+
+    def test_controller_refuses_ledger_revocation_during_evidence_read(self):
+        data = fixture()
+
+        def request(path):
+            if "/branches/" in path:
+                return {"protected": True, "commit": {"sha": PRIMARY}}
+            if path.endswith(f"/compare/{CANDIDATE}...{PRIMARY}"):
+                return data["primary_comparison"]
+            if path.endswith("/pulls/383"):
+                return data["pr"]
+            if path.endswith(f"/commits/{CANDIDATE}"):
+                return data["merge_commit"]
+            if path == "/repos/zsoltacsai/wpcaregrid":
+                return {"owner": {"login": OWNER}}
+            raise AssertionError(path)
+
+        revoked = data["ledger_comments"] + [
+            ledger_record("appsec", "appsec-agent-independent", REPORT_APPSEC, 10,
+                          decision="BLOCKED")]
+        with patch.object(CONTROLLER, "_request_json", side_effect=request), \
+             patch.object(CONTROLLER, "_workflow_run",
+                          side_effect=controller_ci_responses(data)), \
+             patch.object(CONTROLLER, "_list", side_effect=[data["ledger_comments"], revoked]):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
+        self.assertEqual(str(caught.exception), "ledger_changed_during_read")
+
+    def test_controller_refuses_ci_change_after_admission_evaluation(self):
+        data = fixture()
+
+        def request(path):
+            if "/branches/" in path:
+                return {"protected": True, "commit": {"sha": PRIMARY}}
+            if path.endswith(f"/compare/{CANDIDATE}...{PRIMARY}"):
+                return data["primary_comparison"]
+            if path.endswith("/pulls/383"):
+                return data["pr"]
+            if path.endswith(f"/commits/{CANDIDATE}"):
+                return data["merge_commit"]
+            if path == "/repos/zsoltacsai/wpcaregrid":
+                return {"owner": {"login": OWNER}}
+            raise AssertionError(path)
+
+        responses = controller_ci_responses(data)
+        responses[4] = ({**data["candidate_ci_run"], "conclusion": "failure"},
+                        data["candidate_ci_jobs"])
+        with patch.object(CONTROLLER, "_request_json", side_effect=request), \
+             patch.object(CONTROLLER, "_workflow_run", side_effect=responses), \
+             patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
+        self.assertEqual(str(caught.exception), "ci_changed_during_evidence_read")
 
     def test_repository_root_api_path_is_allowed_and_unrelated_path_rejected(self):
         with patch.object(CONTROLLER.urllib.request, "build_opener") as opener:
@@ -362,16 +467,24 @@ class ReadOnlyControllerTests(unittest.TestCase):
     def test_workflow_run_parses_github_jobs_envelope_without_mocking_workflow_run(self):
         data = fixture()
         jobs = data["pr_ci_jobs"]
-        run = {"id": 123, "head_sha": HEAD, "event": "pull_request",
+        run = {"id": 123, "run_attempt": 1,
+               "head_sha": HEAD, "event": "pull_request",
                "path": ".github/workflows/ci.yml", "created_at": "2026-11-14T01:00:00Z",
+               "status": "completed", "conclusion": "success",
                "pull_requests": [{"number": 383,
-                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf"}}]}
+                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
+                                            "sha": BASE}}]}
+        jobs = [{"id": 501 + index, "run_id": 123, "run_attempt": 1,
+                 "head_sha": HEAD, "name": name, "status": "completed",
+                 "conclusion": "success"} for index, name in enumerate(REQUIRED_CI_JOBS)]
 
         def request(path):
             if "/actions/runs?" in path:
                 return {"total_count": 1, "workflow_runs": [run]}
-            if path == "/repos/zsoltacsai/wpcaregrid/actions/runs/123/jobs?per_page=100&page=1":
+            if path == "/repos/zsoltacsai/wpcaregrid/actions/runs/123/attempts/1/jobs?per_page=100&page=1":
                 return {"total_count": len(jobs), "jobs": jobs}
+            if path == "/repos/zsoltacsai/wpcaregrid/actions/runs/123/attempts/1":
+                return run
             raise AssertionError(path)
 
         with patch.object(CONTROLLER, "_request_json", side_effect=request):
@@ -379,8 +492,66 @@ class ReadOnlyControllerTests(unittest.TestCase):
         self.assertEqual(selected, run)
         self.assertEqual(actual_jobs, jobs)
 
+    def test_workflow_run_refuses_attempt_change_during_job_read(self):
+        run = {"id": 123, "run_attempt": 1, "head_sha": HEAD,
+               "event": "pull_request", "path": ".github/workflows/ci.yml",
+               "created_at": "2026-11-14T01:00:00Z", "status": "completed",
+               "conclusion": "success",
+               "pull_requests": [{"number": 383,
+                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
+                                            "sha": BASE}}]}
+        jobs = [{"id": 501 + index, "run_id": 123, "run_attempt": 1,
+                 "head_sha": HEAD, "name": name, "status": "completed",
+                 "conclusion": "success"} for index, name in enumerate(REQUIRED_CI_JOBS)]
+        changed = {**run, "run_attempt": 2, "status": "in_progress", "conclusion": None}
+
+        def request(path):
+            if "/actions/runs?" in path:
+                return {"total_count": 1, "workflow_runs": [run]}
+            if path.endswith("/attempts/1/jobs?per_page=100&page=1"):
+                return {"total_count": len(jobs), "jobs": jobs}
+            if path.endswith("/attempts/1"):
+                return changed
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=request):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER._workflow_run(HEAD, event="pull_request", pr_number=383)
+        self.assertEqual(str(caught.exception), "ci_attempt_changed_during_read")
+
+    def test_workflow_run_refuses_newer_attempt_appearing_during_collection(self):
+        run = {"id": 123, "run_attempt": 1, "head_sha": HEAD,
+               "event": "pull_request", "path": ".github/workflows/ci.yml",
+               "created_at": "2026-11-14T01:00:00Z", "status": "completed",
+               "conclusion": "success",
+               "pull_requests": [{"number": 383,
+                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf",
+                                            "sha": BASE}}]}
+        jobs = [{"id": 501 + index, "run_id": 123, "run_attempt": 1,
+                 "head_sha": HEAD, "name": name, "status": "completed",
+                 "conclusion": "success"} for index, name in enumerate(REQUIRED_CI_JOBS)]
+        list_reads = 0
+
+        def request(path):
+            nonlocal list_reads
+            if "/actions/runs?" in path:
+                list_reads += 1
+                selected = run if list_reads == 1 else {**run, "run_attempt": 2}
+                return {"total_count": 1, "workflow_runs": [selected]}
+            if path.endswith("/attempts/1/jobs?per_page=100&page=1"):
+                return {"total_count": len(jobs), "jobs": jobs}
+            if path.endswith("/attempts/1"):
+                return run
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=request):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER._workflow_run(HEAD, event="pull_request", pr_number=383)
+        self.assertEqual(str(caught.exception), "ci_run_changed_during_read")
+
     def test_workflow_jobs_paginates_and_rejects_incomplete_envelope(self):
-        jobs = [{"id": index, "name": f"job-{index}"} for index in range(1, 102)]
+        jobs = [{"id": index, "run_id": 123, "run_attempt": 2,
+                 "head_sha": HEAD, "name": f"job-{index}"} for index in range(1, 102)]
         calls = []
 
         def paged(path):
@@ -392,13 +563,13 @@ class ReadOnlyControllerTests(unittest.TestCase):
             raise AssertionError(path)
 
         with patch.object(CONTROLLER, "_request_json", side_effect=paged):
-            self.assertEqual(CONTROLLER._workflow_jobs(123), jobs)
+            self.assertEqual(CONTROLLER._workflow_jobs(123, 2, HEAD), jobs)
         self.assertEqual(len(calls), 2)
 
         with patch.object(CONTROLLER, "_request_json", return_value={
                 "total_count": 2, "jobs": jobs[:1]}):
             with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
-                CONTROLLER._workflow_jobs(123)
+                CONTROLLER._workflow_jobs(123, 2, HEAD)
         self.assertEqual(str(caught.exception), "ci_jobs_incomplete")
 
     def test_isolated_documented_entrypoint_imports_and_returns_json_hold(self):

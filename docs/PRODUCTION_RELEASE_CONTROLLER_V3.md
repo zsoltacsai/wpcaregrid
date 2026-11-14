@@ -94,8 +94,18 @@ The `.github/workflows/ci.yml` run must be completed/success, with each of the
 seven required job names present exactly once and completed/success. Missing,
 duplicate, stale, cancelled, pending, failed, truncated, or malformed evidence
 returns HOLD. API failure also returns HOLD. No older green run is used if the
-latest matching run failed. The release manifest must pin the candidate SHA;
-an operator must not substitute the latest primary SHA after review.
+latest matching run failed. Job pagination uses the selected run's explicit
+attempt endpoint; each job's run ID, attempt and head SHA must match, and the
+run attempt plus latest eligible run are re-read before acceptance. Every job
+must be complete without a failed conclusion, in addition to all seven
+required jobs passing. The release manifest must pin the candidate SHA; an
+operator must not substitute the latest primary SHA after review.
+
+The complete #174 comment snapshot is fetched again after policy evaluation;
+any identity, body, association, creation/update timestamp or pagination
+difference returns HOLD. The protected primary is also reread. A change after
+the final read cannot be ruled out by this read-only prototype, so a privileged
+successor must rerun admission immediately before its first mutation.
 
 ## Fail-closed and rollback contract
 
