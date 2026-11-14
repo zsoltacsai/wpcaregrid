@@ -207,45 +207,51 @@ def trigger_rows(schema):
 
 def trigger_ddl_logged(expected_names):
     logs = admin('SHOW BINARY LOGS').splitlines()
+    stats = {'logs': len(logs), 'events': 0, 'query_events': 0, 'trigger_events': 0, 'matched': 0}
+    def result(ok):
+        return ok, ','.join(f'{key}={value}' for key, value in stats.items()) + f',expected={len(expected_names)}'
     if not logs or len(logs) > 20:
-        return False
+        return result(False)
     matched = set()
     for entry in logs:
         log_name = entry.split('\t', 1)[0]
         if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
-            return False
+            return result(False)
         position = 4
         for _ in range(100):
             # Explicitly paginated and bounded: never scan an unbounded binary log.
-            result = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM {position} LIMIT 1000").splitlines()
-            if not result:
+            result_rows = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM {position} LIMIT 1000").splitlines()
+            if not result_rows:
                 break
             last_position = position
-            for row in result:
+            for row in result_rows:
                 columns = row.split('\t', 5)
                 if len(columns) != 6:
-                    return False
+                    return result(False)
+                stats['events'] += 1
                 try:
                     last_position = max(last_position, int(columns[4]))
                 except ValueError:
-                    return False
-                # MySQL may render DDL as CREATE DEFINER=... TRIGGER, so match the
-                # event type, TRIGGER token, and exact expected object names.
-                matched.update(logged_trigger_names(columns[2], columns[5], expected_names))
+                    return result(False)
+                if columns[2] == 'Query':
+                    stats['query_events'] += 1
+                names = logged_trigger_names(columns[2], columns[5], expected_names)
+                if names:
+                    stats['trigger_events'] += 1
+                    matched.update(names)
+                    stats['matched'] = len(matched)
             if matched == set(expected_names):
-                return True
+                return result(True)
             if last_position <= position:
-                return False
+                return result(False)
             position = last_position
-            if len(result) < 1000:
+            if len(result_rows) < 1000:
                 break
         else:
             # The per-file page limit was reached. Missing evidence must not be accepted.
             if matched != set(expected_names):
-                return False
-        if matched == set(expected_names):
-            return True
-    return matched == set(expected_names)
+                return result(False)
+    return result(matched == set(expected_names))
 
 
 def table_exists(schema, table):
@@ -447,8 +453,8 @@ def main():
         ok &= require_contract('trigger_definer_is_dba_account', definers == [f'{dba}@%'], f'distinct_definers={len(definers)}')
         record('trigger_definition_sha256', 'OBSERVED',
                hashlib.sha256('|'.join(f'{r[0]}:{r[6]}' for r in rows).encode()).hexdigest())
-        ok &= require_contract('trigger_ddl_present_in_bounded_binlog_read',
-                               trigger_ddl_logged([r[0] for r in rows]))
+        binlog_ok, binlog_detail = trigger_ddl_logged([r[0] for r in rows])
+        ok &= require_contract('trigger_ddl_present_in_bounded_binlog_read', binlog_ok, binlog_detail)
 
         # 10. idempotence: reviewed up() re-run as the app account verifies definitions without SUPER/trust
         for n in trig:
@@ -508,6 +514,7 @@ def main():
         admin(f"REVOKE ALL PRIVILEGES ON `{schema}`.* FROM '{dba}'@'%'")
         admin(f"GRANT SELECT ON `{schema}`.deployment_transition_fences TO '{dba}'@'%'")
         admin(f"GRANT SELECT ON `{schema}`.transition_v2_requests TO '{dba}'@'%'")
+        admin(f"GRANT SELECT ON `{schema}`.transition_history_events TO '{dba}'@'%'")
         admin(f"GRANT TRIGGER ON `{schema}`.* TO '{dba}'@'%'")
         admin(f"ALTER USER '{dba}'@'%' ACCOUNT LOCK")
         definer_grants = admin(f"SHOW GRANTS FOR '{dba}'@'%'").splitlines()
@@ -516,6 +523,7 @@ def main():
             (line.startswith('GRANT USAGE ON *.* TO ') and 'WITH GRANT OPTION' not in line)
             or line.startswith(f'GRANT SELECT ON {schema.upper()}.DEPLOYMENT_TRANSITION_FENCES TO ')
             or line.startswith(f'GRANT SELECT ON {schema.upper()}.TRANSITION_V2_REQUESTS TO ')
+            or line.startswith(f'GRANT SELECT ON {schema.upper()}.TRANSITION_HISTORY_EVENTS TO ')
             or line.startswith(f'GRANT TRIGGER ON {schema.upper()}.* TO ')
             for line in normalized_grants
         )
