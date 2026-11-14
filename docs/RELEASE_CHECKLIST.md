@@ -4,6 +4,13 @@ Gates before the controlled pilot and before production use. Each item is **READ
 
 How to check most items: `php artisan system:check` (OK / WARNING / ERROR / NOT CONFIGURED, never prints secrets) and the owner System page. Deployment steps: [DEPLOYMENT.md](DEPLOYMENT.md); pilot: [PILOT.md](PILOT.md).
 
+> **Historical snapshot notice — 2026-11-14:** The release-evidence rows below
+> were prepared for proposed candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
+> The protected primary has since advanced to `198e32d127c782bf80ff7ca837f06df82d50655a`
+> after PRs #395, #396 and #385. The candidate identity is not silently changed
+> here. Treat the rows as the 5e0e784 candidate snapshot, not as current primary,
+> staging or production evidence. Production remains NO-GO.
+
 ## Current release evidence snapshot — 2026-11-13
 
 This snapshot was refreshed from GitHub repository and workflow records. It contains

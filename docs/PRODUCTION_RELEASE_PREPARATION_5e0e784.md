@@ -2,6 +2,18 @@
 
 **Decision:** preparation only; production deployment is **NO-GO**.
 
+> **GO-8 status note — 2026-11-14:** This document and its manifest remain pinned
+> to the historical proposed source candidate `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`.
+> The protected primary has since advanced to `198e32d127c782bf80ff7ca837f06df82d50655a`
+> after PRs #395, #396 and #385. The candidate SHA and manifest are intentionally
+> unchanged; this dossier is not a designation of the current primary as a new
+> production candidate. The V3 controller prototype is now in primary but is not
+> connected to or installed as the production helper. Production remains NO-GO;
+> runtime, migration, backup/restore and staging gates remain unresolved.
+> Post-merge CI run `43625016661` for the current primary was still in progress
+> (36/38 jobs complete, 0 failed) when this note was prepared; that snapshot is
+> not a CI PASS for the new primary.
+
 - **Protected primary:** `claude/ecstatic-wozniak-oemyuf`
 - **Proposed candidate:** `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`
 - **Exact-SHA CI:** [run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), `completed/success`, 38/38 check runs successful.
