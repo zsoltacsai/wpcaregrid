@@ -291,6 +291,15 @@ def trigger_ddl_logged(expected_names, schema, dba):
     # mysqlbinlog decorates statements with version comments such as /*!*/;.
     # Remove those wrappers only in memory; never emit raw log content.
     log_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1', ''.join(output_parts), flags=re.DOTALL)
+    candidates = sorted(set(re.findall(r'\bTRIGGER\s+[\x60\']?([A-Za-z0-9_]+)',
+                                      log_text, re.IGNORECASE)))
+    name_hits = sorted(name for name in expected_names if name.upper() in log_text.upper())
+    record('mysqlbinlog_token_counts', 'OBSERVED',
+           f"create={len(re.findall(r'\bCREATE\b', log_text, re.IGNORECASE))},"
+           f"trigger={len(re.findall(r'\bTRIGGER\b', log_text, re.IGNORECASE))},"
+           f"schema={log_text.upper().count(schema.upper())},definer={log_text.upper().count(dba.upper())}")
+    record('mysqlbinlog_trigger_candidates', 'OBSERVED', '+'.join(candidates) or 'none')
+    record('mysqlbinlog_expected_name_hits', 'OBSERVED', '+'.join(name_hits) or 'none')
     matched = {
         name for name in expected_names
         if logged_trigger_names('Query', log_text, [name], schema, dba)
