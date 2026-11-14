@@ -26,7 +26,7 @@ Ez a dokumentum nem bizonyít friss staging vagy production runtime állapotot, 
 
 | Ellenőrzés | Eredmény | Bizonyíték és korlát |
 |---|---|---|
-| Jelenlegi app helye / release SHA / aktív release manifest | UNKNOWN | Az SSH kliensdiagnosztika a caregrid-staging aliast deploy@stg1.wpcaregrid.com:22-ra oldotta fel. A known_hosts Ed25519 host fingerprint megegyezett a korábban Owner által jóváhagyott értékkel; StrictHostKeyChecking=yes és csak Ed25519 host key mellett a szerverazonosság PASS. A konfigurált privát kulcsfájl 0600 és olvasható; privát/publikus fingerprint egyezik, de az ssh-agent nem elérhető, és a kulcs aláírásra passphrase nélkül nem nyitható meg. Az egyetlen engedélyezett további SSH próba 255-tel zárult: a szerver elfogadta a publikus kulcs jelöltjét, de helyi aláírás nem történt; a távoli parancs nem futott. **Owner action:** azonos meglévő kulcsot kell elérhetővé tenni az engedélyezett agenten keresztül; új kulcs/csatorna nélkül. E próba keretében több kapcsolat nincs. |
+| Jelenlegi app helye / release SHA / aktív release manifest | UNKNOWN | A dokumentumkészítéskor végzett, már engedélyezett read-only hozzáférési próba nem jutott el távoli parancs futtatásáig. Ezért host/runtime állapot nem állapítható meg. Nem történt új hozzáférési út vagy további kapcsolat-próba; a részletes kapcsolati és kulcsdiagnosztika nincs ebben a nyilvános dokumentumban. |
 | Telepítési cél szerződés szerinti útvonala | Repo evidence only | A staging-next helper 1.0.2 manifest /var/www/wpcaregrid-staging-new app_dir-t, wpcg_staging_next adatbázist és staging-next.wpcaregrid.com hostot rögzít. Ez nem bizonyít aktuális telepítést. |
 | PHP / FPM és szolgáltatás-azonosítók | UNKNOWN runtime | A staging dokumentáció PHP 8.5 scheduler célt említ; a deployment dokumentáció PHP 8.4-et ír baseline-nak. A tényleges CLI/FPM verzió, socket, unit és manifest nem olvasható. |
 | Composer platform | Repo PASS / runtime UNKNOWN | composer.json PHP ^8.4.1 követelményt deklarál; 8.4/8.5 megfelel a verziótartománynak. A kiterjesztések jelenlétét a futó kiadáson a composer check-platform-reqs --no-dev --lock ellenőrzi. |
@@ -62,7 +62,7 @@ Nem futott schedule:run, queue:work, Artisan vagy service parancs.
 | Production controller | scripts/production_deploy_controller.py, HELPER_VERSION 2.0.0; rögzített /usr/local/libexec/wpcaregrid-deploy/production/2.0.0 path | A controller SHA a cf2a944 baseline-on és candidate-en a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283. |
 | Helper artifacts | A production-deployment-helper-2.0.0.json manifest 7 deklarált artifact pinje egyezik a candidate fájlok SHA-256 értékeivel | Hash-konzisztencia PASS; host install nincs bizonyítva. |
 | Root installer | Candidate tree-ben szerepel, hash pin c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d; a régi baseline után került hozzá | Runbook/installer együtt újra review-zandó. |
-| V3 evidence | A protected primary tartalmazza a #385-ben hozzáadott, read-only V3 admission prototípust. A telepített production helper 2.0.0 változatlan, V2 review szerződéshez pinelt, és nincs bizonyíték arra, hogy a prototípus be lenne kötve vagy telepítve. | HOLD: operatív V3-integrációhoz külön, verziózott és review-zott helper/controller utód kell. |
+| V3 evidence | A `5e0e784…` candidate időpontjában még nem volt V3 admission kód a primaryban. A 2026-11-14-i történeti frissítés szerint később a #385 read-only prototípusa bekerült a `198e32d…` primaryba; a production helper 2.0.0 változatlan, V2 szerződéshez pinelt, a prototípus nincs bizonyítottan bekötve vagy telepítve. | HOLD: operatív V3-integrációhoz külön, verziózott és review-zott helper/controller utód kell. |
 | Phase B | phase_b_default=DISABLED; a production activation policy és recovery evidence függvénye | HOLD. |
 | Artifact | Controller canonical release-t készít exact Git source alapján; korábbi ZIP nem automatikus input | Ne használjunk régi ZIP-et; exact-SHA artifact proof kell. |
 
@@ -82,7 +82,7 @@ Következő isolated clone qualification: pontos migration SHA inventory; binlog
 
 ## 6. Backup és restore
 
-A RELEASE_CHECKLIST.md és PRODUCTION_RELEASE_PREPARATION_5e0e784.md szerint migration-bearing release-hez kell:
+A RELEASE_CHECKLIST.md és a [#383-ban fejlesztett candidate-előkészítési dosszié](https://github.com/zsoltacsai/wpcaregrid/pull/383) alapján migration-bearing release-hez szükséges:
 - exact SHA-hoz kötött application/source artifact;
 - védett config és secret/key recovery (titokértékek kiírása nélkül);
 - DB backup checksum és timestamp;
@@ -128,7 +128,7 @@ Pozitív tiltott útvonal vagy hiányzó worker fence: FAIL/STOP. Hiányzó runt
 - SSH read-only próba auth hibával zárult; másik csatorna nem volt próbálva.
 - PHPUnit nem futott: a helyi PHP/Composer/vendor dependency hiányzik.
 
-## 9. Sorrendbe tett readiness kapuk
+## 9. Readiness kapuk a 2026-11-13-i pillanatképben
 
 | Sorrend | Gate | Státusz |
 |---|---|---|
@@ -143,7 +143,7 @@ Pozitív tiltott útvonal vagy hiányzó worker fence: FAIL/STOP. Hiányzó runt
 | 9 | Final production activation | NO-GO until every previous gate PASS and exact-SHA Owner GO |
 | Separate | GO-6.4 inventory helper | HOLD; separate optional diagnostic branch, not app release prerequisite |
 
-## 10. GO-7.2B terv és Owner döntések
+## 10. A 2026-11-13-i GO-7.2B terv és Owner döntések történeti feljegyzése
 
 ### Deploy-only staging evidence (read-only; next phase)
 Csak a már jóváhagyott deploy-only SSH alias és explicit read-only parancsok használhatók. Első lépés host identity/fingerprint/trusted manifest összevetés; eltérés esetén STOP. Ha sikeres:
@@ -165,4 +165,4 @@ Ha az alias továbbra sem authentikál vagy identity nem igazolható, runtime t�
 - Minden gate után külön exact-SHA production release GO.
 - GO-6.4 root install/first invocation külön és opcionális marad.
 
-**Döntés:** production NO-GO. Következő biztonságos lépés: az existing deploy-only credential/host binding ellenőrzése a már jóváhagyott elérési úton; ha az továbbra is hibázik, Owner biztosítson működő, már jóváhagyott deploy-only auth-ot, access-modell bővítése nélkül.
+**A 2026-11-13-i pillanatkép döntése:** production NO-GO. Az abban rögzített következő lépés deploy-only hozzáférés ellenőrzése volt. Ez nem aktuális műveleti utasítás; a jelenlegi teendőket és engedélyeket az issue #174 és a friss Owner direktívák határozzák meg.
