@@ -81,8 +81,10 @@ association are present, the correction's comment ID and creation time are later
 the target's, the target comment exists and is still malformed for exactly that
 legacy-agent reason, the body digest and subject match byte-for-byte, and there is only
 one correction for the target. A correction invalidates the old claim; it cannot
-create, repair, or supersede it with PASS. Fresh review evidence is still required for
-any later use. Malformed, ambiguous, forged, stale-subject, duplicate, or non-Owner
+create, repair, or supersede it with PASS. It also becomes the latest `INVALIDATED`
+decision for that exact role/PR/head, so it cannot reveal an earlier PASS that the bad
+record followed. Only a new, valid PASS comment created after the correction can restore
+that role. Malformed, ambiguous, forged, stale-subject, duplicate, or non-Owner
 corrections do not suppress the original fail-closed error. No historical comment is
 deleted, rewritten, whitelisted, or silently ignored.
 

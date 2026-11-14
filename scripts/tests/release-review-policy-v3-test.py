@@ -44,9 +44,9 @@ def refusal(comments, **kw):
     return str(ctx.exception)
 
 
-def legacy_malformed(comment_id, role, agent):
+def legacy_malformed(comment_id, role, agent, decision="PASS"):
     body = (f"{R.RECORD_PREFIX}\nrole={role}\npr=377\nhead_sha={NEW}\nagent={agent}\n"
-            f"reviewer_kind=ai_agent\ndecision=PASS\nevidence_sha256={DIGEST}")
+            f"reviewer_kind=ai_agent\ndecision={decision}\nevidence_sha256={DIGEST}")
     return {"id": comment_id, "created_at": "2026-11-12T19:42:46Z",
             "author_association": "OWNER", "user": {"login": OWNER}, "body": body}
 
@@ -187,6 +187,23 @@ class AgentReviewTests(unittest.TestCase):
                          "93ddca4b09fbf52c8c7f65fc13221950280c561b05e17fc988aebdca685e504b")
         # Invalidation cannot turn the old claims into evidence for their own subject.
         self.assertEqual(refusal(comments, pr=377, sha=NEW), "review_evidence_missing")
+
+    def test_invalidation_supersedes_prior_pass_until_fresh_role_pass(self):
+        for decision in ("CHANGES_REQUIRED", "BLOCKED"):
+            old_bad = legacy_malformed(8000, "appsec", "Bad Agent", decision=decision)
+            old_qa_pass = record("integration_qa", pr=377, sha=NEW)
+            old_appsec_pass = record("appsec", pr=377, sha=NEW)
+            correction_id = 8_000_001
+            invalidation = correction(old_bad, correction_id)
+            with self.subTest(decision=decision):
+                self.assertEqual(refusal([old_qa_pass, old_appsec_pass, old_bad, invalidation],
+                                         pr=377, sha=NEW), "review_not_pass")
+                fresh_appsec = record("appsec", pr=377, sha=NEW,
+                                      created="2026-11-14T13:00:00Z")
+                fresh_appsec["id"] = 8_000_002
+                accepted = verify([old_qa_pass, old_appsec_pass, old_bad, invalidation, fresh_appsec],
+                                  pr=377, sha=NEW)
+                self.assertEqual(accepted["appsec"]["id"], fresh_appsec["id"])
 
     def test_correction_is_exact_owner_bound_and_cannot_rewrite_history(self):
         old = legacy_malformed(7003, "integration_qa", "Hermione")

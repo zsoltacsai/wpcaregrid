@@ -112,7 +112,7 @@ def _correction_target_fields(body: object):
     return role, int(pr), sha
 
 
-def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, tuple[str, int, str, str]]:
+def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, dict[str, object]]:
     by_id: dict[int, object] = {}
     for item in items:
         if not isinstance(item, Mapping) or type(item.get("id")) is not int:
@@ -121,7 +121,7 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, tup
         if comment_id in by_id:
             raise ReviewRefused("review_evidence_ambiguous")
         by_id[comment_id] = item
-    corrections: dict[int, tuple[str, int, str, str]] = {}
+    corrections: dict[int, dict[str, object]] = {}
     for item in items:
         if not isinstance(item, Mapping):
             continue
@@ -153,7 +153,10 @@ def _authorized_corrections(items: list[object], *, owner: str) -> dict[int, tup
             raise ReviewRefused("review_correction_subject_mismatch")
         if target_id in corrections:
             raise ReviewRefused("review_correction_ambiguous")
-        corrections[target_id] = (digest, target_pr, target_sha, role)
+        corrections[target_id] = {
+            "digest": digest, "pr": target_pr, "head_sha": target_sha, "role": role,
+            "created_at": item["created_at"], "id": item["id"],
+        }
     return corrections
 
 
@@ -200,8 +203,9 @@ def verify_agent_release_reviews(
             correction = corrections.get(comment_id) if type(comment_id) is int else None
             target_fields = _correction_target_fields(body)
             if (correction is not None and target_fields is not None
-                    and correction[0] == hashlib.sha256(body.encode("utf-8")).hexdigest()
-                    and correction[1:] == (target_fields[1], target_fields[2], target_fields[0])):
+                    and correction["digest"] == hashlib.sha256(body.encode("utf-8")).hexdigest()
+                    and (correction["pr"], correction["head_sha"], correction["role"])
+                    == (target_fields[1], target_fields[2], target_fields[0])):
                 # A valid correction is an explicit Owner invalidation, never a
                 # replacement PASS. Fresh well-formed evidence is still needed.
                 continue
@@ -214,6 +218,23 @@ def verify_agent_release_reviews(
                   "created_at": created, "id": comment_id}
         if role not in latest or _sort_key(record) > _sort_key(latest[role]):
             latest[role] = record
+
+    # Invalidation is itself the latest non-PASS decision for that exact
+    # subject/role. It must not expose an older PASS that the malformed record
+    # had previously eclipsed. A genuinely fresh later PASS may supersede it.
+    for correction in corrections.values():
+        if (correction["pr"] != pr_number or correction["head_sha"] != head_sha):
+            continue
+        invalidated = {
+            "role": correction["role"], "pr": correction["pr"],
+            "head_sha": correction["head_sha"], "decision": "INVALIDATED",
+            "agent": "", "reviewer_kind": REVIEWER_KIND,
+            "evidence_sha256": "", "created_at": correction["created_at"],
+            "id": correction["id"],
+        }
+        role = correction["role"]
+        if role not in latest or _sort_key(invalidated) > _sort_key(latest[role]):
+            latest[role] = invalidated
 
     for role in ROLES:
         if role not in latest:
