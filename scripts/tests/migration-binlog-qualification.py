@@ -249,11 +249,16 @@ def trigger_ddl_logged(expected_names, schema, dba):
              'trigger_mentions': 0, 'schema_mentions': 0, 'definer_mentions': 0,
              'expected_name_mentions': 0, 'trigger_name_candidates': set(), 'trigger_name_intersections': 0,
              'schema_name_intersections': 0, 'definer_name_intersections': 0,
-             'trigger_schema_definer_intersections': 0, 'trigger_events': 0, 'matched': 0}
+             'trigger_schema_definer_intersections': 0, 'trigger_events': 0, 'matched': 0,
+             'trigger_info_event_types': set(), 'trigger_name_candidates': set()}
     def result(ok):
-        details = {key: value for key, value in stats.items() if key != 'trigger_name_candidates'}
-        details['trigger_name_candidates'] = '+'.join(sorted(stats['trigger_name_candidates'])) or 'none'
-        return ok, ','.join(f'{key}={value}' for key, value in details.items()) + f',expected={len(expected_names)}'
+        record('binlog_trigger_info_types', 'OBSERVED',
+               '+'.join(sorted(stats['trigger_info_event_types'])) or 'none')
+        record('binlog_trigger_name_candidates', 'OBSERVED',
+               '+'.join(sorted(stats['trigger_name_candidates'])) or 'none')
+        detail = (f"logs={stats['logs']},events={stats['events']},queries={stats['query_events']},"
+                  f"trigger_queries={stats['trigger_mentions']},names={stats['matched']},expected={len(expected_names)}")
+        return ok, detail
     if not logs or len(logs) > 20:
         return result(False)
     matched = set()
@@ -272,9 +277,14 @@ def trigger_ddl_logged(expected_names, schema, dba):
                 if len(columns) != 6:
                     return result(False)
                 stats['events'] += 1
+                info_upper = columns[5].upper()
+                if 'TRIGGER' in info_upper:
+                    stats['trigger_info_event_types'].add(columns[2])
+                    trigger_id = binlog_trigger_identifier(columns[5])
+                    if trigger_id:
+                        stats['trigger_name_candidates'].add(trigger_id)
                 if columns[2] == 'Query':
                     stats['query_events'] += 1
-                    info_upper = columns[5].upper()
                     stats['create_queries'] += int('CREATE' in info_upper)
                     stats['trigger_mentions'] += int('TRIGGER' in info_upper)
                     stats['schema_mentions'] += int(schema.upper() in info_upper)
@@ -288,9 +298,6 @@ def trigger_ddl_logged(expected_names, schema, dba):
                     stats['schema_name_intersections'] += int(has_schema and has_expected)
                     stats['definer_name_intersections'] += int(has_definer and has_expected)
                     stats['trigger_schema_definer_intersections'] += int(has_trigger and has_schema and has_definer)
-                    trigger_id = binlog_trigger_identifier(columns[5]) if has_trigger else None
-                    if trigger_id:
-                        stats['trigger_name_candidates'].add(trigger_id)
                 names = logged_trigger_names(columns[2], columns[5], expected_names, schema, dba)
                 if names:
                     stats['trigger_events'] += 1
