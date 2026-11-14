@@ -17,9 +17,9 @@ Ez a dokumentum nem bizonyít friss staging vagy production runtime állapotot, 
 ## 1. GitHub állapot a dokumentum készítésekor
 
 - A GitHub branch API a protected primary refet protected=true állapotban és a fenti SHA-n adta vissza.
-- A [CI run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267) ehhez a pontos SHA-hoz tartozik; push esemény, completed/success, a check-runs API 38/38 completed/success eredményt adott.
+- A [CI run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267) ehhez a pontos SHA-hoz tartozik; push esemény, completed/success, a check-runs API 42/42 check-run completed/success eredményt adott (a workflow 38 jobja mind sikeres volt).
 - A branch protection részletes endpointját a GitHub-integráció nem engedte olvasni (403); a required-check névlista UNKNOWN. A check-run eredmények exact-SHA-n igazoltak.
-- PR #383 nyitott, Draft, HEAD aecc24e679de7537385d2625bbf6ef9455a89303, base 5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8. A #174 legutóbbi bejegyzése szerint Moody exact-HEAD AppSec V3 PASS rögzítve; Hermione exact-HEAD Integration QA a Claude API limit miatt BLOCKED, nincs QA V3 rekord. A PR maradjon Draft.
+- A dokumentum készítésekor a PR #383 nyitott Draft volt, HEAD aecc24e679de7537385d2625bbf6ef9455a89303 és base 5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8 mellett. Az akkori #174 bejegyzések Moody exact-HEAD AppSec V3 PASS-t, valamint Hermione Claude API limit miatti BLOCKED Integration QA-ját rögzítették. Ez kizárólag történeti állapot; a PR később frissült, az aktuális státuszt a #174 ledger mutatja.
 - Nyitott PR #380 Draft, base 1977224cafdf460205e6a6febcf58c46ddac63c0; nem aktuális primary candidate evidence.
 
 ## 2. Staging discovery
@@ -60,13 +60,13 @@ Nem futott schedule:run, queue:work, Artisan vagy service parancs.
 | Elem | Repository tény | Állapot |
 |---|---|---|
 | Production controller | scripts/production_deploy_controller.py, HELPER_VERSION 2.0.0; rögzített /usr/local/libexec/wpcaregrid-deploy/production/2.0.0 path | A controller SHA a cf2a944 baseline-on és candidate-en a94865d3e6318c7278b6d72e797fc94d5274faeca0ea2073ecc84fad74166283. |
-| Helper artifacts | A production-deployment-helper-2.0.0.json manifest 7 deklarált artifact pinje egyezik a candidate Git blob SHA-kkal | Hash-konzinzisztencia PASS; host install nincs bizonyítva. |
+| Helper artifacts | A production-deployment-helper-2.0.0.json manifest 7 deklarált artifact pinje egyezik a candidate fájlok SHA-256 értékeivel | Hash-konzisztencia PASS; host install nincs bizonyítva. |
 | Root installer | Candidate tree-ben szerepel, hash pin c5c19f0655cfae5f4747264c13c988f7360f3322be32a54b5e1961d538c2bf9d; a régi baseline után került hozzá | Runbook/installer együtt újra review-zandó. |
-| V3 evidence | RELEASE_REVIEW_POLICY.md szerint production helper 2.0.0 a régi V2 review szerződéshez pinelt; V3 enforcement helper utódban szükséges | HOLD: a jelenlegi kód nem bizonyítottan validálja a V3-t. |
+| V3 evidence | A protected primary tartalmazza a #385-ben hozzáadott, read-only V3 admission prototípust. A telepített production helper 2.0.0 változatlan, V2 review szerződéshez pinelt, és nincs bizonyíték arra, hogy a prototípus be lenne kötve vagy telepítve. | HOLD: operatív V3-integrációhoz külön, verziózott és review-zott helper/controller utód kell. |
 | Phase B | phase_b_default=DISABLED; a production activation policy és recovery evidence függvénye | HOLD. |
 | Artifact | Controller canonical release-t készít exact Git source alapján; korábbi ZIP nem automatikus input | Ne használjunk régi ZIP-et; exact-SHA artifact proof kell. |
 
-Legkisebb remediation: külön versioned controller/helper utód V3 exact PR/head ellenőrzéssel, pinned artifact és CI verifier összhangjával, 2.0.0 telepítés érintetlenül hagyásával és hiányzó/hibás V3-ra HOLD negatív tesztekkel.
+Legkisebb remediation: a #385 read-only prototípusát külön versioned controller/helper utóddal kell integrálni, exact release identity, report-artifact ellenőrzés, pinned artifact és CI verifier összhangjával, a 2.0.0 telepítés érintetlenül hagyásával, valamint hiányzó/hibás V3-ra HOLD negatív tesztekkel.
 
 ## 5. MySQL 8.4 trigger-migráció
 
@@ -120,8 +120,8 @@ Pozitív tiltott útvonal vagy hiányzó worker fence: FAIL/STOP. Hiányzó runt
 
 ## 8. Determinisztikus futtatás
 
-- GitHub primary/ref, exact workflow és checks: read-only; run 43386058267, 38/38 PASS.
-- PR/open issue snapshot és #174 lekérés: read-only; #383 Draft, QA V3 hiányzik, AppSec V3 PASS.
+- GitHub primary/ref, exact workflow és checks: read-only; run 43386058267, 42/42 check-run PASS (38/38 workflow job PASS).
+- PR/issue snapshot és #174 lekérés: read-only; a #383 akkori státuszát a dokumentumkészítéskori GitHub állapotot rögzítő 1. szakasz tartalmazza, nem aktuális gate-bizonyítékként.
 - A 2.0.0 manifest hét artifact SHA pinje a 5e0e784 Git tree-hez egyezik; controller SHA a régi source baseline-on is azonos.
 - composer.json PHP ^8.4.1; a composer.lock fájl SHA-256 értéke a candidate tree-ben a9b02c90dcb7ceab75ca8e905083597287685247157c0a7b398f7c476d401ec3 (ez fájlhash, nem Composer platform hash).
 - Forrás/manifest/dokumentáció olvasása megtörtént; host/DB/helper/Artisan parancs nem futott.
