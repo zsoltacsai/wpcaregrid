@@ -177,7 +177,9 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                         f'trigger={int(bool(trigger_token))},'
                         f'name={int(expected_name)},definer={int(definer_clause)},'
                         f'cp1={".".join(str(ord(c)) for c in statement[:16])},'
-                        f'cp2={".".join(str(ord(c)) for c in statement[16:32])}'
+                        f'cp2={".".join(str(ord(c)) for c in statement[16:32])},'
+                        f'cp3={".".join(str(ord(c)) for c in statement[32:48])},'
+                        f'cp4={".".join(str(ord(c)) for c in statement[48:64])}'
                     )
     return matched, stats
 
