@@ -171,6 +171,50 @@ def split_sql_statements(text):
     return statements
 
 
+def split_sql_assignments(text):
+    """Split comma-separated SET assignments without splitting quoted values."""
+    items = []
+    start = 0
+    quote = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == '\\' and quote in ("'", '"') and index + 1 < len(text):
+                index += 2
+                continue
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif char in ("'", '"', '`'):
+            quote = char
+        elif char == ',':
+            items.append(text[start:index].strip())
+            start = index + 1
+        index += 1
+    if quote:
+        return []
+    tail = text[start:].strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def allowed_set_prelude(statement):
+    if re.fullmatch(r'(?is)SET\s+TIMESTAMP\s*=\s*[0-9]+(?:\.[0-9]+)?', statement):
+        return True
+    match = re.match(r'(?is)^SET\s+(.+)$', statement)
+    if not match:
+        return False
+    assignments = split_sql_assignments(match.group(1))
+    return bool(assignments) and all(
+        re.fullmatch(r'(?is)@@SESSION\.[A-Za-z0-9_]+\s*=\s*.+', assignment)
+        for assignment in assignments
+    )
+
+
 def logged_trigger_names(event_type, info, expected_names, schema, definer):
     matches, _ = logged_trigger_match(event_type, info, expected_names, schema)
     return matches
@@ -192,10 +236,7 @@ def logged_trigger_match(event_type, info, expected_names, schema):
         use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
         if use and use.group(1).casefold() != schema.casefold():
             return set(), 'wrong_schema'
-        allowed_set = re.fullmatch(
-            r'(?is)SET\s+(?:TIMESTAMP\s*=\s*[^;]+|@@SESSION\.[A-Za-z0-9_]+\s*=\s*.+)',
-            statement,
-        )
+        allowed_set = allowed_set_prelude(statement)
         if use or allowed_set:
             continue
         if re.match(r'(?is)^SET\b', statement):
@@ -228,7 +269,11 @@ def mysqlbinlog_query_events(log_text):
     blocks = re.split(r'(?m)(?=^# at [0-9]+\s*$)', log_text)
     events = []
     for block in blocks:
-        header = re.search(r'(?m)^#.*\bQuery\b.*\berror_code=([0-9]+)\b', block)
+        header = re.search(
+            r'(?m)^#.*\bserver\s+id\s+[0-9]+\s+Query\s+'
+            r'thread_id=[0-9]+\b.*\berror_code=([0-9]+)\b',
+            block,
+        )
         if header and header.group(1) == '0':
             events.append(block)
     return events
@@ -322,6 +367,10 @@ def self_test():
             '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Table_map Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
         escaped_query = ('# at 100\n#260101 00:00:00 server id 1 Query thread_id=7 error_code=0\n'
                          'use wpcg_qual_a;\n\\CREATE TRIGGER guard_x BEFORE INSERT')
         assert mysqlbinlog_logged_trigger_names(
@@ -395,6 +444,16 @@ def self_test():
         assert logged_trigger_names(
             'Query', "SET @@session.sql_mode='x;y'; CREATE TRIGGER guard_x BEFORE INSERT",
             expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert logged_trigger_names(
+            'Query', "SET @@session.sql_mode='STRICT,NO_ZERO_DATE', "
+            "@@session.time_zone='+00:00'; CREATE TRIGGER guard_x BEFORE INSERT",
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names(
+            'Query', 'SET @@session.sql_mode=1, @@global.log_bin_trust_function_creators=1; '
+            'CREATE TRIGGER guard_x BEFORE INSERT', expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names(
+            'Query', 'SET TIMESTAMP=1, @@global.log_bin_trust_function_creators=1; '
+            'CREATE TRIGGER guard_x BEFORE INSERT', expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names(
             'Query', 'SET @marker=1; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
