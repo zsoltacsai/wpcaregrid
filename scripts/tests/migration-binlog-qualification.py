@@ -74,24 +74,31 @@ def binlog_trigger_identifier(info):
     return match.group(1) if match else None
 
 
-def logged_trigger_names(event_type, info, expected_names, schema, definer):
+def logged_trigger_names(event_type, info, expected_names, schema, definer, current_schema=None):
     if event_type != 'Query':
         return set()
     # Bind the DDL to this run's schema and definer; DROP or older runs cannot match.
-    # mysqlbinlog may emit session SET statements between USE and the DDL.
+    # mysqlbinlog may emit session SET statements between USE and the DDL, and it
+    # emits USE only when a connection's default database changes. The caller
+    # carries that context per thread_id across Query events.
     quote = r"[\x60']?"
-    use_pattern = re.compile(rf"\buse\s+{quote}{re.escape(schema)}{quote}\s*;", re.IGNORECASE)
+    use_pattern = re.compile(rf"(?im)^\s*use\s+{quote}([A-Za-z0-9_]+){quote}\s*;")
     create_pattern = re.compile(
         rf"\bCREATE\s+DEFINER\s*=\s*{quote}{re.escape(definer)}{quote}@{quote}%{quote}\s+TRIGGER\s+",
         re.IGNORECASE,
     )
+    selected_schema = current_schema
+    uses = list(use_pattern.finditer(info))
+    if uses:
+        selected_schema = uses[-1].group(1)
+    if selected_schema is None or selected_schema.casefold() != schema.casefold():
+        return set()
     for name in expected_names:
         create = create_pattern.search(info)
         if create is None or re.match(rf"{quote}{re.escape(name)}{quote}(?:\s|$)",
                                       info[create.end():], re.IGNORECASE) is None:
             continue
-        use = use_pattern.search(info)
-        if use is not None and use.end() <= create.start():
+        if not uses or uses[-1].start() < create.start():
             return {name}
     return set()
 
@@ -99,6 +106,25 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
 def mysqlbinlog_query_events(log_text):
     blocks = re.split(r'(?m)(?=^# at [0-9]+\s*$)', log_text)
     return [block for block in blocks if re.search(r'(?m)^#.*\bQuery\b', block)]
+
+
+def mysqlbinlog_logged_trigger_names(log_text, expected_names, schema, definer):
+    current_schema_by_thread = {}
+    matched = set()
+    for event in mysqlbinlog_query_events(log_text):
+        thread = re.search(r'\bthread_id=(\d+)\b', event)
+        if thread is None:
+            continue
+        thread_id = thread.group(1)
+        # Apply a USE at the beginning of this event before evaluating its DDL.
+        use = re.search(r'(?im)^\s*use\s+[\x60\']?([A-Za-z0-9_]+)[\x60\']?\s*;', event)
+        if use is not None:
+            current_schema_by_thread[thread_id] = use.group(1)
+        matched.update(logged_trigger_names(
+            'Query', event, expected_names, schema, definer,
+            current_schema=current_schema_by_thread.get(thread_id),
+        ))
+    return matched
 
 
 def created_tables(directory, name):
@@ -146,18 +172,33 @@ def self_test():
         assert binlog_trigger_identifier('use db; DROP TRIGGER guard_name') == 'guard_name'
         assert binlog_trigger_identifier('QUERY WITHOUT DDL') is None
         mysqlbinlog_text = re.sub(r'/\*!\d*\s*(.*?)\*/', r'\1',
-                                  '# at 100\n#260101 00:00:00 server id 1 Query\n'
+                                  '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\n'
                                   'use wpcg_qual_a/*!*/;\nSET TIMESTAMP=1/*!*/;\n'
                                   'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT/*!*/;')
         query_events = mysqlbinlog_query_events(mysqlbinlog_text)
         assert len(query_events) == 1
-        assert logged_trigger_names('Query', query_events[0], expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert mysqlbinlog_logged_trigger_names(mysqlbinlog_text, expected,
+                                                'wpcg_qual_a', 'u') == {'guard_x'}
         split_events = mysqlbinlog_query_events(
-            '# at 100\n#260101 00:00:00 server id 1 Query\nuse wpcg_qual_a;\n'
-            '# at 200\n#260101 00:00:01 server id 1 Query\nCREATE DEFINER=u@% TRIGGER guard_x')
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse wpcg_qual_a;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=7\n'
+            'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x')
         assert len(split_events) == 2
-        assert not any(logged_trigger_names('Query', event, expected, 'wpcg_qual_a', 'u')
-                       for event in split_events)
+        assert mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse wpcg_qual_a;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=7\n'
+            'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
+            expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse wpcg_qual_a;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=8\n'
+            'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 100\n#260101 00:00:00 server id 1 Query thread_id=7\nuse another;\n'
+            '# at 200\n#260101 00:00:01 server id 1 Query thread_id=7\n'
+            'SET TIMESTAMP=2; CREATE DEFINER=u@% TRIGGER guard_x',
+            expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
                                         expected, 'wpcg_qual_a', 'u')
         assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
@@ -324,10 +365,8 @@ def trigger_ddl_logged(expected_names, schema, dba):
            f"schema={log_text.upper().count(schema.upper())},definer={log_text.upper().count(dba.upper())}")
     record('mysqlbinlog_trigger_candidates', 'OBSERVED', '+'.join(candidates) or 'none')
     record('mysqlbinlog_expected_name_hits', 'OBSERVED', '+'.join(name_hits) or 'none')
-    query_events = mysqlbinlog_query_events(log_text)
-    matched = {name for name in expected_names
-               if any(logged_trigger_names('Query', event, [name], schema, dba)
-                      for event in query_events)}
+    matched = mysqlbinlog_logged_trigger_names(log_text, expected_names, schema, dba)
+    record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
     )
