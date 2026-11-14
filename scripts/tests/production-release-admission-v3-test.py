@@ -25,6 +25,16 @@ OWNER = "zsoltacsai"
 CANDIDATE = "a" * 40
 BASE = "b" * 40
 HEAD = "c" * 40
+PRIMARY = "d" * 40
+
+
+def primary_comparison(candidate=CANDIDATE, primary=PRIMARY, *, status="ahead",
+                       ahead_by=3, behind_by=0, merge_base=None):
+    return {
+        "status": status, "ahead_by": ahead_by, "behind_by": behind_by,
+        "base_commit": {"sha": candidate}, "head_commit": {"sha": primary},
+        "merge_base_commit": {"sha": merge_base or candidate},
+    }
 REPORT_QA = b"independent QA report\n"
 REPORT_APPSEC = b"independent AppSec report\n"
 
@@ -41,7 +51,7 @@ def ledger_record(role, agent, report, comment_id, *, decision="PASS", sha=HEAD,
     }
 
 
-def artifact(role, agent, report, comment_id, *, sha=HEAD, pr=383, digest=None,
+def artifact(role, agent, report, comment_id, *, sha=HEAD, base=BASE, pr=383, digest=None,
              login=OWNER, association="OWNER"):
     actual = digest or hashlib.sha256(report).hexdigest()
     body = (
@@ -49,6 +59,7 @@ def artifact(role, agent, report, comment_id, *, sha=HEAD, pr=383, digest=None,
         f"role={role}\n"
         f"pr={pr}\n"
         f"head_sha={sha}\n"
+        f"base_sha={base}\n"
         f"agent={agent}\n"
         f"report_sha256={actual}\n"
         f"report_base64={base64.b64encode(report).decode('ascii')}\n"
@@ -66,8 +77,12 @@ def fixture():
         "status": "completed", "conclusion": "success",
         "pull_requests": [{"number": 383, "base": {"ref": "claude/ecstatic-wozniak-oemyuf"}}],
     }
-    primary_run = {
+    candidate_run = {
         "head_sha": CANDIDATE, "event": "push", "path": ".github/workflows/ci.yml",
+        "status": "completed", "conclusion": "success",
+    }
+    primary_run = {
+        "head_sha": PRIMARY, "event": "push", "path": ".github/workflows/ci.yml",
         "status": "completed", "conclusion": "success",
     }
     pr = {
@@ -84,10 +99,12 @@ def fixture():
         artifact("appsec", "appsec-agent-independent", REPORT_APPSEC, 4),
     ]
     return {
-        "candidate_sha": CANDIDATE, "primary_sha": CANDIDATE, "pr_number": 383,
+        "candidate_sha": CANDIDATE, "primary_sha": PRIMARY,
+        "primary_comparison": primary_comparison(), "pr_number": 383,
         "expected_pr_head_sha": HEAD, "expected_base_sha": BASE,
         "pr": pr, "merge_commit": merge,
         "pr_ci_run": pr_run, "pr_ci_jobs": pr_jobs,
+        "candidate_ci_run": candidate_run, "candidate_ci_jobs": primary_jobs,
         "primary_ci_run": primary_run, "primary_ci_jobs": primary_jobs,
         "ledger_comments": comments, "repository_owner": OWNER,
     }
@@ -106,16 +123,36 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         result = verify_release_admission(**fixture())
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["candidate_sha"], CANDIDATE)
+        self.assertEqual(result["protected_primary_sha"], PRIMARY)
         self.assertEqual(result["pr_head_sha"], HEAD)
         self.assertEqual(result["pr_base_sha"], BASE)
-        self.assertEqual(result["ci"], {"pr_head": "PASS", "primary_merge_sha": "PASS"})
+        self.assertEqual(result["ci"], {"pr_head": "PASS", "candidate_merge_sha": "PASS",
+                                        "protected_primary_sha": "PASS"})
         self.assertEqual(result["integration_qa"]["agent"], "qa-agent-independent")
 
-    def test_candidate_mismatch_is_refused(self):
-        self.assertEqual(refusal_reason(primary_sha="d" * 40), "candidate_not_current_primary")
+    def test_immutable_candidate_remains_valid_after_documentation_merge(self):
+        result = verify_release_admission(**fixture())
+        self.assertEqual(result["candidate_sha"], CANDIDATE)
+        self.assertEqual(result["protected_primary_sha"], PRIMARY)
+
+    def test_candidate_not_in_primary_history_is_refused(self):
+        self.assertEqual(refusal_reason(primary_comparison=primary_comparison(
+            status="diverged", behind_by=2, merge_base="e" * 40)),
+            "candidate_not_on_protected_primary")
+
+    def test_current_protected_primary_requires_its_own_exact_push_ci(self):
+        args = fixture()
+        args["primary_ci_run"] = {**args["primary_ci_run"], "head_sha": CANDIDATE}
+        self.assertEqual(refusal_reason(primary_ci_run=args["primary_ci_run"]),
+                         "ci_run_invalid")
+
+    def test_malformed_primary_comparison_is_refused(self):
+        self.assertEqual(refusal_reason(primary_comparison={}),
+                         "candidate_not_on_protected_primary")
 
     def test_invalid_candidate_sha_is_refused(self):
-        self.assertEqual(refusal_reason(candidate_sha="not-a-sha"), "candidate_not_current_primary")
+        self.assertEqual(refusal_reason(candidate_sha="not-a-sha"),
+                         "candidate_not_on_protected_primary")
 
     def test_pr_head_mismatch_is_refused(self):
         self.assertEqual(refusal_reason(expected_pr_head_sha="d" * 40), "merged_pr_target_invalid")
@@ -172,6 +209,20 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         comments[2] = artifact("integration_qa", "qa-agent-independent", REPORT_QA, 3,
                                digest="0" * 64)
         self.assertEqual(refusal_reason(ledger_comments=comments), "review_artifact_hash_mismatch")
+
+    def test_report_artifacts_must_bind_exact_reviewed_base(self):
+        comments = fixture()["ledger_comments"]
+        comments[3] = artifact("appsec", "appsec-agent-independent", REPORT_APPSEC, 4,
+                               base="e" * 40)
+        self.assertEqual(refusal_reason(ledger_comments=comments), "review_artifact_missing")
+
+    def test_non_utf8_report_bytes_are_refused_even_with_matching_hash(self):
+        invalid = b"report\xff"
+        comments = fixture()["ledger_comments"]
+        comments[1] = ledger_record("appsec", "appsec-agent-independent", invalid, 2)
+        comments[3] = artifact("appsec", "appsec-agent-independent", invalid, 4)
+        self.assertEqual(refusal_reason(ledger_comments=comments),
+                         "review_artifact_encoding_invalid")
 
     def test_report_artifact_agent_or_record_hash_mismatch_is_refused(self):
         comments = fixture()["ledger_comments"]
@@ -239,7 +290,9 @@ class ReadOnlyControllerTests(unittest.TestCase):
 
         def request(path):
             if path.startswith("/repos/zsoltacsai/wpcaregrid/branches/"):
-                return {"protected": True, "commit": {"sha": CANDIDATE}}
+                return {"protected": True, "commit": {"sha": PRIMARY}}
+            if path.endswith(f"/compare/{CANDIDATE}...{PRIMARY}"):
+                return data["primary_comparison"]
             if path.endswith("/pulls/383"):
                 return data["pr"]
             if path.endswith(f"/commits/{CANDIDATE}"):
@@ -251,20 +304,49 @@ class ReadOnlyControllerTests(unittest.TestCase):
         with patch.object(CONTROLLER, "_request_json", side_effect=request), \
              patch.object(CONTROLLER, "_workflow_run", side_effect=[
                  (data["pr_ci_run"], data["pr_ci_jobs"]),
+                 (data["candidate_ci_run"], data["candidate_ci_jobs"]),
                  (data["primary_ci_run"], data["primary_ci_jobs"])]), \
              patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
             result = CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(result["result"], "PASS")
         self.assertEqual(result["candidate_sha"], CANDIDATE)
+        self.assertEqual(result["protected_primary_sha"], PRIMARY)
 
     def test_controller_rejects_unprotected_primary_before_other_evidence_calls(self):
         with patch.object(CONTROLLER, "_request_json", return_value={
-            "protected": False, "commit": {"sha": CANDIDATE}}), \
+            "protected": False, "commit": {"sha": PRIMARY}}), \
              patch.object(CONTROLLER, "_list") as list_request:
             with self.assertRaises(AdmissionRefused) as caught:
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "primary_branch_not_protected")
         list_request.assert_not_called()
+
+    def test_controller_refuses_primary_moving_during_evidence_read(self):
+        data = fixture()
+        branch_reads = iter((PRIMARY, "e" * 40))
+
+        def request(path):
+            if "/branches/" in path:
+                return {"protected": True, "commit": {"sha": next(branch_reads)}}
+            if path.endswith(f"/compare/{CANDIDATE}...{PRIMARY}"):
+                return data["primary_comparison"]
+            if path.endswith("/pulls/383"):
+                return data["pr"]
+            if path.endswith(f"/commits/{CANDIDATE}"):
+                return data["merge_commit"]
+            if path == "/repos/zsoltacsai/wpcaregrid":
+                return {"owner": {"login": OWNER}}
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=request), \
+             patch.object(CONTROLLER, "_workflow_run", side_effect=[
+                 (data["pr_ci_run"], data["pr_ci_jobs"]),
+                 (data["candidate_ci_run"], data["candidate_ci_jobs"]),
+                 (data["primary_ci_run"], data["primary_ci_jobs"])]), \
+             patch.object(CONTROLLER, "_list", return_value=data["ledger_comments"]):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
+        self.assertEqual(str(caught.exception), "primary_changed_during_read")
 
     def test_repository_root_api_path_is_allowed_and_unrelated_path_rejected(self):
         with patch.object(CONTROLLER.urllib.request, "build_opener") as opener:

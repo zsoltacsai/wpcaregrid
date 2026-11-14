@@ -174,8 +174,10 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
     primary_sha = commit.get("sha") if isinstance(commit, dict) else None
     if not isinstance(branch_data, dict) or branch_data.get("protected") is not True:
         raise AdmissionRefused("primary_branch_not_protected")
-    if primary_sha != candidate_sha:
-        raise AdmissionRefused("candidate_not_current_primary")
+    if not isinstance(primary_sha, str) or SHA_RE.fullmatch(primary_sha) is None:
+        raise EvidenceUnavailable("primary_sha_unavailable")
+    comparison = _request_json(
+        f"/repos/{REPOSITORY}/compare/{candidate_sha}...{primary_sha}")
 
     pr = _request_json(f"/repos/{REPOSITORY}/pulls/{pr_number}")
     merge_commit = _request_json(f"/repos/{REPOSITORY}/commits/{candidate_sha}")
@@ -184,17 +186,28 @@ def verify(candidate_sha: str, pr_number: int, expected_pr_head_sha: str,
     if pr_head_sha != expected_pr_head_sha:
         raise AdmissionRefused("merged_pr_identity_invalid")
     pr_run, pr_jobs = _workflow_run(pr_head_sha, event="pull_request", pr_number=pr_number)
-    primary_run, primary_jobs = _workflow_run(candidate_sha, event="push")
+    candidate_run, candidate_jobs = _workflow_run(candidate_sha, event="push")
+    if primary_sha == candidate_sha:
+        primary_run, primary_jobs = candidate_run, candidate_jobs
+    else:
+        primary_run, primary_jobs = _workflow_run(primary_sha, event="push")
     repository = _request_json(f"/repos/{REPOSITORY}")
     owner = repository.get("owner") if isinstance(repository, dict) else None
     owner_login = owner.get("login") if isinstance(owner, dict) else None
     if not isinstance(owner_login, str) or not owner_login:
         raise EvidenceUnavailable("repository_owner_unavailable")
     comments = _list(f"/repos/{REPOSITORY}/issues/{LEDGER_ISSUE}/comments")
+    final_branch = _request_json(f"/repos/{REPOSITORY}/branches/{branch}")
+    final_commit = final_branch.get("commit") if isinstance(final_branch, dict) else None
+    if (not isinstance(final_branch, dict) or final_branch.get("protected") is not True
+            or not isinstance(final_commit, dict) or final_commit.get("sha") != primary_sha):
+        raise EvidenceUnavailable("primary_changed_during_read")
     return verify_release_admission(
-        candidate_sha=candidate_sha, primary_sha=primary_sha, pr_number=pr_number,
+        candidate_sha=candidate_sha, primary_sha=primary_sha,
+        primary_comparison=comparison, pr_number=pr_number,
         expected_pr_head_sha=expected_pr_head_sha, expected_base_sha=expected_base_sha,
         pr=pr, merge_commit=merge_commit, pr_ci_run=pr_run, pr_ci_jobs=pr_jobs,
+        candidate_ci_run=candidate_run, candidate_ci_jobs=candidate_jobs,
         primary_ci_run=primary_run, primary_ci_jobs=primary_jobs,
         ledger_comments=comments, repository_owner=owner_login)
 

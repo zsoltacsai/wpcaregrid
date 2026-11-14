@@ -43,6 +43,7 @@ _ARTIFACT = re.compile(
     r"role=(integration_qa|appsec)\n"
     r"pr=([1-9][0-9]{0,8})\n"
     r"head_sha=([0-9a-f]{40})\n"
+    r"base_sha=([0-9a-f]{40})\n"
     r"agent=([a-z0-9][a-z0-9._-]{2,63})\n"
     r"report_sha256=([0-9a-f]{64})\n"
     r"report_base64=([A-Za-z0-9+/]+={0,2})\n?\Z"
@@ -73,7 +74,8 @@ def _owner_comment(comment: object, owner: str) -> bool:
 
 
 def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
-                                head_sha: str, owner: str) -> dict[str, dict[str, object]]:
+                                head_sha: str, base_sha: str,
+                                owner: str) -> dict[str, dict[str, object]]:
     latest: dict[str, dict[str, object]] = {}
     for comment in comments:
         if not isinstance(comment, Mapping):
@@ -87,8 +89,8 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
             continue
         match = _ARTIFACT.fullmatch(body)
         _require(match is not None, "review_artifact_invalid")
-        role, record_pr, record_sha, agent, digest, encoded = match.groups()
-        if int(record_pr) != pr_number or record_sha != head_sha:
+        role, record_pr, record_sha, record_base, agent, digest, encoded = match.groups()
+        if int(record_pr) != pr_number or record_sha != head_sha or record_base != base_sha:
             continue
         try:
             raw = base64.b64decode(encoded, validate=True)
@@ -96,9 +98,15 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
             raise AdmissionRefused("review_artifact_invalid") from None
         _require(0 < len(raw) <= MAX_REPORT_BYTES, "review_artifact_size_invalid")
         _require(hashlib.sha256(raw).hexdigest() == digest, "review_artifact_hash_mismatch")
+        try:
+            report_text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise AdmissionRefused("review_artifact_encoding_invalid") from None
+        _require("\x00" not in report_text, "review_artifact_encoding_invalid")
         timestamp = comment["created_at"]
         comment_id = comment["id"]
         candidate = {"role": role, "pr": pr_number, "head_sha": head_sha,
+                     "base_sha": base_sha,
                      "agent": agent, "report_sha256": digest, "report_bytes": raw,
                      "created_at": timestamp, "id": comment_id}
         previous = latest.get(role)
@@ -132,10 +140,35 @@ def _verify_ci_run(run: object, jobs: object, *, commit_sha: str, event: str,
                  and instances[0].get("conclusion") == "success", "required_ci_check_failed")
 
 
-def verify_release_admission(*, candidate_sha: str, primary_sha: str, pr_number: int,
+def _candidate_is_on_protected_primary(candidate_sha: str, primary_sha: str,
+                                      comparison: object) -> bool:
+    """Require GitHub's base=candidate/head=primary comparison to prove ancestry."""
+    if not isinstance(comparison, Mapping):
+        return False
+    base = comparison.get("base_commit")
+    head = comparison.get("head_commit")
+    merge_base = comparison.get("merge_base_commit")
+    ahead_by = comparison.get("ahead_by")
+    behind_by = comparison.get("behind_by")
+    status = comparison.get("status")
+    return (
+        isinstance(base, Mapping) and base.get("sha") == candidate_sha
+        and isinstance(head, Mapping) and head.get("sha") == primary_sha
+        and isinstance(merge_base, Mapping) and merge_base.get("sha") == candidate_sha
+        and type(ahead_by) is int and ahead_by >= 0
+        and type(behind_by) is int and behind_by == 0
+        and status == ("identical" if candidate_sha == primary_sha else "ahead")
+        and ((candidate_sha == primary_sha and ahead_by == 0)
+             or (candidate_sha != primary_sha and ahead_by > 0))
+    )
+
+
+def verify_release_admission(*, candidate_sha: str, primary_sha: str,
+                             primary_comparison: object, pr_number: int,
                              expected_pr_head_sha: str, expected_base_sha: str,
                              pr: object, merge_commit: object, pr_ci_run: object,
-                             pr_ci_jobs: object, primary_ci_run: object,
+                             pr_ci_jobs: object, candidate_ci_run: object,
+                             candidate_ci_jobs: object, primary_ci_run: object,
                              primary_ci_jobs: object, ledger_comments: Iterable[object],
                              repository_owner: str) -> dict[str, object]:
     """Validate exact merged PR, V3 report bytes, and both required CI runs.
@@ -143,8 +176,10 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str, pr_number:
     All inputs are snapshots fetched by the caller. Any absent, malformed,
     stale, or conflicting evidence raises ``AdmissionRefused``.
     """
-    _require(_sha(candidate_sha) and candidate_sha == primary_sha,
-             "candidate_not_current_primary")
+    _require(_sha(candidate_sha) and _sha(primary_sha)
+             and _candidate_is_on_protected_primary(candidate_sha, primary_sha,
+                                                    primary_comparison),
+             "candidate_not_on_protected_primary")
     _require(type(pr_number) is int and pr_number > 0 and repository_owner
              and _sha(expected_pr_head_sha) and _sha(expected_base_sha),
              "release_subject_invalid")
@@ -171,7 +206,9 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str, pr_number:
 
     _verify_ci_run(pr_ci_run, pr_ci_jobs, commit_sha=head["sha"],
                    event="pull_request", pr_number=pr_number)
-    _verify_ci_run(primary_ci_run, primary_ci_jobs, commit_sha=candidate_sha, event="push")
+    _verify_ci_run(candidate_ci_run, candidate_ci_jobs,
+                   commit_sha=candidate_sha, event="push")
+    _verify_ci_run(primary_ci_run, primary_ci_jobs, commit_sha=primary_sha, event="push")
 
     try:
         records = verify_agent_release_reviews(
@@ -180,7 +217,8 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str, pr_number:
     except ReviewRefused as error:
         raise AdmissionRefused(str(error)) from None
     artifacts = _verified_report_artifacts(
-        ledger_comments, pr_number=pr_number, head_sha=head["sha"], owner=repository_owner)
+        ledger_comments, pr_number=pr_number, head_sha=head["sha"],
+        base_sha=expected_base_sha, owner=repository_owner)
     for role, record in records.items():
         artifact = artifacts.get(role)
         _require(isinstance(artifact, Mapping) and artifact["agent"] == record["agent"]
@@ -189,10 +227,12 @@ def verify_release_admission(*, candidate_sha: str, primary_sha: str, pr_number:
     return {
         "result": "PASS",
         "candidate_sha": candidate_sha,
+        "protected_primary_sha": primary_sha,
         "pr_number": pr_number,
         "pr_head_sha": expected_pr_head_sha,
         "pr_base_sha": expected_base_sha,
         "integration_qa": records["integration_qa"],
         "appsec": records["appsec"],
-        "ci": {"pr_head": "PASS", "primary_merge_sha": "PASS"},
+        "ci": {"pr_head": "PASS", "candidate_merge_sha": "PASS",
+               "protected_primary_sha": "PASS"},
     }
