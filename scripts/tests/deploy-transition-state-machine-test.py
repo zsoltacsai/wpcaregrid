@@ -27,6 +27,11 @@ SPEC = importlib.util.spec_from_file_location(
 sys.dont_write_bytecode = True
 HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
+LEASE_SPEC = importlib.util.spec_from_file_location(
+    "wpcaregrid_transition_rpc_v2", ROOT / "scripts" / "wpcaregrid-transition-rpc-v2.py"
+)
+LEASE_RPC = importlib.util.module_from_spec(LEASE_SPEC)
+LEASE_SPEC.loader.exec_module(LEASE_RPC)
 
 BOOT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER_BOOT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -2015,13 +2020,18 @@ class TransitionAdapterTests(unittest.TestCase):
         runtime_tests = runtime_root / "scripts" / "tests"
         runtime_tests.mkdir(parents=True, mode=0o755)
         runtime_helper = runtime_root / "scripts" / "wpcaregrid-deploy-priv.py"
+        runtime_lease_rpc = runtime_root / "scripts" / "wpcaregrid-transition-rpc-v2.py"
         worker_script = runtime_tests / "deploy-transition-state-machine-test.py"
         runtime_helper.write_bytes((ROOT / "scripts" / "wpcaregrid-deploy-priv.py").read_bytes())
+        runtime_lease_rpc.write_bytes(
+            (ROOT / "scripts" / "wpcaregrid-transition-rpc-v2.py").read_bytes()
+        )
         worker_script.write_bytes(Path(__file__).resolve().read_bytes())
         os.chmod(runtime_root, 0o755)
         os.chmod(runtime_root / "scripts", 0o755)
         os.chmod(runtime_tests, 0o755)
         os.chmod(runtime_helper, 0o644)
+        os.chmod(runtime_lease_rpc, 0o644)
         os.chmod(worker_script, 0o644)
         os.chown(socket_dir, 0, app_gid)
         os.chmod(socket_dir, 0o711)
@@ -2745,6 +2755,548 @@ def _process_worker(argv):
         sys.stdout.write("RECOVERED\n")
         return 0
     raise ValueError("unknown process worker mode")
+
+
+class TransitionLeaseRpcV2ClientTests(unittest.TestCase):
+    REQUEST_ID = "018f0f8e-7b1c-7abc-8abc-123456789099"
+    REQUEST_DIGEST = "a" * 64
+
+    class Lock:
+        def is_held(self, mode):
+            return mode == "exclusive"
+
+    @staticmethod
+    def receipt(request_id=None, digest=None):
+        fence_tuple = {
+            "state": "OPEN", "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3, "boot_id": "c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93",
+            "journal_seq": 41, "journal_head_hash": "1" * 64, "evidence_digest": "2" * 64,
+        }
+        return {
+            "action": "claim_lease",
+            "committed": True,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "fence_tuple_digest": hashlib.sha256(LEASE_RPC.canonical_json(fence_tuple)).hexdigest(),
+            "fence_state": fence_tuple["state"], "fence_boot_id": fence_tuple["boot_id"],
+            "fence_journal_seq": fence_tuple["journal_seq"],
+            "fence_journal_head_hash": fence_tuple["journal_head_hash"],
+            "fence_evidence_digest": fence_tuple["evidence_digest"],
+            "fence_permit_manifest_hash": None,
+            "generation": 3,
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "nonce_digest": "b" * 64,
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "outcome": "COMMITTED",
+            "request_digest": digest or TransitionLeaseRpcV2ClientTests.REQUEST_DIGEST,
+            "request_id": request_id or TransitionLeaseRpcV2ClientTests.REQUEST_ID,
+            "result_code": "CLAIMED",
+            "source_state_digest": "c" * 64,
+            "state": "CLAIMED",
+            "state_digest": "d" * 64,
+            "state_version": 2,
+        }
+
+    def adapter(self):
+        return LEASE_RPC.LaravelLeaseDatabaseAdapter(self.Lock())
+
+    @staticmethod
+    def payload():
+        fence_tuple = {
+            "state": "OPEN", "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3, "boot_id": "c5e6f6c3-2c66-49cb-a2ad-c76dd3af7f93",
+            "journal_seq": 41, "journal_head_hash": "1" * 64, "evidence_digest": "2" * 64,
+        }
+        return {
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": 3,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "expected_fence_state": "OPEN",
+            "fence_tuple": fence_tuple,
+            "holder_digest": "e" * 64,
+            "nonce_digest": "b" * 64,
+        }
+
+    def test_package_a_v1_and_package_b_v2_are_separate_versioned_allowlists(self):
+        self.assertEqual(1, HELPER.TRANSITION_RPC_VERSION)
+        self.assertEqual({
+            "read_tuple", "read_permit_manifest_hash", "verify_transition_preconditions",
+            "validate_permit_manifest", "compare_and_set", "nonce_consumed", "validate_release",
+            "assert_no_unresolved_drain_effects", "read_transition_receipt",
+        }, set(HELPER.TRANSITION_RPC_OPERATIONS))
+        self.assertEqual((), HELPER.TRANSITION_PRODUCTION_EFFECT_CATALOG)
+        self.assertEqual({"transition", "release"}, set(HELPER.TRANSITION_COORDINATOR_OPERATIONS))
+        self.assertNotIn("wpcaregrid-transition-rpc-v2", Path(HELPER.__file__).read_text())
+        self.assertEqual(2, LEASE_RPC.PROTOCOL_VERSION)
+        self.assertEqual({"create_lease", "claim_lease", "reject_lease", "read_lease_receipt"},
+                         set(LEASE_RPC.PAYLOAD_KEYS))
+        self.assertNotIn("release", LEASE_RPC.PAYLOAD_KEYS)
+        self.assertNotIn("transition", LEASE_RPC.PAYLOAD_KEYS)
+
+    def test_lost_mutation_response_uses_one_exact_read_and_never_replays_mutation(self):
+        adapter = self.adapter()
+        calls = []
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        receipt = self.receipt(digest=expected_digest)
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            calls.append((operation, request_id, digest))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=receipt) as readback:
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(receipt, result)
+        self.assertEqual([("claim_lease", self.REQUEST_ID, LEASE_RPC.request_digest(
+            self.REQUEST_ID, "claim_lease", payload))], calls)
+        readback.assert_called_once_with(self.REQUEST_ID, calls[0][2], payload["fence_tuple"])
+
+    def test_bad_mutation_receipt_triggers_read_only_reconciliation(self):
+        adapter = self.adapter()
+        calls = []
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        wrong = self.receipt(digest="f" * 64)
+        response = {"status": "COMMITTED", "result": wrong}
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", return_value=response) as exchange, \
+             mock.patch.object(adapter, "read_lease_receipt", side_effect=lambda request_id, digest, fence_tuple: (
+                 calls.append((request_id, digest)), self.receipt(request_id, digest)
+             )[1]):
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(self.receipt(digest=expected_digest), result)
+        exchange.assert_called_once()
+        self.assertEqual([(self.REQUEST_ID, expected_digest)], calls)
+
+    def test_absent_receipt_after_ambiguous_mutation_remains_hold_without_retry(self):
+        adapter = self.adapter()
+        calls = []
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            calls.append((operation, request_id, digest))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange) as exchange_mock, \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=None) as readback:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._mutate("claim_lease", self.payload())
+        exchange_mock.assert_called_once()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", self.payload())
+        self.assertEqual([("claim_lease", self.REQUEST_ID, expected_digest)], calls)
+        readback.assert_called_once_with(self.REQUEST_ID, expected_digest, self.payload()["fence_tuple"])
+
+    def test_unknown_or_malformed_receipt_fields_fail_closed(self):
+        receipt = self.receipt()
+        receipt["untrusted"] = "must-not-be-accepted"
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST
+            )
+
+    def test_receipt_must_echo_originating_operation_generation_and_nonce_scope(self):
+        payload = self.payload()
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        receipt["generation"] = payload["generation"] + 1
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_action="claim_lease", expected_payload=payload,
+            )
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        receipt["nonce_digest"] = "9" * 64
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_action="claim_lease", expected_payload=payload,
+            )
+
+    def test_receipt_readback_must_match_current_full_fence_epoch(self):
+        receipt = self.receipt(self.REQUEST_ID, self.REQUEST_DIGEST)
+        stale_tuple = dict(self.payload()["fence_tuple"], journal_seq=42)
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._verify_receipt(
+                receipt, self.REQUEST_ID, self.REQUEST_DIGEST,
+                expected_payload={"fence_tuple": stale_tuple},
+            )
+
+    def test_draining_tuple_requires_the_exact_permit_manifest_hash(self):
+        tuple_value = self.payload()["fence_tuple"]
+        tuple_value["state"] = "DRAINING"
+        tuple_value["permit_manifest_hash"] = "9" * 64
+        LEASE_RPC.LaravelLeaseDatabaseAdapter._validate_fence_tuple(
+            tuple_value, tuple_value["operation_id"], tuple_value["generation"], "DRAINING",
+        )
+        missing_manifest = dict(tuple_value)
+        del missing_manifest["permit_manifest_hash"]
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._validate_fence_tuple(
+                missing_manifest, tuple_value["operation_id"], tuple_value["generation"], "DRAINING",
+            )
+
+    def test_post_send_cleanup_failure_is_ambiguous_and_only_reconciles_read_only(self):
+        adapter = self.adapter()
+        payload = self.payload()
+        expected_digest = LEASE_RPC.request_digest(self.REQUEST_ID, "claim_lease", payload)
+        receipt = self.receipt(self.REQUEST_ID, expected_digest)
+        mutation_calls = []
+
+        def fail_cleanup(operation, request_payload, *, request_id=None, digest=None):
+            mutation_calls.append((operation, request_id, digest))
+            adapter._raise_cleanup_failure(operation, True, request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=fail_cleanup), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=receipt) as readback:
+            result = adapter._mutate("claim_lease", payload)
+
+        self.assertEqual(receipt, result)
+        self.assertEqual([("claim_lease", self.REQUEST_ID, expected_digest)], mutation_calls)
+        readback.assert_called_once_with(self.REQUEST_ID, expected_digest, payload["fence_tuple"])
+
+    def test_read_only_cleanup_failure_remains_hold(self):
+        with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+            LEASE_RPC.LaravelLeaseDatabaseAdapter._raise_cleanup_failure(
+                "read_lease_receipt", True, self.REQUEST_ID, self.REQUEST_DIGEST,
+            )
+
+    def test_raw_nonce_is_replaced_by_digest_before_rpc_payload_construction(self):
+        adapter = self.adapter()
+        nonce = "synthetic-one-time-nonce-value-00000001"
+        captured = []
+        expected_digest = LEASE_RPC.request_digest(
+            self.REQUEST_ID, "create_lease", {
+                "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+                "generation": 3,
+                "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+                "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+                "expected_fence_state": "OPEN",
+                "fence_tuple": self.payload()["fence_tuple"],
+                "holder_digest": "e" * 64,
+                "expires_at": "2026-11-02T12:00:00.000000Z",
+                "nonce_digest": hashlib.sha256(nonce.encode("ascii")).hexdigest(),
+            }
+        )
+        refusal = {
+            "action": "create_lease", "committed": False,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012", "generation": 3,
+            "fence_tuple_digest": hashlib.sha256(LEASE_RPC.canonical_json(self.payload()["fence_tuple"])).hexdigest(),
+            "fence_state": "OPEN", "fence_boot_id": self.payload()["fence_tuple"]["boot_id"],
+            "fence_journal_seq": 41, "fence_journal_head_hash": "1" * 64,
+            "fence_evidence_digest": "2" * 64,
+            "fence_permit_manifest_hash": None,
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013", "nonce_digest": None,
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014", "outcome": "REFUSED",
+            "request_digest": expected_digest, "request_id": self.REQUEST_ID,
+            "result_code": "NONCE_REPLAY", "source_state_digest": None, "state": None,
+            "state_digest": None, "state_version": None,
+        }
+
+        def exchange(operation, payload, *, request_id=None, digest=None):
+            captured.append(dict(payload))
+            raise LEASE_RPC.LeaseRpcAmbiguous(request_id, digest)
+
+        with mock.patch.object(LEASE_RPC, "uuid7", return_value=self.REQUEST_ID), \
+             mock.patch.object(adapter, "_exchange_once", side_effect=exchange), \
+             mock.patch.object(adapter, "read_lease_receipt", return_value=refusal):
+            result = adapter.create_lease(
+                operation_id="018f0f8e-7b1c-7abc-8abc-123456789014", generation=3,
+                execution_id="018f0f8e-7b1c-7abc-8abc-123456789012",
+                lease_id="018f0f8e-7b1c-7abc-8abc-123456789013", fence_state="OPEN",
+                holder_digest="e" * 64, expires_at="2026-11-02T12:00:00.000000Z", nonce=nonce,
+                fence_tuple=self.payload()["fence_tuple"],
+            )
+
+        self.assertEqual("NONCE_REPLAY", result["result_code"])
+        self.assertEqual(1, len(captured))
+        self.assertNotIn(nonce, repr(captured[0]))
+        self.assertEqual(hashlib.sha256(nonce.encode("ascii")).hexdigest(), captured[0]["nonce_digest"])
+
+    def test_root_client_requires_exclusive_lock_before_transport(self):
+        adapter = self.adapter()
+        with mock.patch.object(LEASE_RPC.os, "geteuid", return_value=1000, create=True), \
+             mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._exchange_once("read_lease_receipt", {
+                    "request_id": self.REQUEST_ID, "request_digest": self.REQUEST_DIGEST,
+                    "fence_tuple": self.payload()["fence_tuple"],
+                })
+        open_directory.assert_not_called()
+
+    def test_root_client_validates_typed_arguments_before_transport(self):
+        adapter = self.adapter()
+        payload = {
+            "operation_id": "018f0f8e-7b1c-7abc-8abc-123456789014",
+            "generation": True,
+            "execution_id": "018f0f8e-7b1c-7abc-8abc-123456789012",
+            "lease_id": "018f0f8e-7b1c-7abc-8abc-123456789013",
+            "expected_fence_state": "OPEN",
+            "holder_digest": "e" * 64,
+            "expires_at": "2026-11-02T12:00:00.000000Z",
+            "nonce_digest": "f" * 64,
+        }
+        with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+            with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                adapter._exchange_once("create_lease", payload)
+        open_directory.assert_not_called()
+
+    def test_root_client_rejects_incomplete_or_cross_operation_fence_tuple(self):
+        adapter = self.adapter()
+        incomplete = self.payload()
+        del incomplete["fence_tuple"]["evidence_digest"]
+        cross_operation = self.payload()
+        cross_operation["fence_tuple"] = dict(
+            cross_operation["fence_tuple"], operation_id="018f0f8e-7b1c-7abc-8abc-123456789015",
+        )
+
+        for payload in (incomplete, cross_operation):
+            with self.subTest(payload=payload):
+                with mock.patch.object(adapter, "_open_root_directory", create=True) as open_directory:
+                    with self.assertRaises(LEASE_RPC.LeaseRpcHold):
+                        adapter._exchange_once("claim_lease", payload)
+                open_directory.assert_not_called()
+
+    def test_linux_af_unix_peer_credentials_and_child_privilege_drop(self):
+        if sys.platform != "linux" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+            self.skipTest("requires the isolated Linux CI root process lane")
+        import grp
+        import pwd
+        import socket
+        import struct
+
+        app_user = pwd.getpwnam("www-data")
+        app_group = grp.getgrnam("www-data")
+        self.assertEqual(app_user.pw_gid, app_group.gr_gid)
+        socket_dir = Path(tempfile.mkdtemp(prefix="wpcg-lease-rpc-v2-"))
+        diagnostic = {
+            "spawn": "NOT_ATTEMPTED", "child_state": "UNKNOWN", "exit_code": "UNKNOWN",
+            "uid": "UNKNOWN", "gid": "UNKNOWN", "identity_source": "UNKNOWN", "socket": "NOT_CREATED",
+            "socket_access": "UNKNOWN", "connection_attempt": "NOT_REACHED", "accept": "NOT_ATTEMPTED",
+            "peer": "NOT_REACHED", "cleanup": "UNKNOWN", "worker_exit": "UNKNOWN",
+            "worker_error": "UNKNOWN", "worker_errno": "UNKNOWN",
+        }
+        cleanup_attempted = False
+        process_box = {"process": None, "monitor": None, "stderr_thread": None}
+        socket_path_box = {"path": None}
+        real_popen = subprocess.Popen
+        real_socket = socket.socket
+
+        def sample_child_identity(process):
+            status_path = Path("/proc") / str(process.pid) / "status"
+            while process.poll() is None:
+                try:
+                    lines = status_path.read_text(encoding="ascii", errors="ignore").splitlines()
+                    uid_line = next(line for line in lines if line.startswith("Uid:"))
+                    gid_line = next(line for line in lines if line.startswith("Gid:"))
+                    effective_uid = uid_line.split()[2]
+                    effective_gid = gid_line.split()[2]
+                    if effective_uid.isdecimal() and effective_gid.isdecimal():
+                        diagnostic["uid"] = effective_uid
+                        diagnostic["gid"] = effective_gid
+                        diagnostic["identity_source"] = "PROC_SAMPLED"
+                except (OSError, StopIteration, IndexError):
+                    pass
+                time.sleep(0.002)
+            diagnostic["exit_code"] = str(process.returncode) if process.returncode is not None else "UNKNOWN"
+            diagnostic["child_state"] = "EXITED"
+
+        def drain_worker_stderr(stream):
+            retained = bytearray()
+            total = 0
+            while True:
+                chunk = stream.read(1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if len(retained) < 8192:
+                    retained.extend(chunk[:8192 - len(retained)])
+            if total > len(retained):
+                diagnostic["worker_error"] = "TRUNCATED"
+                diagnostic["worker_errno"] = "UNKNOWN"
+                return
+            text = retained.decode("utf-8", errors="ignore")
+            exception_match = re.search(r"(?m)^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))(?::|$)", text)
+            if exception_match:
+                allowed = {
+                    "PermissionError", "FileNotFoundError", "FileExistsError", "NotADirectoryError",
+                    "IsADirectoryError", "TimeoutError", "ConnectionRefusedError", "ConnectionResetError",
+                    "BrokenPipeError", "OSError", "RuntimeError", "TypeError", "ValueError",
+                }
+                diagnostic["worker_error"] = exception_match.group(1).rsplit(".", 1)[-1] if exception_match.group(1).rsplit(".", 1)[-1] in allowed else "OTHER_EXCEPTION"
+            errno_match = re.search(r"\[Errno ([0-9]{1,3})\]", text)
+            if errno_match:
+                diagnostic["worker_errno"] = errno_match.group(1)
+
+        def diagnostic_popen(*args, **kwargs):
+            kwargs["stderr"] = subprocess.PIPE
+            try:
+                process = real_popen(*args, **kwargs)
+            except OSError:
+                diagnostic["spawn"] = "FAILED"
+                raise
+            diagnostic["spawn"] = "STARTED"
+            diagnostic["child_state"] = "ALIVE"
+            process_box["process"] = process
+            monitor = threading.Thread(target=sample_child_identity, args=(process,), daemon=True)
+            stderr_thread = threading.Thread(target=drain_worker_stderr, args=(process.stderr,), daemon=True)
+            process_box["monitor"] = monitor
+            process_box["stderr_thread"] = stderr_thread
+            monitor.start()
+            stderr_thread.start()
+            return process
+
+        class DiagnosticSocket:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def bind(self, address):
+                result = self.wrapped.bind(address)
+                socket_path_box["path"] = Path(address)
+                try:
+                    info = socket_path_box["path"].lstat()
+                    diagnostic["socket"] = "CREATED" if stat.S_ISSOCK(info.st_mode) else "INVALID"
+                except OSError:
+                    diagnostic["socket"] = "STAT_FAILED"
+                return result
+
+            def _record_access(self):
+                try:
+                    path = socket_path_box["path"]
+                    if path is None:
+                        return
+                    info = path.lstat()
+                    directory_info = socket_dir.stat()
+                    directory_exec = (
+                        (directory_info.st_uid == app_user.pw_uid and bool(directory_info.st_mode & stat.S_IXUSR))
+                        or (directory_info.st_gid == app_group.gr_gid and bool(directory_info.st_mode & stat.S_IXGRP))
+                        or bool(directory_info.st_mode & stat.S_IXOTH)
+                    )
+                    socket_write = (
+                        (info.st_uid == app_user.pw_uid and bool(info.st_mode & stat.S_IWUSR))
+                        or (info.st_gid == app_group.gr_gid and bool(info.st_mode & stat.S_IWGRP))
+                        or bool(info.st_mode & stat.S_IWOTH)
+                    )
+                    diagnostic["socket_access"] = "ALLOW" if directory_exec and socket_write else "DENY"
+                except OSError:
+                    diagnostic["socket_access"] = "UNKNOWN"
+
+            def listen(self, *args, **kwargs):
+                return self.wrapped.listen(*args, **kwargs)
+
+            def accept(self):
+                self._record_access()
+                diagnostic["accept"] = "WAITING"
+                process = process_box["process"]
+                if process is not None:
+                    code = process.poll()
+                    diagnostic["child_state"] = "ALIVE" if code is None else "EXITED"
+                    if code is not None:
+                        diagnostic["exit_code"] = str(code)
+                try:
+                    connection, address = self.wrapped.accept()
+                except socket.timeout:
+                    diagnostic["accept"] = "TIMEOUT"
+                    raise
+                diagnostic["accept"] = "ACCEPTED"
+                diagnostic["connection_attempt"] = "ESTABLISHED"
+                return DiagnosticSocket(connection), address
+
+            def getsockopt(self, level, option, length=0):
+                result = self.wrapped.getsockopt(level, option, length)
+                if level == socket.SOL_SOCKET and option == socket.SO_PEERCRED:
+                    peer_pid, peer_uid, peer_gid = struct.unpack("3i", result)
+                    diagnostic["peer"] = "MATCH" if (
+                        process_box["process"] is not None
+                        and peer_pid == process_box["process"].pid
+                        and peer_uid == app_user.pw_uid
+                        and peer_gid == app_group.gr_gid
+                    ) else "MISMATCH"
+                    diagnostic["uid"] = str(peer_uid)
+                    diagnostic["gid"] = str(peer_gid)
+                    diagnostic["identity_source"] = "SO_PEERCRED"
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+        def diagnostic_socket(*args, **kwargs):
+            created = real_socket(*args, **kwargs)
+            if args and args[0] == socket.AF_UNIX and len(args) > 1 and args[1] == socket.SOCK_STREAM:
+                return DiagnosticSocket(created)
+            return created
+
+        try:
+            os.chown(socket_dir, 0, app_group.gr_gid)
+            os.chmod(socket_dir, 0o710)
+            adapter = LEASE_RPC.LaravelLeaseDatabaseAdapter(
+                self.Lock(),
+                socket_dir=socket_dir,
+                app=ROOT,
+                command=(sys.executable, str(Path(LEASE_RPC.__file__).resolve()), "--lease-rpc-v2-worker"),
+                timeout_seconds=5.0,
+            )
+            try:
+                with mock.patch.object(LEASE_RPC.subprocess, "Popen", side_effect=diagnostic_popen):
+                    with mock.patch.object(LEASE_RPC.socket, "socket", side_effect=diagnostic_socket):
+                        self.assertIsNone(adapter.read_lease_receipt(
+                            self.REQUEST_ID, self.REQUEST_DIGEST, self.payload()["fence_tuple"],
+                        ))
+                self.assertEqual([], list(socket_dir.iterdir()))
+            finally:
+                process = process_box["process"]
+                if process is not None:
+                    if process.poll() is None:
+                        diagnostic["child_state"] = "ALIVE"
+                    else:
+                        diagnostic["child_state"] = "EXITED"
+                        diagnostic["exit_code"] = str(process.returncode)
+                    if process_box["monitor"] is not None:
+                        process_box["monitor"].join()
+                    if process_box["stderr_thread"] is not None:
+                        process_box["stderr_thread"].join()
+                    if process.returncode in {0, 41, 42, 43, 44, 45}:
+                        diagnostic["worker_exit"] = str(process.returncode)
+                    elif process.returncode is not None:
+                        diagnostic["worker_exit"] = "OTHER"
+                    if diagnostic["accept"] == "TIMEOUT":
+                        if process.returncode == 41:
+                            diagnostic["connection_attempt"] = "NOT_REACHED"
+                        elif process.returncode == 44:
+                            diagnostic["connection_attempt"] = "ATTEMPTED"
+                        elif process.returncode in {0, 42, 43}:
+                            diagnostic["connection_attempt"] = "ACCEPTED"
+                        else:
+                            diagnostic["connection_attempt"] = "UNKNOWN"
+                try:
+                    empty = not list(socket_dir.iterdir())
+                    cleanup_attempted = True
+                    os.chmod(socket_dir, 0o700)
+                    os.rmdir(socket_dir)
+                    diagnostic["cleanup"] = "COMPLETE" if empty and not socket_dir.exists() else "INCOMPLETE"
+                except OSError as cleanup_error:
+                    diagnostic["cleanup"] = "FAILED"
+                fields = (
+                    "target=TransitionLeasePersistenceTest.test_linux_af_unix_peer_credentials_and_child_privilege_drop",
+                    *(
+                        f"{key}={diagnostic[key]}"
+                        for key in (
+                            "spawn", "child_state", "exit_code", "uid", "gid", "identity_source", "socket", "socket_access",
+                            "connection_attempt", "accept", "peer", "cleanup", "worker_exit", "worker_error", "worker_errno",
+                        )
+                    ),
+                )
+                print("WPCG_PB_LINUX_DIAG_V1|" + "|".join(fields), flush=True)
+                if diagnostic["cleanup"] == "FAILED":
+                    raise cleanup_error
+        finally:
+            if not cleanup_attempted and socket_dir.exists():
+                os.chmod(socket_dir, 0o700)
+                os.rmdir(socket_dir)
 
 
 def _validate_required_linux_prerequisites():
