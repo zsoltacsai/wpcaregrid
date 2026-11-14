@@ -20,9 +20,11 @@ no fresh production or staging host observation. Treat all runtime values below 
 `UNKNOWN` unless accompanied by new, exact-release evidence. The detailed sections
 marked November 4 are preserved as historical decisions and observations; do not
 reuse their host identities, deployed SHAs, backup claims, runtime state, or test
-results as current acceptance evidence.
+results as current acceptance evidence. Reviewer provider/model labels are copied
+from the reports and are not independently authenticated; report hashes verify
+bytes only, not reviewer identity or provenance.
 
-| Gate | Current evidence | Status / acceptance |
+| Gate | Snapshot evidence | Status / acceptance |
 | --- | --- | --- |
 | Protected primary at snapshot time | `claude/ecstatic-wozniak-oemyuf` at [`5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`](https://github.com/zsoltacsai/wpcaregrid/commit/5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8) | Verified source baseline on 2026-11-13; proposed candidate only, not a release tag or approval. After #384, primary was `28f9061f59c65be8958b67ea54642245a7456a57` on 2026-11-14; this is a historical snapshot. See issue #174 for newer state. |
 | Exact-SHA CI | [Workflow 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), event `push`, exact `head_sha=5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`, `completed/success`; 38/38 check runs `completed/success` | PASS for repository CI only. It does not prove staging behavior or production readiness. |
@@ -114,11 +116,11 @@ The controller's pre-deploy backup operation creates a protected database dump a
 
 The first production target is the **HU/EN marketing-only MVP**. Customer registration, Stripe Checkout/webhook provisioning, subscription activation, Connector onboarding, paid services and live payments are out of scope and must remain unavailable. Paid service activation follows separate service, financial and operational readiness gates. Full M15 customer-facing Backup & Restore is a post-production milestone. Infrastructure backup/recovery requirements depend on whether the selected supported release path can change database state, as specified in the current decision above.
 
-### Initial release gates for the enabled scope
+### Initial release gates for the enabled scope — historical snapshot as of 2026-11-04
 
-| Gate | Current evidence/state | Release acceptance |
+| Gate | State recorded 2026-11-04 | Release acceptance |
 | --- | --- | --- |
-| Exact source and CI | Current primary `06d35a28453445ed19bdc11e62592e187e17dbf8`; merge CI `41817511959` — 38/38 PASS. | Recheck target SHA and mandatory jobs immediately before release. CI does not establish staging behavior. |
+| Exact source and CI | Primary observed at that time `06d35a28453445ed19bdc11e62592e187e17dbf8`; merge CI `41817511959` — 38/38 PASS. | Recheck target SHA and mandatory jobs immediately before release. CI does not establish staging behavior. |
 | Marketing-only application QA | Marketing E2E `41748568634` — PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`; later primary changes were documentation-only. | Revalidate HU/EN routes, informational pricing, navigation, CTA/contact, responsive layouts, SEO and negative access checks for registration, checkout, payment, service provisioning and SaaS/background actions on the deployed exact SHA. |
 | Server PHP policy | PHP 8.4 is the staging/rollback baseline. Server CI covers PHP 8.4 and 8.5. | Keep staging baseline on 8.4. Complete 8.5 compatibility validation in CI or an approved isolated environment; this is not a PHP 8.5 cutover authorization. Connector PHP matrix remains separate and unchanged. |
 | Pre-deployment backup | Fresh, mutually associated application/configuration/database backup is not currently evidenced. The controller creates only the DB dump; no application/config snapshot or restore proof is produced by that step. | Capture immediately before a state-changing deployment; verify identity, completeness and hashes; protect `.env`/`APP_KEY` through approved secret recovery without exposing values. |
@@ -128,7 +130,7 @@ The first production target is the **HU/EN marketing-only MVP**. Customer regist
 | Production readiness | Must be evaluated against the explicitly enabled production scope. | Complete applicable security, legal/accounting, monitoring, access/secrets and release-authorization gates. Deferred M15 product gates are not silently enabled or claimed complete. |
 | Scope isolation | Owner has approved marketing-only first release; no actual production/staging sync yet. | Prove public marketing routes work and registration, checkout, Stripe webhook provisioning, Connector onboarding, customer service and SaaS background activity remain blocked. Do not accept a source-only claim instead of exact staging/browser checks. |
 
-**Current decision:** restore provisioning and transfer investigation are paused; no alternative transfer is authorized. `STAGING_DEPLOY=NO-GO` for the current controller path until verified recovery proof and all other release gates pass. The Owner-reported weekly provider backup is not restore proof. Do not contact the provider or attempt another transport.
+**Decision recorded 2026-11-04:** restore provisioning and transfer investigation were paused; no alternative transfer is authorized. `STAGING_DEPLOY=NO-GO` for the current controller path until verified recovery proof and all other release gates pass. The Owner-reported weekly provider backup is not restore proof. Do not contact the provider or attempt another transport.
 
 ### MVP scope and staging sync — historical snapshot as of 2026-11-04
 

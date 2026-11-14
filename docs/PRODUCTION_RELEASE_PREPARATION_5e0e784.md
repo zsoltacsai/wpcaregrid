@@ -18,6 +18,7 @@
 - **Protected primary:** `claude/ecstatic-wozniak-oemyuf`
 - **Proposed candidate:** `5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8`
 - **Exact-SHA CI:** [run 43386058267](https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267), `completed/success`, 38/38 check runs successful.
+
 **Machine-readable manifest:** [`PRODUCTION_RELEASE_CANDIDATE_5e0e784.json`](PRODUCTION_RELEASE_CANDIDATE_5e0e784.json)
 
 The JSON is an immutable record for the proposed `5e0e784` snapshot. Its
