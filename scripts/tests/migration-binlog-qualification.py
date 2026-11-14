@@ -69,10 +69,22 @@ def clean_global_grants(lines):
     ) is not None
 
 
-def logged_trigger_names(event_type, info, expected_names):
-    if event_type != 'Query' or 'TRIGGER' not in info.upper():
+def binlog_trigger_identifier(info):
+    match = re.search(r'\bTRIGGER\s+[\x60\']?([A-Za-z0-9_]+)', info, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def logged_trigger_names(event_type, info, expected_names, schema, definer):
+    if event_type != 'Query':
         return set()
-    return {name for name in expected_names if name.upper() in info.upper()}
+    # Bind the DDL to this run's schema and definer; DROP or older runs cannot match.
+    quote = r"[\x60']?"
+    prefix = (rf"(?:^|;\s*)use\s+{quote}{re.escape(schema)}{quote}\s*;\s*"
+              rf"CREATE\s+DEFINER\s*=\s*{quote}{re.escape(definer)}{quote}@{quote}%{quote}\s+TRIGGER\s+")
+    for name in expected_names:
+        if re.search(prefix + rf"{quote}{re.escape(name)}{quote}(?:\s|$)", info, re.IGNORECASE):
+            return {name}
+    return set()
 
 
 def created_tables(directory, name):
@@ -115,9 +127,24 @@ def self_test():
         assert clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'"])
         assert not clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'", "GRANT FILE ON *.* TO 'u'@'%' "])
         assert not clean_global_grants(["GRANT ALL PRIVILEGES ON *.* TO 'u'@'%' WITH GRANT OPTION"])
-        assert logged_trigger_names('Query', 'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT', ['guard_x']) == {'guard_x'}
-        assert not logged_trigger_names('Query', 'CREATE TABLE guard_x (id INT)', ['guard_x'])
-        assert not logged_trigger_names('Table_map', 'TRIGGER guard_x', ['guard_x'])
+        expected = ['guard_x']
+        assert binlog_trigger_identifier('use db; CREATE DEFINER=u@% TRIGGER guard_name BEFORE INSERT') == 'guard_name'
+        assert binlog_trigger_identifier('use db; DROP TRIGGER guard_name') == 'guard_name'
+        assert binlog_trigger_identifier('QUERY WITHOUT DDL') is None
+        assert logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+                                    expected, 'wpcg_qual_a', 'u') == {'guard_x'}
+        assert not logged_trigger_names('Query', 'use wpcg_qual_a; DROP TRIGGER guard_x',
+                                        expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names('Query', 'use another; CREATE DEFINER=u@% TRIGGER guard_x',
+                                        expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=other@% TRIGGER guard_x',
+                                        expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names('Query', 'use wpcg_qual_a; CREATE DEFINER=u@% TRIGGER guard_x_suffix',
+                                        expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names('Query', 'CREATE TABLE guard_x (id INT)',
+                                        expected, 'wpcg_qual_a', 'u')
+        assert not logged_trigger_names('Table_map', 'TRIGGER guard_x',
+                                        expected, 'wpcg_qual_a', 'u')
         assert created_tables(d, names[1]) == ['t_b']
         (d / 'bad name.php').write_text('x', encoding='utf-8')
         try:
@@ -143,7 +170,9 @@ def run_mysql(user, password, sql, schema=None):
     if schema:
         cmd.append(schema)
     cmd += ['--execute', sql]
-    r = subprocess.run(cmd, env={**os.environ, 'MYSQL_PWD': password}, stdin=subprocess.DEVNULL,
+    child_env = {key: value for key, value in os.environ.items()
+                 if key != 'WPCG_QUAL_MYSQL_ROOT_PASSWORD'}
+    r = subprocess.run(cmd, env={**child_env, 'MYSQL_PWD': password}, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
     return r.returncode, mysql_output(r.stdout), classify(r.stderr)
 
@@ -160,6 +189,7 @@ def artisan(user, password, schema, *args, timeout=900):
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'QUEUE_CONNECTION': 'sync',
            'MAIL_MAILER': 'array', 'APP_ENV': 'testing'}
+    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, 'artisan', *args, '--no-interaction'], cwd=ROOT, env=env,
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, timeout=timeout)
@@ -175,6 +205,7 @@ def run_up(user, password, schema, migration_file):
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'APP_ENV': 'testing',
            'WPCG_QUAL_MIGRATION': str(MIGRATIONS / migration_file)}
+    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, '-r', code], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
     return r.returncode, classify(r.stdout + '\n' + r.stderr)
@@ -216,9 +247,13 @@ def trigger_ddl_logged(expected_names, schema, dba):
     logs = admin('SHOW BINARY LOGS').splitlines()
     stats = {'logs': len(logs), 'events': 0, 'query_events': 0, 'create_queries': 0,
              'trigger_mentions': 0, 'schema_mentions': 0, 'definer_mentions': 0,
-             'expected_name_mentions': 0, 'trigger_events': 0, 'matched': 0}
+             'expected_name_mentions': 0, 'trigger_name_candidates': set(), 'trigger_name_intersections': 0,
+             'schema_name_intersections': 0, 'definer_name_intersections': 0,
+             'trigger_schema_definer_intersections': 0, 'trigger_events': 0, 'matched': 0}
     def result(ok):
-        return ok, ','.join(f'{key}={value}' for key, value in stats.items()) + f',expected={len(expected_names)}'
+        details = {key: value for key, value in stats.items() if key != 'trigger_name_candidates'}
+        details['trigger_name_candidates'] = '+'.join(sorted(stats['trigger_name_candidates'])) or 'none'
+        return ok, ','.join(f'{key}={value}' for key, value in details.items()) + f',expected={len(expected_names)}'
     if not logs or len(logs) > 20:
         return result(False)
     matched = set()
@@ -244,8 +279,19 @@ def trigger_ddl_logged(expected_names, schema, dba):
                     stats['trigger_mentions'] += int('TRIGGER' in info_upper)
                     stats['schema_mentions'] += int(schema.upper() in info_upper)
                     stats['definer_mentions'] += int(dba.upper() in info_upper)
-                    stats['expected_name_mentions'] += int(any(name.upper() in info_upper for name in expected_names))
-                names = logged_trigger_names(columns[2], columns[5], expected_names)
+                    has_trigger = 'TRIGGER' in info_upper
+                    has_schema = schema.upper() in info_upper
+                    has_definer = dba.upper() in info_upper
+                    has_expected = any(name.upper() in info_upper for name in expected_names)
+                    stats['expected_name_mentions'] += int(has_expected)
+                    stats['trigger_name_intersections'] += int(has_trigger and has_expected)
+                    stats['schema_name_intersections'] += int(has_schema and has_expected)
+                    stats['definer_name_intersections'] += int(has_definer and has_expected)
+                    stats['trigger_schema_definer_intersections'] += int(has_trigger and has_schema and has_definer)
+                    trigger_id = binlog_trigger_identifier(columns[5]) if has_trigger else None
+                    if trigger_id:
+                        stats['trigger_name_candidates'].add(trigger_id)
+                names = logged_trigger_names(columns[2], columns[5], expected_names, schema, dba)
                 if names:
                     stats['trigger_events'] += 1
                     matched.update(names)
