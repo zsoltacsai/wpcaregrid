@@ -10,7 +10,7 @@
         "test:e2e:backup-download": "playwright test -c playwright.backup-download.config.ts"
     },
     "devDependencies": {
-        "@playwright/test": "^1.64.1",
+        "@playwright/test": "^1.65.0",
         "@tailwindcss/vite": "^4.3.5",
         "concurrently": "^10.0.6",
         "laravel-vite-plugin": "^3.1",
