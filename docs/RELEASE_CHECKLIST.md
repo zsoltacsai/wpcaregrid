@@ -128,12 +128,12 @@ The first production target is the **HU/EN marketing-only MVP**. Customer regist
 
 **Current decision:** restore provisioning and transfer investigation are paused; no alternative transfer is authorized. `STAGING_DEPLOY=NO-GO` for the current controller path until verified recovery proof and all other release gates pass. The Owner-reported weekly provider backup is not restore proof. Do not contact the provider or attempt another transport.
 
-### MVP scope and staging sync — current evidence 2026-11-04
+### MVP scope and staging sync — historical snapshot as of 2026-11-04
 
-| Item | Current state | Acceptance / limitation |
+| Item | State recorded 2026-11-04 | Acceptance / limitation |
 |---|---|---|
-| Authoritative primary | `06d35a28453445ed19bdc11e62592e187e17dbf8`; exact merge CI `41817511959` passed 38/38. | Recheck exact current target and all mandatory jobs immediately before staging or production release. |
-| Staging application SHA | `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, rechecked through `caregrid-staging` on 2026-11-04 11:27 UTC; worktree clean; PHP CLI 8.4.27. | Primary is 546 commits ahead. The target includes application, billing, Connector, backup, migrations, deployment/runtime, localization and marketing changes. Use the full protected exact-SHA controller release; do not cherry-pick marketing files. |
+| Authoritative primary at that time | `06d35a28453445ed19bdc11e62592e187e17dbf8`; exact merge CI `41817511959` passed 38/38. | Recheck exact current target and all mandatory jobs immediately before staging or production release. |
+| Staging application SHA at that time | `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, rechecked through `caregrid-staging` on 2026-11-04 11:27 UTC; worktree clean; PHP CLI 8.4.27. | Primary was 546 commits ahead. The target includes application, billing, Connector, backup, migrations, deployment/runtime, localization and marketing changes. Use the full protected exact-SHA controller release; do not cherry-pick marketing files. |
 | Exact-source acceptance | Merge CI `41817511959` = 38/38 PASS; Marketing E2E `41748568634` = PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`, with later primary changes documentation-only. | Repository evidence only. It does not establish deployed staging behavior; actual browser QA follows a successful exact-SHA deploy. |
 | Staging deploy | **NO-GO** | The full Laravel controller runs migrations. Do not deploy until fresh backup, isolated restore/recovery proof, target migration rehearsal, current runtime/fencing/controller checks and post-deploy acceptance are evidenced. No alternate architecture is authorized. |
 | PHP policy | PHP 8.4 is staging/rollback baseline; PHP 8.5 is planned compatibility validation only. | Keep server CI on 8.4/8.5. No PHP 8.5 cutover; Connector matrix remains unchanged. |

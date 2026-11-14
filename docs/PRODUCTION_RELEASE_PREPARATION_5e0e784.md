@@ -52,7 +52,7 @@ Both independent reviews inspected exact SHA
 
 The reviewers did not access hosts, database credentials, customer data, or
 secrets. Their reports are static-source assessments, not staging or production
-acceptance. **Combined review gate: HOLD.** Do not reuse another commit's review.
+acceptance. **Combined review gate: HOLD.** Do not reuse another commit's review. The report SHA-256 values establish the bytes of the files in this candidate tree, not independent proof of when or by whom the original report content was authored; the JSON manifest intentionally remains pinned and its `production_decision=NO_GO` is not a substitute for the HOLD review gate described here.
 
 The release-review V3 record contract in
 [`RELEASE_REVIEW_POLICY.md`](RELEASE_REVIEW_POLICY.md) requires a real PR number and
