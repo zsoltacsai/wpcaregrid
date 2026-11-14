@@ -176,7 +176,8 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                         f'create={int(create_prefix)},ddl={int(create_ddl_pattern)},'
                         f'trigger={int(bool(trigger_token))},'
                         f'name={int(expected_name)},definer={int(definer_clause)},'
-                        f'prefix_cp={".".join(str(ord(c)) for c in statement[:16])}'
+                        f'cp1={".".join(str(ord(c)) for c in statement[:16])},'
+                        f'cp2={".".join(str(ord(c)) for c in statement[16:32])}'
                     )
     return matched, stats
 
