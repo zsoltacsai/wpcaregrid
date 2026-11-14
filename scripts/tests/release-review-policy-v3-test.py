@@ -380,6 +380,24 @@ class AgentReviewTests(unittest.TestCase):
             "\nreason_code=", "\ninvalid=\ud800\nreason_code="))
         self.assertEqual(refusal([old_qa, unicode_body, good]), "review_correction_invalid")
 
+    def test_quarantine_and_target_digest_checks_fail_closed_on_tampering_and_unicode(self):
+        old_qa, old_appsec = actual_pr377_legacy_records()
+        malformed = published_malformed_correction()
+        valid_qa = correction(old_qa, 7_000_000_001,
+                              sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        valid_appsec = correction(old_appsec, 7_000_000_002,
+                                  sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        tampered = dict(old_qa, body=old_qa["body"] + "\ud800")
+        self.assertEqual(refusal([tampered, old_appsec, malformed, valid_qa, valid_appsec]),
+                         "review_correction_invalid")
+
+        tampered = dict(old_qa, body=old_qa["body"].replace("agent=Hermione", "agent=HermioneX"))
+        self.assertEqual(refusal([tampered, old_appsec, malformed, valid_qa, valid_appsec]),
+                         "review_correction_invalid")
+
+        self.assertEqual(refusal([tampered, old_appsec, valid_qa, valid_appsec]),
+                         "review_correction_target_invalid")
+
     def test_quarantined_comment_wrong_author_cannot_replace_valid_correction(self):
         old_qa, old_appsec = actual_pr377_legacy_records()
         malformed = dict(published_malformed_correction(),
