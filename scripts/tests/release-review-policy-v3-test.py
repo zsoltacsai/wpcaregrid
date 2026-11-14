@@ -407,6 +407,18 @@ class AgentReviewTests(unittest.TestCase):
         self.assertEqual(refusal([old_qa, old_appsec, malformed, valid_appsec]),
                          "review_record_invalid")
 
+    def test_appsec_target_and_valid_correction_lone_surrogates_are_refused(self):
+        old_appsec = actual_pr377_legacy_records()[1]
+        valid = correction(old_appsec, 7_000_000_002,
+                           sha="4196dab735b2f73dd2b207afa960596741eda8c5")
+        surrogate_target = dict(old_appsec, body=old_appsec["body"] + "\ud800")
+        self.assertEqual(refusal([surrogate_target, valid]),
+                         "review_correction_target_invalid")
+
+        surrogate_correction = dict(valid, body=valid["body"] + "\ud800")
+        self.assertEqual(refusal([old_appsec, surrogate_correction]),
+                         "review_correction_invalid")
+
     def test_render_rejects_what_the_verifier_would_reject(self):
         good = dict(role="appsec", pr=1, head_sha=SHA, agent="agent-appsec-01", decision="PASS",
                     evidence_sha256=DIGEST)
