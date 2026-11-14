@@ -162,6 +162,21 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                     stats[name]['ddl'] += 1
                     if current_schema is not None and current_schema.casefold() == schema.casefold():
                         matched.add(name)
+                elif name == 'transition_v2_requests_immutable_insert':
+                    create_prefix = bool(re.match(r'^\s*CREATE\b', statement, re.IGNORECASE))
+                    trigger_token = re.search(r'\bTRIGGER\s+', statement, re.IGNORECASE)
+                    create_ddl_pattern = bool(re.match(
+                        r'^\s*CREATE\s+(?:DEFINER\s*=\s*.+?\s+)?TRIGGER\s+',
+                        statement, re.IGNORECASE | re.DOTALL))
+                    expected_name = bool(trigger_token and re.match(
+                        rf"(?:`{re.escape(name)}`|'{re.escape(name)}'|{re.escape(name)})(?:\s|$)",
+                        statement[trigger_token.end():], re.IGNORECASE))
+                    definer_clause = bool(re.search(r'\bDEFINER\s*=', statement, re.IGNORECASE))
+                    stats[name]['matcher_debug'] = (
+                        f'create={int(create_prefix)},ddl={int(create_ddl_pattern)},'
+                        f'trigger={int(bool(trigger_token))},'
+                        f'name={int(expected_name)},definer={int(definer_clause)}'
+                    )
     return matched, stats
 
 
@@ -436,7 +451,8 @@ def trigger_ddl_logged(expected_names, schema, dba):
             for key in ('events', 'schema', 'ddl'):
                 diagnostics[name][key] += file_stats[name][key]
             for key in ('first', 'leadcp', 'next_word', 'leading_ticks', 'create_token',
-                        'definer_token', 'trigger_token', 'after_trigger', 'after_slashes', 'leading_slashes'):
+                        'definer_token', 'trigger_token', 'after_trigger', 'after_slashes',
+                        'leading_slashes', 'matcher_debug'):
                 if key in file_stats[name]:
                     diagnostics[name][key] = file_stats[name][key]
     for name in sorted(expected_names):
@@ -445,6 +461,8 @@ def trigger_ddl_logged(expected_names, schema, dba):
                            'after_slashes', 'leading_slashes', 'create_token', 'definer_token',
                            'trigger_token', 'after_trigger'))
         record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
+        if name in diagnostics and 'matcher_debug' in diagnostics[name]:
+            record(f'mysqlbinlog_match_detail_{name}', 'OBSERVED', diagnostics[name]['matcher_debug'])
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
