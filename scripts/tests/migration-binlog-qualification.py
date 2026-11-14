@@ -69,6 +69,12 @@ def clean_global_grants(lines):
     ) is not None
 
 
+def logged_trigger_names(event_type, info, expected_names):
+    if event_type != 'Query' or 'TRIGGER' not in info.upper():
+        return set()
+    return {name for name in expected_names if name.upper() in info.upper()}
+
+
 def created_tables(directory, name):
     return re.findall(r"Schema::create\('([a-z0-9_]+)'", (Path(directory) / name).read_text(encoding='utf-8'))
 
@@ -102,6 +108,9 @@ def self_test():
         assert clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'"])
         assert not clean_global_grants(["GRANT USAGE ON *.* TO 'u'@'%'", "GRANT FILE ON *.* TO 'u'@'%' "])
         assert not clean_global_grants(["GRANT ALL PRIVILEGES ON *.* TO 'u'@'%' WITH GRANT OPTION"])
+        assert logged_trigger_names('Query', 'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT', ['guard_x']) == {'guard_x'}
+        assert not logged_trigger_names('Query', 'CREATE TABLE guard_x (id INT)', ['guard_x'])
+        assert not logged_trigger_names('Table_map', 'TRIGGER guard_x', ['guard_x'])
         assert created_tables(d, names[1]) == ['t_b']
         (d / 'bad name.php').write_text('x', encoding='utf-8')
         try:
@@ -220,8 +229,9 @@ def trigger_ddl_logged(expected_names):
                     last_position = max(last_position, int(columns[4]))
                 except ValueError:
                     return False
-                if columns[2] == 'Query' and 'CREATE TRIGGER' in columns[5].upper():
-                    matched.update(name for name in expected_names if name.upper() in columns[5].upper())
+                # MySQL may render DDL as CREATE DEFINER=... TRIGGER, so match the
+                # event type, TRIGGER token, and exact expected object names.
+                matched.update(logged_trigger_names(columns[2], columns[5], expected_names))
             if matched == set(expected_names):
                 return True
             if last_position <= position:
@@ -509,7 +519,7 @@ def main():
             or line.startswith(f'GRANT TRIGGER ON {schema.upper()}.* TO ')
             for line in normalized_grants
         )
-        ok &= require_contract('definer_locked_with_select_dependencies_only', allowed_definer)
+        ok &= require_contract('definer_locked_with_minimal_grants', allowed_definer)
         rid2 = '44444444-4444-4444-8444-444444444444'
         admin("UPDATE deployment_transition_fences SET phase2b_event_sequence = 2 WHERE fence_key = 'global'", schema)
         rc, _, (_, errno) = as_runtime(req(rid2, seq=2))
