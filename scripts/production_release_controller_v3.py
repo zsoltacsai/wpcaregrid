@@ -10,13 +10,21 @@ this gate before it can authorize any production mutation.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from scripts.release_admission_v3 import AdmissionRefused, PRIMARY_BRANCH, verify_release_admission
+# ``-I`` excludes the checkout from Python's import path.  Keep the executable
+# entry point self-contained by adding only its own source directory, which is
+# the same directory whose immutable files are verified by the caller.
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    from release_admission_v3 import AdmissionRefused, PRIMARY_BRANCH, verify_release_admission
+else:
+    from .release_admission_v3 import AdmissionRefused, PRIMARY_BRANCH, verify_release_admission
 
 API = "https://api.github.com"
 REPOSITORY = "zsoltacsai/wpcaregrid"
@@ -31,7 +39,7 @@ class EvidenceUnavailable(RuntimeError):
 
 
 def _request_json(path: str):
-    if not path.startswith(f"/repos/{REPOSITORY}/"):
+    if path != f"/repos/{REPOSITORY}" and not path.startswith(f"/repos/{REPOSITORY}/"):
         raise EvidenceUnavailable("api_path_invalid")
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -72,6 +80,36 @@ def _list(path: str):
         if len(batch) < 100:
             return output
     raise EvidenceUnavailable("api_list_incomplete")
+
+
+def _workflow_jobs(run_id: int):
+    """Read the GitHub jobs envelope with bounded, completeness-checked pages."""
+    output = []
+    expected_total = None
+    endpoint = f"/repos/{REPOSITORY}/actions/runs/{run_id}/jobs"
+    for page in range(1, MAX_PAGES + 1):
+        batch_data = _request_json(f"{endpoint}?per_page=100&page={page}")
+        batch = batch_data.get("jobs") if isinstance(batch_data, dict) else None
+        total = batch_data.get("total_count") if isinstance(batch_data, dict) else None
+        if (not isinstance(batch, list) or len(batch) > 100 or type(total) is not int
+                or total < 0 or total > MAX_PAGES * 100):
+            raise EvidenceUnavailable("ci_jobs_invalid")
+        if expected_total is None:
+            expected_total = total
+        if total != expected_total:
+            raise EvidenceUnavailable("ci_jobs_changed_during_read")
+        output.extend(batch)
+        if len(batch) < 100:
+            break
+    else:
+        raise EvidenceUnavailable("ci_jobs_incomplete")
+    if expected_total != len(output):
+        raise EvidenceUnavailable("ci_jobs_incomplete")
+    ids = [job.get("id") for job in output if isinstance(job, dict)]
+    if (len(ids) != len(output) or any(type(job_id) is not int or job_id <= 0 for job_id in ids)
+            or len(set(ids)) != len(ids)):
+        raise EvidenceUnavailable("ci_jobs_invalid")
+    return output
 
 
 def _workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None):
@@ -120,7 +158,7 @@ def _workflow_run(commit_sha: str, *, event: str, pr_number: int | None = None):
     run_id = selected.get("id")
     if type(run_id) is not int or run_id <= 0:
         raise EvidenceUnavailable("ci_run_identity_invalid")
-    jobs = _list(f"/repos/{REPOSITORY}/actions/runs/{run_id}/jobs")
+    jobs = _workflow_jobs(run_id)
     return selected, jobs
 
 

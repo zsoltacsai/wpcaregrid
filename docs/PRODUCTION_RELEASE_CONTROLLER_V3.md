@@ -24,6 +24,13 @@ The operator supplies four immutable identities to the verifier:
   verify-release <candidate-merge-sha> <merged-pr-number> <reviewed-pr-head-sha> <merge-base-sha>
 ```
 
+The controller and its two verifier modules must remain together in the same
+root-owned, hash-verified source directory. The isolated entry point imports
+only sibling verifier files from that directory; it does not depend on the
+current working directory, `PYTHONPATH`, user site packages, or an installed
+application package. Verify each file against its reviewed release manifest
+before invocation.
+
 The verifier requires the candidate SHA to equal the current protected primary
 branch SHA. It fetches the merged PR and merge commit and checks that the PR
 number, primary target branch, merge SHA, exact reviewed head and first-parent

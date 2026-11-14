@@ -5,7 +5,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts import production_release_controller_v3 as CONTROLLER
@@ -53,8 +58,8 @@ def artifact(role, agent, report, comment_id, *, sha=HEAD, pr=383, digest=None,
 
 
 def fixture():
-    pr_jobs = [{"name": name, "status": "completed", "conclusion": "success"}
-               for name in REQUIRED_CI_JOBS]
+    pr_jobs = [{"id": index, "name": name, "status": "completed", "conclusion": "success"}
+               for index, name in enumerate(REQUIRED_CI_JOBS, start=1)]
     primary_jobs = [dict(job) for job in pr_jobs]
     pr_run = {
         "head_sha": HEAD, "event": "pull_request", "path": ".github/workflows/ci.yml",
@@ -184,6 +189,21 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         self.assertEqual(verify_release_admission(**{**fixture(), "ledger_comments": comments})["result"],
                          "PASS")
 
+    def test_malformed_non_owner_artifact_cannot_veto_release(self):
+        comments = fixture()["ledger_comments"]
+        comments.append({"id": 99, "created_at": "2026-11-14T03:00:00Z",
+                         "author_association": "NONE", "user": {"login": "untrusted"},
+                         "body": "WPCG_RELEASE_REVIEW_ARTIFACT_V3\nmalformed"})
+        self.assertEqual(verify_release_admission(**{**fixture(), "ledger_comments": comments})["result"],
+                         "PASS")
+
+    def test_malformed_owner_artifact_still_fails_closed(self):
+        comments = fixture()["ledger_comments"]
+        comments.append({"id": 99, "created_at": "2026-11-14T03:00:00Z",
+                         "author_association": "OWNER", "user": {"login": OWNER},
+                         "body": "WPCG_RELEASE_REVIEW_ARTIFACT_V3\nmalformed"})
+        self.assertEqual(refusal_reason(ledger_comments=comments), "review_artifact_invalid")
+
     def test_pr_ci_stale_or_failed_is_refused(self):
         args = fixture()
         args["pr_ci_run"] = {**args["pr_ci_run"], "head_sha": "d" * 40}
@@ -245,6 +265,69 @@ class ReadOnlyControllerTests(unittest.TestCase):
                 CONTROLLER.verify(CANDIDATE, 383, HEAD, BASE)
         self.assertEqual(str(caught.exception), "primary_branch_not_protected")
         list_request.assert_not_called()
+
+    def test_repository_root_api_path_is_allowed_and_unrelated_path_rejected(self):
+        with patch.object(CONTROLLER.urllib.request, "build_opener") as opener:
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{"owner":{"login":"zsoltacsai"}}'
+            self.assertEqual(CONTROLLER._request_json("/repos/zsoltacsai/wpcaregrid"),
+                             {"owner": {"login": "zsoltacsai"}})
+        with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+            CONTROLLER._request_json("/repos/zsoltacsai/other")
+        self.assertEqual(str(caught.exception), "api_path_invalid")
+
+    def test_workflow_run_parses_github_jobs_envelope_without_mocking_workflow_run(self):
+        data = fixture()
+        jobs = data["pr_ci_jobs"]
+        run = {"id": 123, "head_sha": HEAD, "event": "pull_request",
+               "path": ".github/workflows/ci.yml", "created_at": "2026-11-14T01:00:00Z",
+               "pull_requests": [{"number": 383,
+                                   "base": {"ref": "claude/ecstatic-wozniak-oemyuf"}}]}
+
+        def request(path):
+            if "/actions/runs?" in path:
+                return {"total_count": 1, "workflow_runs": [run]}
+            if path == "/repos/zsoltacsai/wpcaregrid/actions/runs/123/jobs?per_page=100&page=1":
+                return {"total_count": len(jobs), "jobs": jobs}
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=request):
+            selected, actual_jobs = CONTROLLER._workflow_run(HEAD, event="pull_request", pr_number=383)
+        self.assertEqual(selected, run)
+        self.assertEqual(actual_jobs, jobs)
+
+    def test_workflow_jobs_paginates_and_rejects_incomplete_envelope(self):
+        jobs = [{"id": index, "name": f"job-{index}"} for index in range(1, 102)]
+        calls = []
+
+        def paged(path):
+            calls.append(path)
+            if path.endswith("page=1"):
+                return {"total_count": 101, "jobs": jobs[:100]}
+            if path.endswith("page=2"):
+                return {"total_count": 101, "jobs": jobs[100:]}
+            raise AssertionError(path)
+
+        with patch.object(CONTROLLER, "_request_json", side_effect=paged):
+            self.assertEqual(CONTROLLER._workflow_jobs(123), jobs)
+        self.assertEqual(len(calls), 2)
+
+        with patch.object(CONTROLLER, "_request_json", return_value={
+                "total_count": 2, "jobs": jobs[:1]}):
+            with self.assertRaises(CONTROLLER.EvidenceUnavailable) as caught:
+                CONTROLLER._workflow_jobs(123)
+        self.assertEqual(str(caught.exception), "ci_jobs_incomplete")
+
+    def test_isolated_documented_entrypoint_imports_and_returns_json_hold(self):
+        script = Path(CONTROLLER.__file__).resolve()
+        with tempfile.TemporaryDirectory() as cwd:
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", str(script), "invalid"], cwd=cwd,
+                text=True, capture_output=True, check=False, timeout=10)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         {"result": "HOLD", "reason": "operation_not_allowed"})
 
     def test_cli_rejects_non_verification_operation(self):
         with patch.object(CONTROLLER, "verify") as verify:

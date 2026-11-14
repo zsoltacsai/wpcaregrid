@@ -12,9 +12,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import sys
+from pathlib import Path
 from typing import Iterable, Mapping
 
-from scripts.release_review_policy_v3 import ReviewRefused, verify_agent_release_reviews
+# ``python -I`` deliberately omits the working directory from sys.path.  When
+# this file is run beside the controller, load the policy from this same
+# protected source directory; normal package imports remain available to tests.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from release_review_policy_v3 import ReviewRefused, verify_agent_release_reviews
+else:
+    from .release_review_policy_v3 import ReviewRefused, verify_agent_release_reviews
 
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 REQUIRED_CI_JOBS = (
@@ -72,7 +81,10 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
         body = comment.get("body")
         if not isinstance(body, str) or not body.startswith(_ARTIFACT_PREFIX):
             continue
-        _require(_owner_comment(comment, owner), "review_artifact_authority_invalid")
+        # Non-owner comments are never evidence and must not be able to veto
+        # an otherwise valid release by posting artifact-looking text.
+        if not _owner_comment(comment, owner):
+            continue
         match = _ARTIFACT.fullmatch(body)
         _require(match is not None, "review_artifact_invalid")
         role, record_pr, record_sha, agent, digest, encoded = match.groups()
