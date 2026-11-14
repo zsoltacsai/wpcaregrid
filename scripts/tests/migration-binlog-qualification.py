@@ -217,22 +217,17 @@ def trigger_ddl_logged(expected_names):
         log_name = entry.split('\t', 1)[0]
         if re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', log_name) is None:
             return result(False)
-        position = 4
+        offset = 0
         for _ in range(100):
-            # Explicitly paginated and bounded: never scan an unbounded binary log.
-            result_rows = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM {position} LIMIT 1000").splitlines()
-            if not result_rows:
+            # Offset/count pagination is bounded per file; never scan an unbounded binary log.
+            rows = admin(f"SHOW BINLOG EVENTS IN '{log_name}' FROM 4 LIMIT {offset},1000").splitlines()
+            if not rows:
                 break
-            last_position = position
-            for row in result_rows:
+            for row in rows:
                 columns = row.split('\t', 5)
                 if len(columns) != 6:
                     return result(False)
                 stats['events'] += 1
-                try:
-                    last_position = max(last_position, int(columns[4]))
-                except ValueError:
-                    return result(False)
                 if columns[2] == 'Query':
                     stats['query_events'] += 1
                 names = logged_trigger_names(columns[2], columns[5], expected_names)
@@ -242,15 +237,12 @@ def trigger_ddl_logged(expected_names):
                     stats['matched'] = len(matched)
             if matched == set(expected_names):
                 return result(True)
-            if last_position <= position:
-                return result(False)
-            position = last_position
-            if len(result_rows) < 1000:
+            if len(rows) < 1000:
                 break
+            offset += 1000
         else:
             # The per-file page limit was reached. Missing evidence must not be accepted.
-            if matched != set(expected_names):
-                return result(False)
+            return result(False)
     return result(matched == set(expected_names))
 
 
