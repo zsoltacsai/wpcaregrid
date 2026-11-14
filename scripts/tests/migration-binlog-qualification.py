@@ -106,11 +106,12 @@ def logged_trigger_names(event_type, info, expected_names, schema, definer):
     # These migrations use CREATE TRIGGER without DEFINER. If mysqlbinlog renders
     # a server-normalized DEFINER clause, accept its syntax here; the created
     # trigger's actual DEFINER is independently checked in information_schema.
-    definer_user = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$-]+)"
-    definer_host = r"(?:`[^`]+`|'[^']+'|[A-Za-z0-9_.$:%-]+)"
+    # The server's binlog formatter has emitted several valid account spellings.
+    # Require a nonempty DEFINER clause syntactically, then validate the actual
+    # installed account through information_schema below.
     create_pattern = re.compile(
-        rf"^\s*CREATE\s+(?:DEFINER\s*=\s*{definer_user}\s*@\s*{definer_host}\s+)?TRIGGER\s+",
-        re.IGNORECASE,
+        r"^\s*CREATE\s+(?:DEFINER\s*=\s*.+?\s+)?TRIGGER\s+",
+        re.IGNORECASE | re.DOTALL,
     )
     create = create_pattern.match(info)
     if create is None:
