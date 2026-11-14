@@ -181,6 +181,9 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
                         f'cp3={".".join(str(ord(c)) for c in statement[32:48])},'
                         f'cp4={".".join(str(ord(c)) for c in statement[48:64])}'
                     )
+                    stats[name]['statement_prefix_tail'] = '.'.join(
+                        str(ord(c)) for c in statement[64:96]
+                    )
     return matched, stats
 
 
@@ -456,7 +459,7 @@ def trigger_ddl_logged(expected_names, schema, dba):
                 diagnostics[name][key] += file_stats[name][key]
             for key in ('first', 'leadcp', 'next_word', 'leading_ticks', 'create_token',
                         'definer_token', 'trigger_token', 'after_trigger', 'after_slashes',
-                        'leading_slashes', 'matcher_debug'):
+                        'leading_slashes', 'matcher_debug', 'statement_prefix_tail'):
                 if key in file_stats[name]:
                     diagnostics[name][key] = file_stats[name][key]
     for name in sorted(expected_names):
@@ -467,6 +470,7 @@ def trigger_ddl_logged(expected_names, schema, dba):
         record(f'mysqlbinlog_match_{name}', 'PASS' if name in matched else 'FAIL', detail)
         if name in diagnostics and 'matcher_debug' in diagnostics[name]:
             record(f'mysqlbinlog_match_detail_{name}', 'OBSERVED', diagnostics[name]['matcher_debug'])
+            record(f'mysqlbinlog_match_prefix_tail_{name}', 'OBSERVED', diagnostics[name].get('statement_prefix_tail', ''))
     record('mysqlbinlog_matched_trigger_names', 'OBSERVED', '+'.join(sorted(matched)) or 'none')
     return matched == set(expected_names), (
         f'files={len(files)},bytes={total_bytes},matched={len(matched)},expected={len(expected_names)}'
