@@ -1,14 +1,16 @@
-# staging-next helper 1.4.10 - Owner runbook (preflight, staging, install, verify, rollback)
+# staging-next helper 1.4.10 - operator readiness status
 
-Historical baseline: merge commit `49234694f062168a27b471fc43774409e6c4219a` (PR #333). Companion documents:
-`docs/STAGING_NEXT_HELPER_1_4_10_INSTALL.md` (what the installer does) and
-`scripts/staging-149-preflight.py` (read-only host check). **Nothing here has been run on a host.**
-Every step below that changes the host is behind its own Owner GO; steps 0-1 are read-only.
+**Status: HOLD. This runbook is not an executable staging or installation procedure.**
+The `staging-149-*` preflight and source-staging tools are pinned to the historical
+1.4.9 helper and must not be used for 1.4.10. No 1.4.10-specific host preflight
+or source-staging utility has been implemented or reviewed. Do not copy files to
+the staging host or run the 1.4.10 installer by following this document.
 
-The GO-8.3 controller integration updates the helper source pins below. The
-`staging-149-*` staging scripts remain pinned to the historical #333 bytes and
-must not be used to stage this source candidate. No host has been read or
-changed by this source work.
+The hashes below identify the current source candidate only. They are not a
+host observation, install authorization, deployment authorization, or proof that
+the staging layout matches the helper contract. A future executable procedure
+must use versioned 1.4.10 preflight and source-staging tooling, be independently
+reviewed, and receive its required Owner GO. Nothing here has been run on a host.
 
 ## GO-8.3 source candidate pins (recalculate from the final tree)
 
@@ -22,82 +24,31 @@ changed by this source work.
 | `scripts/install_staging_next_helper_1_4_10.py` (installer) | `f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c` |
 | helper artifact digest (printed by the installer/probe) | `f5a8e7e468af2b0950e2dfc3d5ed9f0c3b6baeb9759ba71866bc41cb4f6717b8` |
 
-## Step 0 - read-only preflight (permitted now; no GO needed beyond the read-only authorization)
+## Host operations: HOLD
 
-Run `scripts/staging-149-preflight.py` as root on `stg1.wpcaregrid.com` (`/usr/bin/python3 -I -B -` with the file on stdin, as in the hand-over block, or `python3 -I -B staging-149-preflight.py`).
-Required result before anything else: `STAGING_149_PREFLIGHT=PASS`. Save the full output (it contains no
-secrets) and the `legacy.fingerprint` value. `BLOCKED` = a prerequisite is missing (do not "fix" it ad hoc:
-PHP 8.5, FPM socket, nginx route, application directory, installer directories and users each need their own
-reviewed step); `STOP` = an unexpected or active state (existing 1.4.10 files, fence/lock/gate, workers,
-unexpected sudoers rule, symlink or wrong ownership in the staging-next tree): stop and report.
+### Preflight
 
-Note: the preflight parses the nginx configuration files itself (it never runs `nginx`). The installer later
-runs the authoritative `nginx -t`/`nginx -T` check; a preflight PASS therefore does not replace that check.
+**Not available for 1.4.10.** `scripts/staging-149-preflight.py` is historical
+and does not verify the complete 1.4.10 install contract. Do not use it to infer
+1.4.10 readiness. No host facts are claimed by this runbook.
 
-The preflight accepts exactly one pre-existing staging-next sudoers rule besides the 1.4.x forms: the helper 1.0.2
-`preflight` rule (`deploy-staging-next ALL=(root) NOSETENV: NOPASSWD: .../staging-next/1.0.2/wpcaregrid-deploy-staging-next-priv preflight`,
-either tag order - sudo tags are order-independent). It is accepted only while the installed 1.0.2 entrypoint and
-profiles module match the audited sha256 pins (deploy/release-manifests/staging-next-helper.json), are root-owned with
-modes 0755/0644, and their directory chain is root-owned and not group/other writable; that helper only performs a
-read-only `preflight` (lstat of the pinned application directory). Any other, broader or modified rule is a STOP.
+### Source staging
 
-## Step 1+2 - Owner GO #1: stage the six pinned files (one command, run on the Owner workstation)
+**Not available for 1.4.10.** The historical `staging-149-stage-sources.sh`
+and `staging-149-stage-on-host.py` are pinned to the 1.4.9 source artifacts.
+They are explicitly prohibited for this candidate. There is currently no
+reviewed, exact-SHA 1.4.10 staging path. Therefore there is no command to run
+for source staging; do not substitute the old scripts or manually improvise a
+transfer procedure.
 
-`scripts/staging-149-stage-sources.sh` (paste block in the hand-over) runs inside a clone of the repository. It
-exports the six files from the pinned merge commit `49234694f062168a27b471fc43774409e6c4219a`, verifies every sha256
-pin locally (STOP on any difference, before SSH is used), and streams them over SSH to a python program that runs on
-the host **as the `deploy` login user** (it refuses root and any other user). The host program changes only
-`/home/deploy/.private`: it creates the directory if absent (0700), writes the five sources into
-`wpcg-staging-next-helper-1.4.10/` (0700, files 0600) and the installer as
-`wpcaregrid-staging-next-helper-installer-1.4.10.py` (0600), create-only (an existing destination is a STOP), publishes
-atomically, rolls back only its own objects on failure, re-reads and re-hashes everything, and prints no content.
+### Installation and verification
 
-* `SSH_TARGET` (default `caregrid-staging`) must log in as `deploy`; anything else is a STOP on the host.
-* `MODE=check` verifies all preconditions and the payload on the host and writes **nothing**; run it first.
-* Run it with `bash` (the file is not executable). Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`;
-  exactly one such line is printed (the host's own result is shown as `REMOTE_RESULT=`). In stage mode the driver
-  cross-checks that the host reported all six files with the pinned digests, mode 0600 and the expected paths;
-  a bare `PASS` from the host is not trusted. A second run ends in `STOP;CODE=destination_exists` (create-only).
-* SIGHUP/SIGTERM/SIGINT on the host program and any read-back failure roll back what the run created.
-
-Afterwards re-run the read-only root preflight: `source.staged` must be `REQUIRED_PRESENT` and the result `PASS`.
-
-### Alternative Step 1+2 - run directly on the VPS as root (no local git clone needed)
-
-`scripts/staging-149-stage-on-host.py` (paste block in the hand-over) is run from the root console of the staging
-host: `... | python3 -I -B - check` first (downloads the six files over HTTPS from the pinned commit, verifies every
-sha256 pin in memory, checks all host preconditions, **writes nothing**), then the same block with `stage`. It writes
-only `/home/deploy/.private` (created 0700 if absent; sources in `wpcg-staging-next-helper-1.4.10/` 0700/0600; the
-installer as `wpcaregrid-staging-next-helper-installer-1.4.10.py` 0600), all owned by `deploy`, create-only (an existing
-destination is a STOP), rolled back on any failure, read back and re-hashed. Root writes only through directory
-file descriptors opened with `O_NOFOLLOW` and validated with `fstat`, so the deploy-owned tree cannot redirect it:
-before creating anything it drops to the `deploy` identity (`setgroups`/`setegid`/`seteuid`), so everything is
-deploy-owned by construction and no `chown` is ever issued; every directory is created with `mkdir` (never replaced) and
-checked (owner, mode, empty); files use `O_EXCL|O_NOFOLLOW`. There is no temp tree and no rename.
-Rollback removes only objects whose device/inode it still recognises, one at a time, never recursively. The environment
-is scrubbed, reads are non-blocking and type-checked, and a 300 s watchdog stops the run. A `kill -9` or power loss
-cannot be rolled back: a partial `.private/wpcg-staging-next-helper-1.4.10` would then make the next run STOP with
-`destination_exists` and must be inspected and removed by hand by the Owner.
-Download: HTTPS only from `raw.githubusercontent.com` (public repository), no proxy, no redirect, size-capped; the bytes are
-never executed. Result line: `STAGING_149_STAGE=CHECK_PASS` / `PASS` / `STOP;CODE=...`. The helper installation (Step 3)
-remains a separate Owner GO.
-
-## Step 3 - Owner GO #2: root installation (privileged change: root-owned files + sudoers rule)
-
-From a root console, the single command in `docs/STAGING_NEXT_HELPER_1_4_10_INSTALL.md` ("Root-console
-procedure"). It creates only absent targets (`/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.10/` with five
-files, `/etc/wpcaregrid-deploy/profiles/staging-next-1.4.10.json`, `/etc/sudoers.d/wpcaregrid-staging-next-1.4.10`),
-validates sudoers before publishing it, and rolls back what it created on any failure.
-
-## Step 4 - verification (read-only)
-
-Accept only: `INSTALL=PASS`, the artifact digest above, `NEGATIVE_AUTHORIZATION=PASS`, `INSTALLATION_PROBE=PASS`,
-`PHASE_B_POLICY=DISABLED`. Then read back owner/mode/hash of all five installed files (root:root, `0755` for the
-entrypoint, `0644` for the others), `visudo -c`, and re-run the preflight: all `destination.*` lines now report
-`MISMATCH` (the files exist) and the result is `STOP;CODE=destination_exists_helper_dir` - that is the expected,
-safe post-install state. `legacy.fingerprint` must equal the Step 0 value. `verify-install` is a read-only identity
-probe; it also evaluates the target binding: a `target_binding_*` code means the host layout differs from the
-compiled `staging-next` contract - STOP and report, do not edit the layout to satisfy it.
+**HOLD.** The root installer procedure in
+`docs/STAGING_NEXT_HELPER_1_4_10_INSTALL.md` assumes its installer and five
+pinned source files have already been safely staged. Because the 1.4.10 staging
+step is unavailable, do not run that procedure. This runbook's rollback section
+records intended recovery boundaries only; it does not establish an installation
+or authorize host changes.
 
 ## Rollback and STOP
 
