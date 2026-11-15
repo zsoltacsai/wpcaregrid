@@ -803,7 +803,7 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
 
         # The same receipt validator used on the import path rejects a modified copy.
         bad_path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
-        corrupted_detected = not file_sha256_matches(bad_path, backup_sha)
+        corrupted_detected = not sha256_matches(bad_path.read_bytes(), backup_sha)
         ok &= require_contract('corrupt_backup_fails_integrity_check_before_restore', corrupted_detected)
         if not corrupted_detected:
             return False
@@ -839,10 +839,10 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
         ok &= require_contract('restored_trigger_inventory_matches', restored_rows == source_rows,
                                f'count={len(restored_rows)},expected={len(source_rows)}')
         restored_ledger = ledger(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
-        expected_prefix = [name for name in stems if name in set(restored_ledger)]
+        source_ledger_is_prefix = (len(source_ledger) < len(stems)
+                                   and source_ledger == stems[:len(source_ledger)])
         ok &= require_contract('restored_partial_migration_ledger_matches',
-                               restored_ledger == source_ledger == expected_prefix
-                               and len(restored_ledger) < len(stems),
+                               restored_ledger == source_ledger and source_ledger_is_prefix,
                                f'ledger={len(restored_ledger)},source={len(source_ledger)},target={len(stems)}')
         restored_sentinel = admin(sentinel_sql, restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
         ok &= require_contract('restored_synthetic_sentinel_matches_source',
