@@ -11,6 +11,9 @@ import tempfile
 import os
 import stat
 import sys
+import datetime
+import json
+from unittest import mock
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -130,6 +133,8 @@ def test_global_replication_and_external_side_effects_rejected():
         (b"SELECT 1 INTO OUTFILE '/tmp/output';", "DUMP_UNSAFE_STATEMENT_EXTERNAL_FILE_OPERATION"),
         (b"CREATE EVENT `e` ON SCHEDULE EVERY 1 DAY DO SELECT 1;", "DUMP_UNSAFE_STATEMENT_UNEXPECTED_SERVER_OBJECT"),
         (b"CREATE DEFINER=`root`@`localhost` TRIGGER `t` BEFORE INSERT ON `synthetic` FOR EACH ROW SET NEW.`id`=1;", "DUMP_UNSAFE_STATEMENT_DEFINER_UNSUPPORTED"),
+        (b"CREATE VIEW `v` AS SELECT 1;", "DUMP_UNSAFE_STATEMENT_UNEXPECTED_SERVER_OBJECT"),
+        (b"CREATE OR REPLACE VIEW `v` AS SELECT 1;", "DUMP_UNSAFE_STATEMENT_UNEXPECTED_SERVER_OBJECT"),
         (b"GRANT ALL ON *.* TO 'x'@'localhost';", "DUMP_UNSAFE_STATEMENT_PRIVILEGED_OR_SERVER_OPERATION"),
         (b"SELECT LOAD_FILE('/etc/passwd');", "DUMP_UNSAFE_STATEMENT_EXTERNAL_FILE_OPERATION"),
     )
@@ -159,7 +164,11 @@ def test_successor_pins_and_receipt_contract_are_separate_from_legacy():
     assert RESTORE.APPLICATION_SHA == "ee3d29818ff1647d82087446dfaf017ca688cb77"
     import inspect
     params = inspect.signature(RESTORE.restore).parameters
-    assert list(params) == ["_args", "_kwargs"]  # evidence arguments are ignored and restore always refuses
+    assert list(params) == ["manifest_path", "policy_path", "config_path", "receipt_path"]
+    argv = RESTORE._mysql_argv({"mysql": {"host": "wpcg_restore_0123456789", "port": 3306,
+        "defaults_file": "/tmp/mysql.cnf", "client": "/usr/bin/mysql",
+        "dump_client": "/usr/bin/mysqldump"}}, database="wpcaregrid", dump=True)
+    assert "--connect-timeout=5" not in argv  # mysqldump does not implement this mysql-client option
 
 
 def test_admission_tuple_requires_every_exact_pin_and_matching_fingerprint():
@@ -193,13 +202,7 @@ def test_admission_tuple_requires_every_exact_pin_and_matching_fingerprint():
             raise AssertionError("Invalid identity evidence accepted")
 
 
-def test_no_release_manifest_means_historical_only_and_restore_refuses():
-    try:
-        RESTORE.verify_release_manifest("/synthetic/manifest.json")
-    except RESTORE.RestoreRefused as error:
-        assert str(error) == "TRUSTED_RELEASE_MANIFEST_VERIFIER_UNAVAILABLE"
-    else:
-        raise AssertionError("Unverified release manifest accepted")
+def test_no_release_manifest_means_historical_only():
     receipt = RESTORE.historical_receipt(
         backup_sha=RESTORE.BACKUP_SHA256, application_sha=RESTORE.APPLICATION_SHA,
         recovery_tool_sha=RESTORE.RECOVERY_TOOL_SHA, started_at="2026-11-15T00:00:00+00:00",
@@ -210,29 +213,212 @@ def test_no_release_manifest_means_historical_only_and_restore_refuses():
     for name in ("complete_trigger_definition_and_definer_verified", "exact_data_integrity_verified",
                  "protected_config_and_app_key_recovery_verified", "release_manifest_verified"):
         assert receipt["assertions"][name] is False
-    try:
-        RESTORE.restore()
-    except RESTORE.RestoreRefused as error:
-        assert str(error) == "RELEASE_MANIFEST_AND_ISOLATED_DESTINATION_REQUIRED"
-    else:
-        raise AssertionError("Restore proceeded without trusted manifest and isolated destination")
     assert "classification" not in inspect.signature(RESTORE.historical_receipt).parameters
     assert "source_config_fingerprint" not in inspect.signature(RESTORE.main).parameters
 
 
-def test_restore_cli_refuses_before_mysql_or_manifest_access():
-    assert not hasattr(RESTORE, "_mysql")
-    previous_manifest = RESTORE.verify_release_manifest
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("Refusal path attempted external access")
-    RESTORE.verify_release_manifest = forbidden
-    try:
-        error = io.StringIO()
-        with contextlib.redirect_stderr(error):
-            assert RESTORE.main(["restore"]) == 1
-        assert "RELEASE_MANIFEST_AND_ISOLATED_DESTINATION_REQUIRED" in error.getvalue()
-    finally:
-        RESTORE.verify_release_manifest = previous_manifest
+def _write_json(path, value):
+    path.write_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+    os.chmod(path, 0o600)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _release_fixture(directory):
+    directory = Path(directory)
+    schema = "wpcg_recovery_restore_20261115_a1b2c3d4"
+    approved_definer = "restore_owner@localhost"
+    archive = gzip.compress(SAFE_DUMP)
+    backup_path = directory / "backup.sql.gz"
+    backup_path.write_bytes(archive)
+    os.chmod(backup_path, 0o600)
+    config_path = directory / "recovered.env"
+    config_path.write_bytes(b"APP_KEY=base64:synthetic-test-key\nAPP_ENV=production\n")
+    os.chmod(config_path, 0o600)
+    defaults_path = directory / "mysql.cnf"
+    defaults_path.write_text("[client]\nuser=restore\n", encoding="ascii")
+    os.chmod(defaults_path, 0o600)
+    config_sha, key_sha = RESTORE._config_identity(config_path, owner_uid=os.geteuid())
+    source_sha = "d" * 40
+    server_uuid = "123e4567-e89b-42d3-a456-426614174000"
+    policy = {
+        "schema_version": 1, "policy_id": "synthetic-policy-v1",
+        "destination_identity": {"environment_id": "recovery-env", "host_id": "isolated-host"},
+        "mysql": {"host": "wpcg_restore_0123456789", "port": 3306,
+                  "server_uuid": server_uuid, "defaults_file": str(defaults_path),
+                  "client": "/usr/bin/mysql", "dump_client": "/usr/bin/mysqldump"},
+        "isolation": {"approved": True, "kind": "disposable_mysql_container",
+                      "network_id": "wpcg_restore_net_0123456789", "public_ports": False},
+    }
+    policy_path = directory / "destination-policy.json"
+    policy_sha = _write_json(policy_path, policy)
+    plan = RESTORE.audit_sql(SAFE_DUMP, schema, approved_definer)
+    trigger = {"name": "synthetic_bi", "table": "synthetic", "event": "INSERT",
+               "timing": "BEFORE", "orientation": "ROW", "definer": approved_definer,
+               "action_sha256": "e" * 64}
+    now = datetime.datetime.now(datetime.timezone.utc)
+    manifest = {
+        "schema_version": 1, "manifest_id": "synthetic-manifest-v1",
+        "owner_authorization_id": "synthetic-owner-approval",
+        "release": {"application_sha": source_sha, "base_sha": "b" * 40, "artifact_sha256": "a" * 64},
+        "backup": {"id": "synthetic-backup-v1", "path": str(backup_path),
+                   "sha256": hashlib.sha256(archive).hexdigest(), "size_bytes": len(archive),
+                   "source_schema": "wpcaregrid"},
+        "source_identity": {"environment_id": "source-env", "host_id": "source-host",
+                             "database_id": "source-db", "server_uuid": "source-server-uuid",
+                             "database": "wpcaregrid", "application_sha": source_sha},
+        "destination_policy_sha256": policy_sha, "target_schema": schema,
+        "database_charset": plan["charset"], "database_collation": plan["collation"],
+        "mysql": {"version": "8.4.11", "server_uuid": server_uuid, "log_bin": True,
+                  "binlog_format": "ROW", "trust_function_creators": False},
+        "approved_definer": approved_definer,
+        "expected": {"table_names": plan["expected_tables"],
+                     "table_row_counts": {"migrations": 0, "synthetic": 1},
+                     "schema_sha256": "f" * 64, "ledger_sha256": "1" * 64,
+                     "data_sha256": "2" * 64, "triggers": [trigger],
+                     "migrations": ["2026_11_02_000001_create_deployment_transition_fences_table"]},
+        "config": {"identity_sha256": config_sha, "app_key_fingerprint_sha256": key_sha},
+        "issued_at": now.isoformat(),
+        "expires_at": (now + datetime.timedelta(hours=1)).isoformat(),
+    }
+    # The empty migration list is a valid restored pre-migration snapshot.
+    manifest_path = directory / "release-manifest.json"
+    _write_json(manifest_path, manifest)
+    return manifest_path, policy_path, config_path, manifest
+
+
+def test_manifest_and_destination_policy_are_protected_and_bound():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, _config_path, manifest = _release_fixture(directory)
+        checked, manifest_sha, _policy, policy_sha = RESTORE.verify_manifest_and_policy(
+            manifest_path, policy_path, owner_uid=os.geteuid())
+        assert checked["manifest_id"] == manifest["manifest_id"]
+        assert manifest_sha == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        assert policy_sha == manifest["destination_policy_sha256"]
+        bad_policy = json.loads(policy_path.read_text())
+        bad_policy["isolation"]["public_ports"] = True
+        bad_policy_path = Path(directory) / "bad-policy.json"
+        _write_json(bad_policy_path, bad_policy)
+        try:
+            RESTORE._policy_object(bad_policy)
+        except RESTORE.RestoreRefused as error:
+            assert str(error) == "DESTINATION_POLICY_NOT_ISOLATED"
+        else:
+            raise AssertionError("Publicly exposed destination accepted")
+        for mutate, expected_code in (
+                (lambda m: m["source_identity"].update(application_sha="c" * 40), "SOURCE_RELEASE_BINDING_MISMATCH"),
+                (lambda m: m.update(approved_definer="root@localhost"), "DEFINER_ALLOWLIST_INVALID"),
+                (lambda m: m.update(expires_at="2020-01-01T00:00:00+00:00"), "RELEASE_MANIFEST_EXPIRED_OR_INVALID")):
+            invalid = json.loads(manifest_path.read_text())
+            mutate(invalid)
+            try:
+                RESTORE._manifest_object(invalid)
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == expected_code
+            else:
+                raise AssertionError(f"Invalid manifest accepted: {expected_code}")
+
+
+def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, config_path, manifest = _release_fixture(directory)
+        receipt_path = Path(directory) / "restore-receipt.json"
+        observed = {"schema_sha256": "f" * 64, "schema_components": {},
+                    "ledger_sha256": "1" * 64, "data_sha256": "2" * 64, "data_bytes": 123,
+                    "table_row_counts": {"migrations": 0, "synthetic": 1},
+        "migrations": manifest["expected"]["migrations"], "triggers": manifest["expected"]["triggers"]}
+        with (mock.patch.object(RESTORE, "_mysql_identity", return_value={
+                    "version": "8.4.11", "server_uuid": manifest["mysql"]["server_uuid"],
+                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
+              mock.patch.object(RESTORE, "mysql_query", return_value=b"0\n"),
+              mock.patch.object(RESTORE, "_create_database") as create_db,
+              mock.patch.object(RESTORE, "_run_mysql_import") as import_dump,
+              mock.patch.object(RESTORE, "_inventory", return_value=observed),
+              mock.patch.object(RESTORE, "_drop_database") as drop_db):
+            receipt = RESTORE._restore_impl(manifest_path, policy_path, config_path, receipt_path,
+                                            owner_uid=os.geteuid())
+            assert receipt["restore"] == "PASS"
+            assert receipt["release_bound"] is True
+            assert receipt["backup"]["id"] == "synthetic-backup-v1"
+            create_db.assert_called_once()
+            import_dump.assert_called_once()
+            pending_path = receipt_path.with_suffix(".pending.json")
+            assert pending_path.exists()
+            cleanup = RESTORE._cleanup_restore_impl(manifest_path, policy_path, receipt_path,
+                                                    owner_uid=os.geteuid())
+            assert cleanup["cleanup"] == "PASS"
+            assert cleanup["restore_receipt_sha256"] == hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            drop_db.assert_called_once_with(mock.ANY, manifest["target_schema"])
+            assert not pending_path.exists()
+            assert receipt_path.with_suffix(".cleanup.json").exists()
+
+
+def test_existing_receipt_blocks_before_any_database_access():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, config_path, _manifest = _release_fixture(directory)
+        receipt_path = Path(directory) / "restore-receipt.json"
+        receipt_path.write_text("preserve", encoding="ascii")
+        with mock.patch.object(RESTORE, "_mysql_identity", side_effect=AssertionError("DB reached")):
+            try:
+                RESTORE._restore_impl(manifest_path, policy_path, config_path, receipt_path,
+                                      owner_uid=os.geteuid())
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == "RECEIPT_ALREADY_EXISTS"
+            else:
+                raise AssertionError("Existing receipt was overwritten")
+        assert receipt_path.read_text(encoding="ascii") == "preserve"
+
+
+def test_existing_target_database_is_never_overwritten():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, config_path, _manifest = _release_fixture(directory)
+        receipt_path = Path(directory) / "restore-receipt.json"
+        with (mock.patch.object(RESTORE, "_mysql_identity", return_value={
+                    "version": "8.4.11", "server_uuid": "123e4567-e89b-42d3-a456-426614174000",
+                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
+              mock.patch.object(RESTORE, "mysql_query", return_value=b"1\n"),
+              mock.patch.object(RESTORE, "_create_database") as create_db):
+            try:
+                RESTORE._restore_impl(manifest_path, policy_path, config_path, receipt_path,
+                                      owner_uid=os.geteuid())
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == "TARGET_SCHEMA_ALREADY_EXISTS"
+            else:
+                raise AssertionError("Existing target schema was accepted")
+            create_db.assert_not_called()
+        assert not receipt_path.exists()
+
+
+def test_production_entrypoint_requires_root():
+    if os.geteuid() != 0:
+        try:
+            RESTORE.restore("manifest", "policy", "config", "receipt")
+        except RESTORE.RestoreRefused as error:
+            assert str(error) == "ROOT_EXECUTION_REQUIRED"
+        else:
+            raise AssertionError("Non-root restore entrypoint accepted")
+
+
+def test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, config_path, _manifest = _release_fixture(directory)
+        receipt_path = Path(directory) / "restore-receipt.json"
+        with (mock.patch.object(RESTORE, "_mysql_identity", return_value={
+                    "version": "8.4.11", "server_uuid": "123e4567-e89b-42d3-a456-426614174000",
+                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
+              mock.patch.object(RESTORE, "mysql_query", side_effect=[b"0\n", b"1\n"]),
+              mock.patch.object(RESTORE, "_create_database", side_effect=RuntimeError("lost acknowledgement")),
+              mock.patch.object(RESTORE, "_drop_database") as drop_db):
+            try:
+                RESTORE._restore_impl(manifest_path, policy_path, config_path, receipt_path,
+                                      owner_uid=os.geteuid())
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == "RESTORE_CREATE_STATE_UNKNOWN_HOLD"
+            else:
+                raise AssertionError("Ambiguous create was not held")
+            drop_db.assert_not_called()
+        journal_path = receipt_path.with_suffix(".pending.json")
+        journal, _digest = RESTORE.read_protected_json(journal_path, owner_uid=os.geteuid(), maximum=32 * 1024)
+        assert journal["state"] == "CREATE_STATE_UNKNOWN"
 
 
 def test_comments_and_quoted_data_are_not_sql_directives():
@@ -324,8 +510,13 @@ def main():
         test_definer_requires_exact_explicit_pin,
         test_successor_pins_and_receipt_contract_are_separate_from_legacy,
         test_admission_tuple_requires_every_exact_pin_and_matching_fingerprint,
-        test_no_release_manifest_means_historical_only_and_restore_refuses,
-        test_restore_cli_refuses_before_mysql_or_manifest_access,
+        test_no_release_manifest_means_historical_only,
+        test_manifest_and_destination_policy_are_protected_and_bound,
+        test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql,
+        test_existing_receipt_blocks_before_any_database_access,
+        test_existing_target_database_is_never_overwritten,
+        test_production_entrypoint_requires_root,
+        test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,
         test_backup_hash_gzip_and_metadata_checks,
