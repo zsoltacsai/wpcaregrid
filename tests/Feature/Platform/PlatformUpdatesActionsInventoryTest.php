@@ -168,7 +168,12 @@ class PlatformUpdatesActionsInventoryTest extends TestCase
         $entries = ActionsLockParser::parse((string) file_get_contents($real));
 
         $this->assertNotNull($entries);
-        $this->assertSame(7, count($entries));
+        $this->assertSame(8, count($entries));
+        $this->assertContains([
+            'name' => 'actions/upload-artifact',
+            'ref' => 'v7.0.2',
+            'commit' => 'sha1-cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+        ], $entries);
         $this->assertSame($before, hash_file('sha256', $real));
         // Reading through the inventory leaves the file alone too.
         $this->enable();
