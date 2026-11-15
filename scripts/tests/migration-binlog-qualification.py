@@ -396,9 +396,13 @@ def dump_error_class(text):
 
 def file_sha256_matches(path, expected):
     try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected
+        return sha256_matches(Path(path).read_bytes(), expected)
     except OSError:
         return False
+
+
+def sha256_matches(content, expected):
+    return hashlib.sha256(content).hexdigest() == expected
 
 
 def self_test():
@@ -413,8 +417,10 @@ def self_test():
         backup.write_bytes(b'synthetic backup')
         receipt = hashlib.sha256(backup.read_bytes()).hexdigest()
         assert file_sha256_matches(backup, receipt)
+        assert sha256_matches(backup.read_bytes(), receipt)
         backup.write_bytes(b'corrupted backup')
         assert not file_sha256_matches(backup, receipt)
+        assert not sha256_matches(backup.read_bytes(), receipt)
         assert not file_sha256_matches(Path(tmp) / 'missing.sql', receipt)
     original_values = {key: os.environ.get(key) for key in
                        ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
@@ -716,6 +722,19 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
     accounts = [app, dba, runtime]
     passwords = {app: app_pw, dba: secrets.token_hex(16), runtime: runtime_pw}
     ok = True
+    # A nonempty sentinel makes the restore's data-integrity checks meaningful.
+    admin("INSERT INTO deployment_transition_fences (fence_key,state,operation_id,generation,boot_id,journal_seq,"
+          "journal_head_hash,evidence_digest,created_at,updated_at,phase2b_state,phase2b_tuple_digest,"
+          "phase2b_event_sequence) VALUES ('restore_sentinel','HOLD',"
+          "'66666666-6666-4666-8666-666666666666',1,'77777777-7777-4777-8777-777777777777',1,"
+          "REPEAT('c',64),REPEAT('d',64),NOW(),NOW(),'HOLD',"
+          "'88888888-8888-4888-8888-888888888888',1)", schema)
+    sentinel_sql = ("SELECT fence_key,state,operation_id,generation,boot_id,journal_seq,journal_head_hash,"
+                    "evidence_digest,phase2b_state,phase2b_tuple_digest,phase2b_event_sequence "
+                    "FROM deployment_transition_fences WHERE fence_key='restore_sentinel'")
+    source_sentinel = admin(sentinel_sql, schema)
+    ok &= require_contract('synthetic_restore_source_sentinel_present', bool(source_sentinel))
+    source_ledger = ledger(schema)
     source_uuid = admin('SELECT @@GLOBAL.server_uuid')
     restore_uuid = admin('SELECT @@GLOBAL.server_uuid', host=RESTORE_HOST, port=RESTORE_PORT,
                          root_password=RESTORE_ROOT_PW)
@@ -793,20 +812,24 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
         ok &= require_contract('synthetic_backup_integrity_verified_before_import', backup_intact)
         if not backup_intact:
             return False
+        import_payload = dump_path.read_bytes()
+        backup_payload_valid = sha256_matches(import_payload, backup_sha)
+        ok &= require_contract('synthetic_backup_import_payload_matches_receipt', backup_payload_valid)
+        if not backup_payload_valid:
+            return False
 
         admin(f'CREATE DATABASE `{restored}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
               host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
         for account, password in passwords.items():
             admin(f"CREATE USER '{account}'@'%' IDENTIFIED BY '{password}'",
                   host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
-        with dump_path.open('rb') as stream:
-            restore_env = child_environment()
-            restore_env['MYSQL_PWD'] = RESTORE_ROOT_PW
-            imported = subprocess.run([MYSQL, '--protocol=TCP', '--connect-timeout=5',
-                                        f'--host={RESTORE_HOST}', f'--port={RESTORE_PORT}', '--user=root',
-                                        '--binary-mode', '--default-character-set=utf8mb4'],
-                                       env=restore_env, stdin=stream, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE, timeout=180, check=False)
+        restore_env = child_environment()
+        restore_env['MYSQL_PWD'] = RESTORE_ROOT_PW
+        imported = subprocess.run([MYSQL, '--protocol=TCP', '--connect-timeout=5',
+                                    f'--host={RESTORE_HOST}', f'--port={RESTORE_PORT}', '--user=root',
+                                    '--binary-mode', '--default-character-set=utf8mb4'],
+                                   env=restore_env, input=import_payload, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=180, check=False)
         ok &= require_contract('synthetic_restore_imported', imported.returncode == 0,
                                'mysql_import_succeeded' if imported.returncode == 0 else 'mysql_import_failed')
         if imported.returncode:
@@ -818,8 +841,12 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
         restored_ledger = ledger(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
         expected_prefix = [name for name in stems if name in set(restored_ledger)]
         ok &= require_contract('restored_partial_migration_ledger_matches',
-                               restored_ledger == expected_prefix and len(restored_ledger) < len(stems),
-                               f'ledger={len(restored_ledger)},target={len(stems)}')
+                               restored_ledger == source_ledger == expected_prefix
+                               and len(restored_ledger) < len(stems),
+                               f'ledger={len(restored_ledger)},source={len(source_ledger)},target={len(stems)}')
+        restored_sentinel = admin(sentinel_sql, restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_synthetic_sentinel_matches_source',
+                               restored_sentinel == source_sentinel)
         source_counts = table_counts(schema)
         target_counts = table_counts(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
         ok &= require_contract('restored_table_row_counts_match_source', target_counts == source_counts,
