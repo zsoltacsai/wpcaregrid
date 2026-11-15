@@ -26,11 +26,11 @@ TRANSACTION_NAME = "staging_next_db_transaction_1_4_11.py"
 BINDING_NAME = "deployment_target_binding_1_4_11.py"
 CONTRACT_NAME = "deployment_environment_contract.py"
 ENTRY_SHA256 = "32569406461ba94585b61ef4361ab19dcc6dd54b5eda47b66651575d183b3f4d"
-BACKEND_SHA256 = "1f8cf2a766651468290854eeea403faf0e81fd80317a97a53d1e1c229a26f043"
-TRANSACTION_SHA256 = "061194cee059940e73753ad664157e16bdc88043c0b08ddfcda896139f0c60a1"
+BACKEND_SHA256 = "566702b590b22fb7057f3e44ef536aa7a60cf0e3e8e3a3c4cce00a37ce42b84e"
+TRANSACTION_SHA256 = "10339c5338c001eb2bc383ef322daeaa97d2026be32f25e3c4a87a2689937c8f"
 BINDING_SHA256 = "e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16"
 CONTRACT_SHA256 = "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1"
-ARTIFACT_SHA256 = "8ca29b5a5d80eefda30a5a1d7dc20f18d5329916a92de79cca36e9b111b2b891"
+ARTIFACT_SHA256 = "aa1ba0bf701c403875a0fd6404ef11a33d3ceadbe9ed0985082081a26bffa989"
 EXPECTED_DEPLOY_UID = 996
 MYSQL_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
 PHP_FPM_UID = 33
@@ -51,7 +51,7 @@ POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.11.json")
 SUDOERS = Path("/etc/sudoers.d/wpcaregrid-staging-next-1.4.11")
 PHASE_B_POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.11.json")
 LEGACY_PHASE_B_CONTROLS = tuple(
-    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9")
+    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9", "1.4.10")
     for path in (
         Path(f"/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-{version}.json"),
         Path(f"/etc/sudoers.d/wpcaregrid-staging-next-{version}"),

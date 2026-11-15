@@ -65,7 +65,7 @@ HELPER_VERSION = "1.4.11"
 HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v15"
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.11.json")
 LEGACY_PHASE_B_CONTROLS = tuple(
-    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9")
+    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9", "1.4.10")
     for path in (
         Path(f"/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-{version}.json"),
         Path(f"/etc/sudoers.d/wpcaregrid-staging-next-{version}"),
@@ -808,7 +808,7 @@ def _phase2b_expected_definer(profile: StagingProfile) -> str:
         raise DeployRefused("phase2b_dba_definer_configuration_invalid") from None
     values = [line.split("=", 1)[1].strip().strip("\"'") for line in lines
               if line.startswith("DB_PHASE2B_TRIGGER_DEFINER=")]
-    _require(len(values) == 1 and re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", values[0]) is not None,
+    _require(len(values) == 1 and _TRANSACTION_MODULE._phase2b_expected_definer(values[0]),
              "phase2b_dba_definer_configuration_missing")
     return values[0]
 

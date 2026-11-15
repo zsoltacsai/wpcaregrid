@@ -27,7 +27,7 @@ SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/staging-next/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/staging-next/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.11/wpcaregrid-deploy-staging-next-priv")
 # Refreshed from the versioned helper manifest by the cross-artifact consistency test.
-HELPER_ARTIFACT_SHA256 = "8ca29b5a5d80eefda30a5a1d7dc20f18d5329916a92de79cca36e9b111b2b891"
+HELPER_ARTIFACT_SHA256 = "aa1ba0bf701c403875a0fd6404ef11a33d3ceadbe9ed0985082081a26bffa989"
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024

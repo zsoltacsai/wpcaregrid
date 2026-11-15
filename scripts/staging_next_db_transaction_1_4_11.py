@@ -958,8 +958,8 @@ def _phase2b_expected_definer(value: object) -> bool:
     if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", user) is None
             or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}", host) is None):
         return False
-    reserved = {"root", "mysql", "mariadb", "sys", "system", "health_check",
-                "debian-sys-maint", "mysql.session", "mysql.sys", "mysql.infoschema"}
+    reserved = {"root", "mysql", "mariadb", "mariadb.sys", "sys", "system", "public",
+                "health_check", "debian-sys-maint", "mysql.session", "mysql.sys", "mysql.infoschema"}
     return user.casefold() not in reserved
 
 

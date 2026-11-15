@@ -8,6 +8,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +35,7 @@ class Phase2BDefinerTests(unittest.TestCase):
     def test_reserved_and_pattern_identities_are_rejected(self):
         for value in (
             "root@localhost", "ROOT@localhost", "mysql@localhost", "mariadb@localhost",
+            "mariadb.sys@localhost", "PUBLIC@localhost",
             "sys@localhost", "system@localhost", "mysql.session@localhost",
             "wpcg_phase2b@%", "wpcg_phase2b@db_%", "wpcg_phase2b@db.example%",
             "%@localhost", "wpcg_%@localhost", "wpcg_phase2b@db_host",
@@ -41,6 +43,30 @@ class Phase2BDefinerTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertFalse(TRANSACTION._phase2b_expected_definer(value))
+
+    def test_backend_rejects_unsafe_definer_before_migration(self):
+        profile = type("Profile", (), {
+            "shared_env_file": Path("/synthetic/shared/.env"),
+            "expected_owner_uid": 0,
+        })()
+        for identity in ("root@localhost", "phase2b@%", "mariadb.sys@localhost"):
+            with self.subTest(identity=identity), patch.object(
+                BACKEND, "_read_regular_nofollow",
+                return_value=f"DB_PHASE2B_TRIGGER_DEFINER={identity}\n".encode(),
+            ):
+                with self.assertRaises(BACKEND.DeployRefused) as error:
+                    BACKEND._phase2b_expected_definer(profile)
+                self.assertEqual(str(error.exception), "phase2b_dba_definer_configuration_missing")
+
+    def test_installer_and_runtime_guard_include_1410_phase_b_routes(self):
+        legacy = {str(path) for path in INSTALLER.LEGACY_PHASE_B_CONTROLS}
+        runtime_legacy = {str(path) for path in BACKEND.LEGACY_PHASE_B_CONTROLS}
+        expected = {
+            "/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.10.json",
+            "/etc/sudoers.d/wpcaregrid-staging-next-1.4.10",
+        }
+        self.assertTrue(expected <= legacy)
+        self.assertTrue(expected <= runtime_legacy)
 
     def test_manifest_installer_and_controller_pins_match_exact_artifacts(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
