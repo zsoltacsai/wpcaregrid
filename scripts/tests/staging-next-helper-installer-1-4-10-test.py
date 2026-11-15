@@ -125,10 +125,21 @@ class StagingNextHelperInstallerTests(unittest.TestCase):
 
     def test_phase_b_policy_must_be_absent_even_when_dangling_symlink(self):
         policy = self.root / "phase-b.json"
-        INSTALLER._verify_phase_b_disabled(policy)
-        policy.symlink_to(self.root / "missing-target")
-        with self.assertRaises(INSTALLER.InstallError):
+        with patch.object(INSTALLER, "LEGACY_PHASE_B_CONTROLS", ()):
             INSTALLER._verify_phase_b_disabled(policy)
+            policy.symlink_to(self.root / "missing-target")
+            with self.assertRaises(INSTALLER.InstallError):
+                INSTALLER._verify_phase_b_disabled(policy)
+
+    def test_install_refuses_if_any_legacy_phase_b_control_remains(self):
+        policy = self.root / "phase-b.json"
+        legacy_policy = self.root / "legacy-phase-b.json"
+        legacy_sudoers = self.root / "legacy-sudoers"
+        legacy_policy.write_text("synthetic only")
+        with patch.object(INSTALLER, "LEGACY_PHASE_B_CONTROLS", (legacy_policy, legacy_sudoers)):
+            with self.assertRaises(INSTALLER.InstallError) as caught:
+                INSTALLER._verify_phase_b_disabled(policy)
+        self.assertEqual(caught.exception.code, "legacy_phase_b_control_present")
 
     def test_sudoers_is_fixed_to_versioned_staging_next_operations(self):
         rules = INSTALLER._sudoers("deploy-staging-next").decode("ascii")

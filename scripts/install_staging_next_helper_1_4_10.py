@@ -26,11 +26,11 @@ TRANSACTION_NAME = "staging_next_db_transaction_1_4_10.py"
 BINDING_NAME = "deployment_target_binding.py"
 CONTRACT_NAME = "deployment_environment_contract.py"
 ENTRY_SHA256 = "73ad1cca452aefb76b3f0e0f380ee950d69a50da008719000b41690bcb7dc969"
-BACKEND_SHA256 = "4ac51b4a57d4647f27c1c62143a5810987123dc209e5fee75c653c51fac10125"
+BACKEND_SHA256 = "2ac86e5b04f0a7312dc701757c7b9912f006cc437030a7a57c6d70480b8b2ec2"
 TRANSACTION_SHA256 = "580a52530c9229ce4be0008a36657bdae113e392e6c21c09ad8125306092b8e9"
 BINDING_SHA256 = "987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910"
 CONTRACT_SHA256 = "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1"
-ARTIFACT_SHA256 = "00e0d8b618bb1249a6725fa3314f7a3f4495c12ef7654a8942528719d62ebe7f"
+ARTIFACT_SHA256 = "1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed"
 EXPECTED_DEPLOY_UID = 996
 MYSQL_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
 PHP_FPM_UID = 33
@@ -50,6 +50,13 @@ BINDING_MODULE_NAME = "_wpcg_deployment_target_binding_v1"
 POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-1.4.10.json")
 SUDOERS = Path("/etc/sudoers.d/wpcaregrid-staging-next-1.4.10")
 PHASE_B_POLICY = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.10.json")
+LEGACY_PHASE_B_CONTROLS = tuple(
+    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9")
+    for path in (
+        Path(f"/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-{version}.json"),
+        Path(f"/etc/sudoers.d/wpcaregrid-staging-next-{version}"),
+    )
+)
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -118,8 +125,22 @@ def _check_absent(path: Path):
 
 
 def _verify_phase_b_disabled(path: Path = PHASE_B_POLICY):
-    if path.exists() or path.is_symlink():
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        _fail("phase_b_policy_state_unknown")
+    else:
         _fail("phase_b_policy_must_remain_disabled")
+    for legacy_control in LEGACY_PHASE_B_CONTROLS:
+        try:
+            os.lstat(legacy_control)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _fail("legacy_phase_b_control_state_unknown")
+        _fail("legacy_phase_b_control_present")
 
 
 def _read_source(path: Path, *, expected_sha: str, maximum: int = 2_000_000) -> bytes:

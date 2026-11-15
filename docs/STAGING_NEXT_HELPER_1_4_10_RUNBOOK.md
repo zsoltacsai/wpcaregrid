@@ -15,12 +15,12 @@ changed by this source work.
 | File | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py` | `73ad1cca452aefb76b3f0e0f380ee950d69a50da008719000b41690bcb7dc969` |
-| `scripts/staging_next_deploy_backend_1_4_10.py` | `4ac51b4a57d4647f27c1c62143a5810987123dc209e5fee75c653c51fac10125` |
+| `scripts/staging_next_deploy_backend_1_4_10.py` | `2ac86e5b04f0a7312dc701757c7b9912f006cc437030a7a57c6d70480b8b2ec2` |
 | `scripts/staging_next_db_transaction_1_4_10.py` | `580a52530c9229ce4be0008a36657bdae113e392e6c21c09ad8125306092b8e9` |
 | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
 | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| `scripts/install_staging_next_helper_1_4_10.py` (installer) | `99742ae44ea8c82e37d1cd5f54d95039ccb32b81354ce482190b900b7e2233f6` |
-| helper artifact digest (printed by the installer/probe) | `00e0d8b618bb1249a6725fa3314f7a3f4495c12ef7654a8942528719d62ebe7f` |
+| `scripts/install_staging_next_helper_1_4_10.py` (installer) | `3764891b897d5c7e83d15cece014abb45366867caa873648b66fa24ba7cd8115` |
+| helper artifact digest (printed by the installer/probe) | `1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed` |
 
 ## Step 0 - read-only preflight (permitted now; no GO needed beyond the read-only authorization)
 

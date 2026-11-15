@@ -3,8 +3,9 @@
 Helper 1.4.10 is based on helper 1.4.9 and adds a journaled DBA handoff at the
 two pinned Phase 2B trigger migrations. It pauses before those migrations, keeps
 the existing release fences in place, and resumes only after consuming a
-transaction-bound, root-protected DBA receipt. Helper 1.4.9 and older releases
-remain unchanged and separately installed.
+transaction-bound, root-protected DBA receipt. Helper 1.4.9 and older release
+files remain unchanged. Their Phase B access paths must be disabled before 1.4.10
+can be installed or run for a database-changing release.
 
 This procedure installs only the versioned staging-next helper. It does not
 install or deploy Laravel, run migrations, enable the Phase B database policy,
@@ -20,12 +21,12 @@ not mean the helper is installed on staging; no host has been read or changed.
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
 | Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py` | `73ad1cca452aefb76b3f0e0f380ee950d69a50da008719000b41690bcb7dc969` |
-| Backend | `scripts/staging_next_deploy_backend_1_4_10.py` | `4ac51b4a57d4647f27c1c62143a5810987123dc209e5fee75c653c51fac10125` |
+| Backend | `scripts/staging_next_deploy_backend_1_4_10.py` | `2ac86e5b04f0a7312dc701757c7b9912f006cc437030a7a57c6d70480b8b2ec2` |
 | Transaction module | `scripts/staging_next_db_transaction_1_4_10.py` | `580a52530c9229ce4be0008a36657bdae113e392e6c21c09ad8125306092b8e9` |
 | Target binding | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
 | Environment contract | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| Combined helper artifact | Manifest-derived | `00e0d8b618bb1249a6725fa3314f7a3f4495c12ef7654a8942528719d62ebe7f` |
-| Root installer | `scripts/install_staging_next_helper_1_4_10.py` | `99742ae44ea8c82e37d1cd5f54d95039ccb32b81354ce482190b900b7e2233f6` |
+| Combined helper artifact | Manifest-derived | `1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed` |
+| Root installer | `scripts/install_staging_next_helper_1_4_10.py` | `3764891b897d5c7e83d15cece014abb45366867caa873648b66fa24ba7cd8115` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v15`. Recalculate
 these values from the final merged Git tree (LF bytes) before any installation; a
@@ -58,6 +59,23 @@ different source revision requires a new manifest and review.
   that receipt; the controller does not independently query those facts. Any missing
   or inconsistent attestation leaves the deployment paused.
 * Policy file, sudoers file and Phase B policy/credential paths are versioned `1.4.10`.
+* The installer refuses while any historical Phase B policy or sudoers rule for
+  helper versions `1.4.5` through `1.4.9` exists. The runtime repeats this check
+  before loading the 1.4.10 Phase B policy. This prevents an older sudo-enabled
+  helper from retaining a parallel unpaused migration route. It never deletes
+  or edits those files.
+
+### Version transition prerequisite
+
+Before installation, the authorized host operator must inspect the fixed
+historical paths under `/etc/wpcaregrid-deploy/profiles/` and
+`/etc/sudoers.d/` for `staging-next-phase-b-1.4.5.json` through
+`staging-next-phase-b-1.4.9.json` and `wpcaregrid-staging-next-1.4.5` through
+`wpcaregrid-staging-next-1.4.9`. If any exist, stop. A root-controlled
+transition must disable the corresponding Phase B policy/credential and old
+sudoers entry, verify their absence, and preserve the old helper files for
+rollback. The 1.4.10 installer does not perform this transition. Any retained
+legacy route keeps Phase B on HOLD.
 
 ## Scope of installation
 
@@ -98,7 +116,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.10.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 99742ae44ea8c82e37d1cd5f54d95039ccb32b81354ce482190b900b7e2233f6; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.10.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 3764891b897d5c7e83d15cece014abb45366867caa873648b66fa24ba7cd8115; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,

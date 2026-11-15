@@ -64,6 +64,13 @@ _verify_backup_sql = _TRANSACTION_MODULE._verify_backup_sql
 HELPER_VERSION = "1.4.10"
 HELPER_CONTRACT = "wpcaregrid-staging-next-deploy-v15"
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-1.4.10.json")
+LEGACY_PHASE_B_CONTROLS = tuple(
+    path for version in ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9")
+    for path in (
+        Path(f"/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-{version}.json"),
+        Path(f"/etc/sudoers.d/wpcaregrid-staging-next-{version}"),
+    )
+)
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 
@@ -2048,6 +2055,14 @@ echo json_encode($response,JSON_UNESCAPED_SLASHES);'''
 def _load_phase_b_policy(profile: StagingProfile):
     _require(profile.phase_b_policy_file is not None and profile.phase_b_policy_sha256 is not None,
              "phase_b_policy_unavailable")
+    for legacy_control in LEGACY_PHASE_B_CONTROLS:
+        try:
+            os.lstat(legacy_control)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise DeployRefused("legacy_phase_b_control_state_unknown") from None
+        raise DeployRefused("legacy_phase_b_control_present")
     test_paths = profile.phase_b_test_only_paths if profile.test_only else None
     try:
         return load_execution_policy(

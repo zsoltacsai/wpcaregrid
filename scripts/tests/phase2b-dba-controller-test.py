@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 import stat
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ class Phase2BDbaControllerTests(unittest.TestCase):
         self.tx._lock_fd = 1  # test seam: exercise state logic without filesystem/DB effects
         self.tx._state = self.tx._new_state()
         self.tx._state["state"] = "FENCES_CLOSED"
+
         restore = {
             "backup_sha256": self.identity.backup_sha256,
             "target_schema_sha256": "1" * 64, "target_ledger_sha256": "2" * 64,
@@ -73,6 +75,19 @@ class Phase2BDbaControllerTests(unittest.TestCase):
         }
         self.inventory = [{"name": f"guard_{i}", "definer": "phase2b_guard@localhost", "valid": True}
                           for i in range(6)]
+
+    def test_phase_b_policy_load_holds_when_legacy_route_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            legacy_route = Path(directory) / "old-phase-b-policy.json"
+            legacy_route.write_text("synthetic only")
+            profile = SimpleNamespace(
+                phase_b_policy_file=Path(directory) / "phase-b.json",
+                phase_b_policy_sha256="a" * 64,
+                test_only=False,
+            )
+            with mock.patch.object(BACKEND, "LEGACY_PHASE_B_CONTROLS", (legacy_route,)):
+                with self.assertRaisesRegex(BACKEND.DeployRefused, "legacy_phase_b_control_present"):
+                    BACKEND._load_phase_b_policy(profile)
 
     def start_transaction(self):
         return None

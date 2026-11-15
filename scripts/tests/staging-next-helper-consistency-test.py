@@ -256,7 +256,7 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         active_manifest = json.loads((ROOT / "deploy/release-manifests/staging-next-helper-1.4.10.json")
                                      .read_text(encoding="utf-8"))
         self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, active_manifest["helper_artifact_sha256"])
-        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, "00e0d8b618bb1249a6725fa3314f7a3f4495c12ef7654a8942528719d62ebe7f")
+        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, "1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed")
         self.assertEqual(CONTROLLER.HELPER, Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.10/"
                                                   "wpcaregrid-deploy-staging-next-priv"))
         self.assertEqual((installer.VERSION, installer.CONTRACT),

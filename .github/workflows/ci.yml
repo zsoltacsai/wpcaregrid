@@ -165,6 +165,7 @@ jobs:
           python3 scripts/tests/staging-next-helper-installer-1-4-10-test.py
           python3 scripts/tests/phase2b-dba-controller-test.py
           python3 scripts/tests/staging-next-target-binding-integration-test.py
+          python3 -m py_compile scripts/staging_next_db_transaction_1_4_10.py scripts/staging_next_deploy_backend_1_4_10.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py scripts/install_staging_next_helper_1_4_10.py scripts/tests/phase2b-dba-controller-test.py scripts/tests/staging-next-helper-installer-1-4-10-test.py
           python3 scripts/tests/staging-149-preflight-test.py
           python3 scripts/tests/staging-149-stage-sources-test.py
           python3 scripts/tests/staging-149-stage-on-host-test.py
