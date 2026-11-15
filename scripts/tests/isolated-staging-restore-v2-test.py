@@ -275,6 +275,7 @@ def _release_fixture(directory):
                      "table_row_counts": {"migrations": 0, "synthetic": 1},
                      "schema_sha256": "f" * 64, "ledger_sha256": "1" * 64,
                      "data_sha256": "2" * 64, "triggers": [trigger],
+                     "definer_select_tables": ["migrations"],
                      "migrations": ["2026_11_02_000001_create_deployment_transition_fences_table"]},
         "config": {"identity_sha256": config_sha, "app_key_fingerprint_sha256": key_sha},
         "issued_at": now.isoformat(),
@@ -331,6 +332,10 @@ def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():
                     "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
               mock.patch.object(RESTORE, "mysql_query", return_value=b"0\n"),
               mock.patch.object(RESTORE, "_create_database") as create_db,
+              mock.patch.object(RESTORE, "verify_definer_lifecycle", return_value={
+                  "account_exists": True, "account_locked": True, "global_privileges": ["USAGE"],
+                  "schema_privileges": ["TRIGGER"], "select_tables": ["migrations"],
+                  "grants_sha256": "3" * 64}),
               mock.patch.object(RESTORE, "_run_mysql_import") as import_dump,
               mock.patch.object(RESTORE, "_inventory", return_value=observed),
               mock.patch.object(RESTORE, "_drop_database") as drop_db):
@@ -338,6 +343,7 @@ def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():
                                             owner_uid=os.geteuid())
             assert receipt["restore"] == "PASS"
             assert receipt["release_bound"] is True
+            assert receipt["assertions"]["definer_account_locked_with_exact_minimal_grants_verified"] is True
             assert receipt["backup"]["id"] == "synthetic-backup-v1"
             create_db.assert_called_once()
             import_dump.assert_called_once()
@@ -368,6 +374,45 @@ def test_existing_receipt_blocks_before_any_database_access():
         assert receipt_path.read_text(encoding="ascii") == "preserve"
 
 
+def test_journal_commit_failure_cannot_leave_a_pass_receipt():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, policy_path, config_path, manifest = _release_fixture(directory)
+        receipt_path = Path(directory) / "restore-receipt.json"
+        journal_path = receipt_path.with_suffix(".pending.json")
+        original_atomic_json = RESTORE._atomic_json
+
+        def fail_final_journal(path, value, **kwargs):
+            if Path(path) == journal_path and value.get("state") == "RESTORE_VERIFIED":
+                raise RESTORE.RestoreRefused("INJECTED_JOURNAL_FAILURE")
+            return original_atomic_json(path, value, **kwargs)
+
+        observed = {"schema_sha256": "f" * 64, "schema_components": {},
+                    "ledger_sha256": "1" * 64, "data_sha256": "2" * 64, "data_bytes": 123,
+                    "table_row_counts": {"migrations": 0, "synthetic": 1},
+                    "migrations": manifest["expected"]["migrations"],
+                    "triggers": manifest["expected"]["triggers"]}
+        with (mock.patch.object(RESTORE, "_mysql_identity", return_value={
+                    "version": "8.4.11", "server_uuid": manifest["mysql"]["server_uuid"],
+                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
+              mock.patch.object(RESTORE, "mysql_query", return_value=b"0\n"),
+              mock.patch.object(RESTORE, "_create_database"),
+              mock.patch.object(RESTORE, "verify_definer_lifecycle", return_value={"account_locked": True}),
+              mock.patch.object(RESTORE, "_run_mysql_import"),
+              mock.patch.object(RESTORE, "_inventory", return_value=observed),
+              mock.patch.object(RESTORE, "_drop_database") as drop_database,
+              mock.patch.object(RESTORE, "_atomic_json", side_effect=fail_final_journal)):
+            try:
+                RESTORE._restore_impl(manifest_path, policy_path, config_path, receipt_path,
+                                      owner_uid=os.geteuid())
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == "INJECTED_JOURNAL_FAILURE"
+            else:
+                raise AssertionError("Injected final journal failure was ignored")
+        drop_database.assert_called_once()
+        assert not receipt_path.exists()
+        assert not journal_path.exists()
+
+
 def test_existing_target_database_is_never_overwritten():
     with tempfile.TemporaryDirectory() as directory:
         manifest_path, policy_path, config_path, _manifest = _release_fixture(directory)
@@ -386,6 +431,30 @@ def test_existing_target_database_is_never_overwritten():
                 raise AssertionError("Existing target schema was accepted")
             create_db.assert_not_called()
         assert not receipt_path.exists()
+
+
+def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
+    policy = {"mysql": {"server_uuid": "server"}}
+    definer = "restore_owner@localhost"
+    expected_grants = (b"GRANT USAGE ON *.* TO `restore_owner`@`localhost`\n"
+                       b"GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`\n"
+                       b"GRANT SELECT ON `wpcg_recovery_restore_20261104_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
+    with mock.patch.object(RESTORE, "mysql_query", side_effect=[b"Y\n", expected_grants]) as query:
+        observed = RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
+    assert observed["account_locked"] is True
+    assert observed["select_tables"] == ["migrations"]
+    assert query.call_count == 2
+    for locked, grants, code in (
+            (b"N\n", expected_grants, "DEFINER_ACCOUNT_NOT_LOCKED"),
+            (b"Y\n", expected_grants + b"GRANT SUPER ON *.* TO restore_owner@localhost\n",
+             "DEFINER_GRANTS_NOT_MINIMAL")):
+        with mock.patch.object(RESTORE, "mysql_query", side_effect=[locked, grants]):
+            try:
+                RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == code
+            else:
+                raise AssertionError(f"Expected {code}")
 
 
 def test_production_entrypoint_requires_root():
@@ -514,6 +583,8 @@ def main():
         test_manifest_and_destination_policy_are_protected_and_bound,
         test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql,
         test_existing_receipt_blocks_before_any_database_access,
+        test_journal_commit_failure_cannot_leave_a_pass_receipt,
+        test_definer_account_must_be_locked_and_have_exact_minimal_grants,
         test_existing_target_database_is_never_overwritten,
         test_production_entrypoint_requires_root,
         test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,

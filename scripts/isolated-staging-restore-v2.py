@@ -730,7 +730,7 @@ def _manifest_object(manifest, *, now=None):
     if definer_user.lower() in {"root", "mysql.sys", "mysql.session", "mysql.infoschema"}:
         refuse("DEFINER_ALLOWLIST_INVALID")
     expected = manifest["expected"]
-    expected_keys = {"table_names", "table_row_counts", "schema_sha256", "ledger_sha256", "data_sha256", "triggers", "migrations"}
+    expected_keys = {"table_names", "table_row_counts", "schema_sha256", "ledger_sha256", "data_sha256", "triggers", "migrations", "definer_select_tables"}
     if not isinstance(expected, dict) or set(expected) != expected_keys:
         refuse("EXPECTED_INVENTORY_INVALID")
     tables = expected["table_names"]
@@ -749,6 +749,12 @@ def _manifest_object(manifest, *, now=None):
             or any(not isinstance(name, str) or not re.fullmatch(r"[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+", name) for name in migrations)
             or len(set(migrations)) != len(migrations)):
         refuse("EXPECTED_LEDGER_INVALID")
+    definer_select_tables = expected["definer_select_tables"]
+    if (not isinstance(definer_select_tables, list) or len(definer_select_tables) > 64
+            or any(not isinstance(name, str) or name not in tables for name in definer_select_tables)
+            or len(set(definer_select_tables)) != len(definer_select_tables)
+            or (expected["triggers"] and not definer_select_tables)):
+        refuse("EXPECTED_DEFINER_GRANTS_INVALID")
     triggers = expected["triggers"]
     if not isinstance(triggers, list) or len(triggers) > 64:
         refuse("EXPECTED_TRIGGER_INVENTORY_INVALID")
@@ -1022,6 +1028,42 @@ def _inventory(policy, schema, manifest, plan):
             "table_row_counts": counts, "migrations": migrations, "triggers": normalized}
 
 
+def _normalized_grant(line):
+    if not isinstance(line, str) or any(ord(c) < 32 for c in line):
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    return " ".join(line.replace("`", "").replace("'", "").replace('"', "").split()).casefold()
+
+
+def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
+    """Require the imported trigger account to exist, be locked, and have exact grants."""
+    if not TARGET_RE.fullmatch(schema) or not DEFINER_RE.fullmatch(approved_definer):
+        refuse("DEFINER_ACCOUNT_CONTRACT_INVALID")
+    user, host = approved_definer.split("@", 1)
+    if not isinstance(select_tables, list) or any(not isinstance(name, str) or not TABLE_RE.fullmatch(name) for name in select_tables):
+        refuse("DEFINER_ACCOUNT_CONTRACT_INVALID")
+    locked = mysql_query(policy,
+        "SELECT account_locked FROM mysql.user WHERE User='" + user + "' AND Host='" + host + "'",
+        database=schema, maximum=32)
+    if locked not in (b"Y\n", b"Y"):
+        refuse("DEFINER_ACCOUNT_NOT_LOCKED")
+    grants_raw = mysql_query(policy, "SHOW GRANTS FOR '" + user + "'@'" + host + "'",
+                             database=schema, maximum=16_384)
+    try:
+        observed = {_normalized_grant(line) for line in grants_raw.decode("utf-8", "strict").splitlines() if line}
+    except UnicodeError:
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    expected = {_normalized_grant("GRANT USAGE ON *.* TO " + user + "@" + host),
+                _normalized_grant("GRANT TRIGGER ON " + schema + ".* TO " + user + "@" + host)}
+    expected.update(_normalized_grant("GRANT SELECT ON " + schema + "." + table + " TO " + user + "@" + host)
+                    for table in select_tables)
+    if observed != expected:
+        refuse("DEFINER_GRANTS_NOT_MINIMAL")
+    return {"account_exists": True, "account_locked": True,
+            "global_privileges": ["USAGE"], "schema_privileges": ["TRIGGER"],
+            "select_tables": sorted(select_tables), "grants_sha256": hashlib.sha256(
+                "\n".join(sorted(observed)).encode("utf-8")).hexdigest()}
+
+
 def _config_identity(path, *, owner_uid=0):
     """Return full-config and APP_KEY fingerprints; never return secret values."""
     descriptor = None
@@ -1193,6 +1235,9 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
         create_attempted = True
         _create_database(policy, plan["create_sql"])
         created = True
+        definer_contract = verify_definer_lifecycle(
+            policy, manifest["target_schema"], manifest["approved_definer"],
+            manifest["expected"]["definer_select_tables"])
         _run_mysql_import(policy, plan["transformed_sql"])
         observed = _inventory(policy, manifest["target_schema"], manifest, plan)
         completed = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -1205,25 +1250,29 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
             "destination_identity": {**policy["destination_identity"], "mysql_server_uuid": identity["server_uuid"]},
             "target_schema": manifest["target_schema"], "started_at": started, "completed_at": completed,
             "observed": observed,
+            "definer_lifecycle": definer_contract,
             "assertions": {
                 "archive_hash_and_integrity": True, "source_environment_host_database_bound": True,
                 "destination_instance_bound_and_isolated": True, "complete_schema_verified": True,
-                "complete_trigger_definition_and_definer_verified": True,
+                "complete_trigger_definition_and_definer_identity_verified": True,
+                "definer_account_locked_with_exact_minimal_grants_verified": True,
                 "exact_data_integrity_verified": True, "migration_ledger_verified": True,
                 "protected_config_and_app_key_recovery_verified": True,
                 "mysql_binlog_row_trust_off_verified": True, "no_global_mysql_settings_changed": True,
             },
             "cleanup": {"status": "retained_for_migration_rehearsal", "journal": str(journal_path)},
         }
-        receipt_sha = _atomic_json(receipt_path, receipt, owner_uid=owner_uid)
         journal["state"] = "RESTORE_VERIFIED"
-        journal["receipt_sha256"] = receipt_sha
+        receipt_payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii") + b"\n"
+        journal["receipt_sha256"] = hashlib.sha256(receipt_payload).hexdigest()
         _atomic_json(journal_path, journal, owner_uid=owner_uid, replace=True)
+        _atomic_json(receipt_path, receipt, owner_uid=owner_uid)
         return receipt
     except Exception:
         if created:
             try:
                 _drop_database(policy, manifest["target_schema"])
+                Path(receipt_path).unlink(missing_ok=True)
                 Path(journal_path).unlink(missing_ok=True)
             except Exception:
                 refuse("RESTORE_FAILED_CLEANUP_HOLD")
