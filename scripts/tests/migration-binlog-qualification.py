@@ -76,21 +76,16 @@ def binlog_trigger_identifier(info):
 
 def mysqlbinlog_query_statement(event):
     lines = [line for line in event.splitlines() if not line.lstrip().startswith('#')]
-    body = '\n'.join(lines).strip()
-    # mysqlbinlog prefixes this Query form with a line-continuation backslash.
+    body = re.sub(r'(?m)^\\', '', '\n'.join(lines)).strip()
     current_schema = None
-    use_pattern = re.compile(r"(?is)^USE\s+[\x60']?([A-Za-z0-9_]+)[\x60']?\s*;\s*")
-    while body:
-        if body.startswith('\\'):
-            body = body[1:].lstrip()
+    saw_use = False
+    for statement in split_sql_statements(body):
+        is_use, use_schema = parse_mysqlbinlog_use(statement)
+        if not is_use:
             continue
-        use = use_pattern.match(body)
-        if use:
-            current_schema = use.group(1)
-            body = body[use.end():].lstrip()
-            continue
-        break
-    return current_schema, body
+        saw_use = True
+        current_schema = use_schema
+    return current_schema, body, saw_use
 
 
 def split_sql_statements(text):
@@ -171,6 +166,23 @@ def split_sql_statements(text):
     return statements
 
 
+def parse_mysqlbinlog_use(statement):
+    if not re.match(r'(?is)^USE\b', statement):
+        return False, None
+    use = re.fullmatch(
+        r"(?is)USE\s+(`(?:``|[^`])+`|'(?:''|[^'])+'|[A-Za-z0-9_$-]+)",
+        statement,
+    )
+    if use is None:
+        return True, None
+    identifier = use.group(1)
+    if identifier.startswith('`'):
+        return True, identifier[1:-1].replace('``', '`')
+    if identifier.startswith("'"):
+        return True, identifier[1:-1].replace("''", "'")
+    return True, identifier
+
+
 def split_sql_assignments(text):
     """Split comma-separated SET assignments without splitting quoted values."""
     items = []
@@ -233,11 +245,13 @@ def logged_trigger_match(event_type, info, expected_names, schema):
         re.IGNORECASE,
     )
     for statement in split_sql_statements(info):
-        use = re.fullmatch(r"(?is)USE\s+[`']?([A-Za-z0-9_]+)[`']?", statement)
-        if use and use.group(1).casefold() != schema.casefold():
+        is_use, use_schema = parse_mysqlbinlog_use(statement)
+        if is_use and use_schema is None:
+            return set(), 'malformed_use_prelude'
+        if is_use and use_schema.casefold() != schema.casefold():
             return set(), 'wrong_schema'
         allowed_set = allowed_set_prelude(statement)
-        if use or allowed_set:
+        if is_use or allowed_set:
             continue
         if re.match(r'(?is)^SET\b', statement):
             variable = re.match(r'(?is)^SET\s+@@SESSION\.([A-Za-z0-9_]+)', statement)
@@ -282,7 +296,7 @@ def mysqlbinlog_query_blocks(log_text):
         )
         if header:
             events.append((block, header.group(1)))
-        elif mysqlbinlog_query_statement(block)[0] is not None:
+        elif mysqlbinlog_query_statement(block)[2]:
             # If a block carries a USE but its Query header is malformed or
             # unknown, the schema state cannot be trusted for later events.
             events.append((block, None))
@@ -294,15 +308,15 @@ def mysqlbinlog_trigger_match_diagnostics(log_text, expected_names, schema, defi
     matched = set()
     stats = {name: {'events': 0, 'schema': 0, 'ddl': 0} for name in expected_names}
     for event, error_code in mysqlbinlog_query_blocks(log_text):
-        event_schema, statement = mysqlbinlog_query_statement(event)
+        event_schema, statement, saw_use = mysqlbinlog_query_statement(event)
         if error_code != '0':
             # A failed Query event containing a USE leaves the stream's schema
             # attribution uncertain. Drop it rather than attributing later DDL
             # to the stale schema and accepting a false match.
-            if event_schema is not None:
+            if saw_use:
                 current_schema = None
             continue
-        if event_schema is not None:
+        if saw_use:
             current_schema = event_schema
         for name in expected_names:
             if re.search(rf'\b{re.escape(name)}\b', event, re.IGNORECASE):
@@ -385,6 +399,30 @@ def self_test():
             'use wpcg_qual_a;\n'
             '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
             'use another;\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'SET TIMESTAMP=1; USE `other-db`;\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
+            'SET TIMESTAMP=1; USE another;\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 MALFORMED HEADER\n'
+            'SET TIMESTAMP=1; USE another;\n'
             '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
