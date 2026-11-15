@@ -282,6 +282,10 @@ def mysqlbinlog_query_blocks(log_text):
         )
         if header:
             events.append((block, header.group(1)))
+        elif mysqlbinlog_query_statement(block)[0] is not None:
+            # If a block carries a USE but its Query header is malformed or
+            # unknown, the schema state cannot be trusted for later events.
+            events.append((block, None))
     return events
 
 
@@ -377,9 +381,19 @@ def self_test():
             'use wpcg_qual_a; CREATE TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
-            '# at 100\n#260101 00:00:00 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
             'use another;\n'
-            '# at 200\n#260101 00:00:01 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 MALFORMED HEADER\n'
+            'use another;\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
         assert not mysqlbinlog_logged_trigger_names(
