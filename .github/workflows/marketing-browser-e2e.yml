@@ -416,6 +416,8 @@ jobs:
               @socket_close($socket);
 
               if ($connected || !in_array($error, $deniedErrors, true)) {
+                  fwrite(STDERR, "PHP_EGRESS_".$label."_SOCKET_ERROR=".(int) $error
+                      ."_".socket_strerror((int) $error)."\n");
                   $fail('PHP_EGRESS_'.$label);
               }
 
