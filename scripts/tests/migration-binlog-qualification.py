@@ -394,6 +394,13 @@ def dump_error_class(text):
     return 'no_stderr'
 
 
+def file_sha256_matches(path, expected):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected
+    except OSError:
+        return False
+
+
 def self_test():
     assert classify('SQLSTATE[HY000]: General error: 1419 You do not have the SUPER privilege') == ('HY000', '1419')
     assert classify('ERROR 1644 (45000) at line 1: x') == ('45000', '1644')
@@ -401,6 +408,14 @@ def self_test():
     assert dump_error_class('mysqldump: Got error: 2002: connection refused') == 'client_connection_failed'
     assert dump_error_class('mysqldump: other failure') == 'client_other_error'
     assert dump_error_class('') == 'no_stderr'
+    with tempfile.TemporaryDirectory() as tmp:
+        backup = Path(tmp) / 'backup.sql'
+        backup.write_bytes(b'synthetic backup')
+        receipt = hashlib.sha256(backup.read_bytes()).hexdigest()
+        assert file_sha256_matches(backup, receipt)
+        backup.write_bytes(b'corrupted backup')
+        assert not file_sha256_matches(backup, receipt)
+        assert not file_sha256_matches(Path(tmp) / 'missing.sql', receipt)
     original_values = {key: os.environ.get(key) for key in
                        ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
     try:
@@ -655,7 +670,8 @@ def run_mysql(user, password, sql, schema=None, host=None, port=None):
 
 
 def admin(sql, schema=None, host=None, port=None, root_password=None):
-    rc, out, _ = run_mysql('root', root_password or ROOT_PW, sql, schema, host, port)
+    password = ROOT_PW if root_password is None else root_password
+    rc, out, _ = run_mysql('root', password, sql, schema, host, port)
     if rc:
         raise RuntimeError('mysql_admin_operation_failed')
     return out
@@ -700,6 +716,13 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
     accounts = [app, dba, runtime]
     passwords = {app: app_pw, dba: secrets.token_hex(16), runtime: runtime_pw}
     ok = True
+    source_uuid = admin('SELECT @@GLOBAL.server_uuid')
+    restore_uuid = admin('SELECT @@GLOBAL.server_uuid', host=RESTORE_HOST, port=RESTORE_PORT,
+                         root_password=RESTORE_ROOT_PW)
+    isolated_instances = bool(source_uuid and restore_uuid and source_uuid != restore_uuid)
+    ok &= require_contract('restore_uses_distinct_mysql_instance', isolated_instances)
+    if not isolated_instances:
+        return False
     target_before = settings(RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
     service_ok = (target_before['version'] == '8.4.11' and target_before['log_bin'] == 'ON'
                   and target_before['format'] == 'ROW' and target_before['trust'] == 'OFF')
@@ -759,10 +782,17 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
                                and all(row[5] == f'{dba}@%' for row in source_rows),
                                f'count={definer_tokens},expected={len(source_rows)}')
 
-        # Integrity failure is detected before import; the intact receipt remains the recovery source.
+        # The same receipt validator used on the import path rejects a modified copy.
         bad_path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
-        corrupted_detected = hashlib.sha256(bad_path.read_bytes()).hexdigest() != backup_sha
-        ok &= require_contract('corrupt_backup_rejected_before_restore', corrupted_detected)
+        corrupted_detected = not file_sha256_matches(bad_path, backup_sha)
+        ok &= require_contract('corrupt_backup_fails_integrity_check_before_restore', corrupted_detected)
+        if not corrupted_detected:
+            return False
+
+        backup_intact = file_sha256_matches(dump_path, backup_sha)
+        ok &= require_contract('synthetic_backup_integrity_verified_before_import', backup_intact)
+        if not backup_intact:
+            return False
 
         admin(f'CREATE DATABASE `{restored}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
               host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
@@ -790,6 +820,10 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
         ok &= require_contract('restored_partial_migration_ledger_matches',
                                restored_ledger == expected_prefix and len(restored_ledger) < len(stems),
                                f'ledger={len(restored_ledger)},target={len(stems)}')
+        source_counts = table_counts(schema)
+        target_counts = table_counts(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_table_row_counts_match_source', target_counts == source_counts,
+                               f'tables={len(target_counts)},source_tables={len(source_counts)}')
         target_after = settings(RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
         ok &= require_contract('restore_service_contract_after_trust_off_unchanged',
                                target_after == target_before and target_after['trust'] == 'OFF',
@@ -908,6 +942,18 @@ def ledger(schema, host=None, port=None, root_password=None):
     out = admin(f'SELECT migration FROM `{schema}`.`migrations` ORDER BY migration', host=host,
                 port=port, root_password=root_password)
     return out.splitlines() if out else []
+
+
+def table_counts(schema, host=None, port=None, root_password=None):
+    names = admin(f"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='{schema}' "
+                  'AND TABLE_TYPE="BASE TABLE" ORDER BY TABLE_NAME', host=host, port=port,
+                  root_password=root_password).splitlines()
+    if not names or any(re.fullmatch(r'[A-Za-z0-9_]{1,64}', name) is None for name in names):
+        raise RuntimeError('restore_table_inventory_invalid')
+    query = ' UNION ALL '.join(f"SELECT '{name}' AS table_name, COUNT(*) AS row_count "
+                               f"FROM `{schema}`.`{name}`" for name in names) + ' ORDER BY 1'
+    rows = admin(query, host=host, port=port, root_password=root_password).splitlines()
+    return [tuple(row.split('\t')) for row in rows]
 
 
 def trigger_rows(schema, host=None, port=None, root_password=None):
