@@ -102,8 +102,10 @@ On success, the installer creates only these absent targets:
 
 The Phase B policy file must remain absent. Any existing 1.4.10 destination or
 unexpected source file causes a fail-closed stop. A previously installed 1.4.9
-helper is not overwritten; its versioned files and sudoers rule remain intact
-for a separately controlled rollback. Publication
+helper binary set is not overwritten. Before installation, its legacy Phase B
+policy and `wpcaregrid-staging-next-1.4.9` sudoers route must be separately
+disabled and removed; the helper binaries may remain for rollback reference,
+but Phase B cannot be rolled back to that helper. Publication
 uses same-filesystem atomic hard links and never replaces a target. On an
 installation failure, rollback removes only files whose inode, owner, group,
 mode and content still match objects created by that invocation. An identity

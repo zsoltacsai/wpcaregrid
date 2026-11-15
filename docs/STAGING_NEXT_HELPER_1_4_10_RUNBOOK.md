@@ -107,8 +107,9 @@ compiled `staging-next` contract - STOP and report, do not edit the layout to sa
   file first, then the policy file, then the five files in the version directory and finally the (then empty)
   version directory itself (all root-owned, all created by this installer);
   older helper versions and the legacy staging tools are untouched by this installation.
-* Keep the `1.4.9` installation intact during a version transition. If a release journal reaches
-  `DBA_HANDOFF_REQUIRED`, do not switch the active controller back to 1.4.9: that older controller
+* Preserve the 1.4.9 helper binaries during a version transition, but disable and remove its
+  Phase B policy and `wpcaregrid-staging-next-1.4.9` sudoers route before installing 1.4.10.
+  If a release journal reaches `DBA_HANDOFF_REQUIRED`, do not switch the active controller back to 1.4.9: that older controller
   does not implement receipt consumption and cannot safely resume the journal. Keep traffic and
   background work fenced and use the reviewed 1.4.10 forward-recovery procedure.
 * STOP on: any hash mismatch, any preflight `STOP`, any unexpected file in the source directory, any non-`PASS`

@@ -22,6 +22,17 @@ SPEC.loader.exec_module(INSTALLER)
 
 
 class StagingNextHelperInstallerTests(unittest.TestCase):
+    def test_legacy_phase_b_guard_covers_each_supported_version_and_both_control_types(self):
+        versions = ("1.4.5", "1.4.6", "1.4.7", "1.4.8", "1.4.9")
+        expected = {
+            Path(f"/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-{version}.json")
+            for version in versions
+        } | {
+            Path(f"/etc/sudoers.d/wpcaregrid-staging-next-{version}")
+            for version in versions
+        }
+        self.assertEqual(set(INSTALLER.LEGACY_PHASE_B_CONTROLS), expected)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="wpcg-installer-test-")
         self.addCleanup(self.temp.cleanup)
