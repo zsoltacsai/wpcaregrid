@@ -16,6 +16,8 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class MarketingOnlyReleaseGate
 {
+    private readonly bool $phpUnitRuntime;
+
     private const PROFILES = ['marketing_only', 'invitation_beta', 'staging_admin_qa', 'staging_active'];
 
     private const STAGING_ADMIN_QA_READ_PATHS = [
@@ -56,6 +58,17 @@ final class MarketingOnlyReleaseGate
         '/favicon-32x32.png',
         '/apple-touch-icon.png',
     ];
+
+    /**
+     * The test-runtime identity is a source-level marker defined only by the
+     * PHPUnit base test case. Environment/configuration values alone must
+     * never disable the release gate in a deployed process.
+     */
+    public function __construct(?bool $phpUnitRuntime = null)
+    {
+        $this->phpUnitRuntime = $phpUnitRuntime
+            ?? (defined('WPCG_PHPUNIT_RUNTIME') && constant('WPCG_PHPUNIT_RUNTIME') === true);
+    }
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -102,7 +115,8 @@ final class MarketingOnlyReleaseGate
     /** The only exemption is the exact server-side PHPUnit test identity. */
     private function mustEnforce(): bool
     {
-        $testingExemption = config('marketing_release.enforcement_mode') === 'testing'
+        $testingExemption = $this->phpUnitRuntime
+            && config('marketing_release.enforcement_mode') === 'testing'
             && config('marketing_release.test_app_environment') === 'testing'
             && config('marketing_release.test_deployment_environment') === 'testing';
 

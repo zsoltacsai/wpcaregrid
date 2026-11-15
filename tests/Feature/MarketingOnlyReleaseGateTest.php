@@ -363,7 +363,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
-    public function test_test_exemption_requires_all_three_exact_server_side_values(): void
+    public function test_test_exemption_requires_phpunit_identity_and_all_three_exact_server_side_values(): void
     {
         $cases = [
             ['testing', 'testing', 'testing', true],
@@ -391,6 +391,22 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
             }
         }
+    }
+
+    public function test_testing_configuration_alone_does_not_disable_the_gate_outside_phpunit(): void
+    {
+        config([
+            'app.env' => 'testing',
+            'app.deployment_environment' => 'testing',
+            'marketing_release.enforcement_mode' => 'testing',
+            'marketing_release.test_app_environment' => 'testing',
+            'marketing_release.test_deployment_environment' => 'testing',
+        ]);
+
+        [$response, $dispatched] = $this->runGate('/checkout', phpUnitRuntime: false);
+
+        $this->assertFalse($dispatched);
+        $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
     }
 
     public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
@@ -619,6 +635,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         mixed $profile = 'marketing_only',
         bool $setProfile = true,
         bool $https = true,
+        ?bool $phpUnitRuntime = null,
     ): array {
         if ($setProfile) {
             config(['marketing_release.profile' => $profile]);
@@ -639,11 +656,14 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
 
         $dispatched = false;
-        $response = (new MarketingOnlyReleaseGate)->handle($request, function () use (&$dispatched): Response {
-            $dispatched = true;
+        $response = (new MarketingOnlyReleaseGate($phpUnitRuntime))->handle(
+            $request,
+            function () use (&$dispatched): Response {
+                $dispatched = true;
 
-            return response('', Response::HTTP_NO_CONTENT);
-        });
+                return response('', Response::HTTP_NO_CONTENT);
+            },
+        );
 
         return [$response, $dispatched];
     }
