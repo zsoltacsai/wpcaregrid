@@ -363,10 +363,24 @@ def classify(text):
     return 'NONE', 'NONE'
 
 
+def phase2b_failure_code(text):
+    failures = (
+        ('The Phase 2B trigger definer is not configured.', 'DEFINER_CONFIG_MISSING'),
+        ('The Phase 2B trigger inventory is incomplete.', 'DEFINER_INVENTORY_INCOMPLETE'),
+        ('A Phase 2B trigger has an unexpected DEFINER.', 'DEFINER_MISMATCH'),
+    )
+    for marker, code in failures:
+        if marker in (text or ''):
+            return code
+    return 'NONE'
+
+
 def self_test():
     assert classify('SQLSTATE[HY000]: General error: 1419 You do not have the SUPER privilege') == ('HY000', '1419')
     assert classify('ERROR 1644 (45000) at line 1: x') == ('45000', '1644')
     assert classify('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate') == ('23000', '1062')
+    assert phase2b_failure_code('RuntimeException: The Phase 2B trigger definer is not configured.') == 'DEFINER_CONFIG_MISSING'
+    assert phase2b_failure_code('RuntimeException: A Phase 2B trigger has an unexpected DEFINER.') == 'DEFINER_MISMATCH'
     assert classify('all good') == ('NONE', 'NONE')
     assert safe('a b\nc;`x') == 'a_b_c__x'
     binlog_row = mysql_output('bin.000001\t4\tStop\t1\t4\t\n')
@@ -603,9 +617,10 @@ def admin(sql, schema=None):
     return out
 
 
-def artisan(user, password, schema, *args, timeout=900):
+def artisan(user, password, schema, *args, timeout=900, phase2b_definer=''):
     env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': HOST, 'DB_PORT': PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
+           'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'QUEUE_CONNECTION': 'sync',
            'MAIL_MAILER': 'array', 'APP_ENV': 'testing'}
     env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
@@ -616,18 +631,20 @@ def artisan(user, password, schema, *args, timeout=900):
     return r.returncode, text, classify(text)
 
 
-def run_up(user, password, schema, migration_file):
+def run_up(user, password, schema, migration_file, phase2b_definer=''):
     code = ('require "vendor/autoload.php";$app=require "bootstrap/app.php";'
             '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
             '$m=require getenv("WPCG_QUAL_MIGRATION");$m->up();echo "OK";')
     env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': HOST, 'DB_PORT': PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
+           'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'APP_ENV': 'testing',
            'WPCG_QUAL_MIGRATION': str(MIGRATIONS / migration_file)}
     env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, '-r', code], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
-    return r.returncode, classify(r.stdout + '\n' + r.stderr)
+    text = r.stdout + '\n' + r.stderr
+    return r.returncode, classify(text), phase2b_failure_code(text)
 
 
 def settings():
@@ -900,7 +917,8 @@ def main():
                 ok &= require_contract('trust_off_while_global_privilege_active',
                                        active_before['version'] == '8.4.11' and active_before['log_bin'] == 'ON'
                                        and active_before['format'] == 'ROW' and active_before['trust'] == 'OFF')
-                rc, _, (_, errno) = artisan(dba, dba_pw, schema, 'migrate', '--force', '--realpath', f'--path={only}')
+                rc, _, (_, errno) = artisan(dba, dba_pw, schema, 'migrate', '--force', '--realpath', f'--path={only}',
+                                            phase2b_definer=f'{dba}@%')
                 active_after = settings()
                 ok &= require_contract('trust_off_after_trigger_migrations_before_revoke',
                                        active_after['version'] == '8.4.11' and active_after['log_bin'] == 'ON'
@@ -913,8 +931,10 @@ def main():
             ok &= require_contract('app_still_no_global_privilege', global_grants_clean(app))
 
             # 7. application account finishes everything else
-            rc, _, (_, errno) = artisan(app, app_pw, schema, 'migrate', '--force')
-            ok &= require_contract('app_completes_remaining_migrations', rc == 0, f'errno={errno}')
+            rc, output, (state, errno) = artisan(app, app_pw, schema, 'migrate', '--force',
+                                                 phase2b_definer=f'{dba}@%')
+            ok &= require_contract('app_completes_remaining_migrations', rc == 0,
+                                   f'sqlstate={state},errno={errno},phase2b={phase2b_failure_code(output)}')
 
         # 8. complete ledger == exact derived list, nothing pending
         rows = ledger(schema)
@@ -939,11 +959,24 @@ def main():
         binlog_ok, binlog_detail = trigger_ddl_logged([r[0] for r in rows], schema, dba)
         ok &= require_contract('trigger_ddl_present_in_bounded_binlog_read', binlog_ok, binlog_detail)
 
-        # 10. idempotence: reviewed up() re-run as the app account verifies definitions without SUPER/trust
+        # 9a. the forward-only definer gate fails closed before accepting a wrong or missing identity.
+        definer_gate = '2026_11_15_000001_verify_phase2b_trigger_definers.php'
+        rc, (state, errno), failure = run_up(app, app_pw, schema, definer_gate)
+        ok &= require_contract('phase2b_definer_missing_config_rejected',
+                               rc != 0 and failure == 'DEFINER_CONFIG_MISSING',
+                               f'sqlstate={state},errno={errno},reason={failure}')
+        rc, (state, errno), failure = run_up(app, app_pw, schema, definer_gate, 'wpcg_wrong_definer@%')
+        ok &= require_contract('phase2b_wrong_definer_rejected',
+                               rc != 0 and failure == 'DEFINER_MISMATCH',
+                               f'sqlstate={state},errno={errno},reason={failure}')
+        rc, _, failure = run_up(app, app_pw, schema, definer_gate, f'{dba}@%')
+        ok &= require_contract('phase2b_expected_definer_accepted', rc == 0, f'failure={failure}')
+
+        # 10. the app account can idempotently verify the existing trigger definitions without SUPER.
         for n in trig:
-            rc, _ = run_up(app, app_pw, schema, n)
+            rc, _, _ = run_up(app, app_pw, schema, n, f'{dba}@%')
             ok &= require_contract('up_rerun_is_idempotent_as_app', rc == 0 and trigger_rows(schema) == rows, n[:-4])
-        rc, text, _ = artisan(app, app_pw, schema, 'migrate', '--force')
+        rc, text, _ = artisan(app, app_pw, schema, 'migrate', '--force', phase2b_definer=f'{dba}@%')
         ok &= require_contract('migrate_rerun_nothing_to_migrate', rc == 0 and ledger(schema) == stems)
 
         # 11. guard semantics use a separate DML-only runtime account, never the migration account.

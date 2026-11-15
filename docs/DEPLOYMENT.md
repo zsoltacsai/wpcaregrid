@@ -77,6 +77,7 @@ No seeders run in production: `migrate --force` creates empty tables only. Demo 
 | `APP_KEY` | generated once (`php artisan key:generate`), kept secret, never reused; also encrypts Owner-managed integration credentials stored in the database. Preserve a secure recovery copy with the deployment secrets. Losing it makes those credentials undecryptable. |
 | `LOG_LEVEL` | `info` (or `warning`) |
 | `DB_*` | MySQL connection, a dedicated database user with rights on this database only |
+| `DB_PHASE2B_TRIGGER_DEFINER` | Exact `user@host` value expected in `information_schema.TRIGGERS.DEFINER` for all six Phase 2B guards. Required by the forward verification migration on MySQL/MariaDB; unset values stop the staging deploy before migration, and mismatched values stop the verification migration. No production value is currently approved, and this setting does not authorize or replace the DBA migration/restore gates. |
 | `QUEUE_CONNECTION` | `database` |
 | `MAIL_*` | a real mailer (SMTP), `MAIL_FROM_ADDRESS` on your domain |
 | `STRIPE_*` | see Stripe below |
