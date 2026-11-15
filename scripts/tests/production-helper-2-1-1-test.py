@@ -80,10 +80,10 @@ FROZEN_2_0_0 = {
 }
 
 
-# SHA-256 of every helper 2.1.0 artifact (and its immutable policy snapshot) as
-# it stood at PR #410 head 744b55225af5f7b063c9817ffd2aef25b6b9d6de. 2.1.0 is
-# superseded by 2.1.1 and must never be edited in place.
-BASE_COMMIT = "744b55225af5f7b063c9817ffd2aef25b6b9d6de"
+# SHA-256 of every helper 2.1.0 artifact (and its immutable policy snapshot)
+# from a stable protected-primary commit. Do not bind this to a PR merge ref:
+# squash merges need not keep the source-branch commit reachable.
+BASE_COMMIT = "063419d0631c9e42b9162fc7b9015641d099a67b"
 FROZEN_2_1_0 = {
     "scripts/wpcaregrid-deploy-production-priv-2_1_0.py":
         "c303a4d84a282ffc7211bc8781a5442e62cb90deeef4651b450113ad7a912f30",

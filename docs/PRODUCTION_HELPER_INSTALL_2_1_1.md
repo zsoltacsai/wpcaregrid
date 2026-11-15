@@ -56,10 +56,11 @@ combined artifact digest).
 
 ## Pinned source
 
-Base: PR #410 head `744b55225af5f7b063c9817ffd2aef25b6b9d6de`. The source commit for
-installation is the protected-primary merge commit of the successor pull request. Recompute
-every digest from that exact Git tree immediately before source staging; the installer
-authenticates source bytes by these SHA-256 pins, not by directory name.
+Historical 2.1.0 artifacts are anchored to protected-primary commit
+`063419d0631c9e42b9162fc7b9015641d099a67b`; the 2.1.1 source commit for installation is the
+protected-primary merge commit of its successor pull request. Recompute every digest from
+that exact Git tree immediately before source staging; the installer authenticates source
+bytes by these SHA-256 pins, not by directory name.
 
 | Source file | SHA-256 |
 | --- | --- |
