@@ -682,8 +682,24 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
                    '--no-create-db', '--skip-comments', '--set-gtid-purged=OFF', schema]
         dump = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=120, check=False)
+        dump_stderr = dump.stderr.decode('utf-8', errors='replace')
+        dump_sqlstate, dump_errno = classify(dump_stderr)
         if dump.returncode or not dump.stdout or len(dump.stdout) > 32 * 1024 * 1024:
-            return require_contract('synthetic_backup_created', False, 'dump_failed_or_size_limit')
+            if re.search(r'(?i)unknown option|unrecognized option', dump_stderr):
+                reason = 'dump_unknown_option'
+            elif re.search(r'(?i)access denied', dump_stderr):
+                reason = 'dump_access_denied'
+            elif re.search(r'(?i)couldn.t execute|error in query', dump_stderr):
+                reason = 'dump_query_failed'
+            elif len(dump.stdout) > 32 * 1024 * 1024:
+                reason = 'dump_size_limit'
+            elif dump.returncode:
+                reason = 'dump_command_failed'
+            else:
+                reason = 'dump_empty'
+            return require_contract('synthetic_backup_created', False,
+                                    f'reason={reason},exit={dump.returncode},bytes={len(dump.stdout)},'
+                                    f'sqlstate={dump_sqlstate},errno={dump_errno}')
         original = dump.stdout
         expected_use = f'USE `{schema}`;'.encode()
         if original.count(expected_use) != 1:
