@@ -79,7 +79,12 @@ def mysqlbinlog_query_statement(event):
     body = re.sub(r'(?m)^\\', '', '\n'.join(lines)).strip()
     current_schema = None
     saw_use = False
-    for statement in split_sql_statements(body):
+    statements = split_sql_statements(body)
+    if not statements and re.search(r'(?i)\bUSE\b', body):
+        # An unterminated quote/comment makes statement boundaries unknown.
+        # If USE appears in that unparseable block, do not retain stale state.
+        return None, body, True
+    for statement in statements:
         is_use, use_schema = parse_mysqlbinlog_use(statement)
         if not is_use:
             continue
@@ -399,6 +404,22 @@ def self_test():
             'use wpcg_qual_a;\n'
             '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
             'use another;\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 end_log_pos 200 CRC32 0x1234 Query thread_id=7 error_code=1049\n'
+            'USE other; /* unterminated\n'
+            '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
+            'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
+            expected, 'wpcg_qual_a', 'u')
+        assert not mysqlbinlog_logged_trigger_names(
+            '# at 50\n#260101 00:00:00 server id 1 end_log_pos 100 CRC32 0x1234 Query thread_id=7 error_code=0\n'
+            'use wpcg_qual_a;\n'
+            '# at 100\n#260101 00:00:01 server id 1 MALFORMED HEADER\n'
+            'SET TIMESTAMP=1; USE other; /*! unterminated\n'
             '# at 200\n#260101 00:00:02 server id 1 end_log_pos 300 CRC32 0x1234 Query thread_id=8 error_code=0\n'
             'CREATE DEFINER=u@% TRIGGER guard_x BEFORE INSERT',
             expected, 'wpcg_qual_a', 'u')
