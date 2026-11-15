@@ -20,7 +20,7 @@ export default defineConfig({
     workers: 2,
     retries: 0,
     reporter: 'list',
-    outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? 'storage/playwright-marketing-acceptance',
+    outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? 'storage/playwright/marketing-acceptance',
     use: {
         baseURL: process.env.E2E_BASE_URL,
         locale: 'en-GB',

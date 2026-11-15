@@ -2,15 +2,19 @@ import { expect, test } from '@playwright/test';
 
 const configuredUrl = process.env.E2E_BASE_URL;
 const target = configuredUrl ? new URL(configuredUrl) : null;
+if (target && (!['http:', 'https:'].includes(target.protocol)
+    || target.username !== '' || target.password !== '' || target.search !== '' || target.hash !== '')) {
+    throw new Error('E2E_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment.');
+}
 
 test.skip(!target, 'Set E2E_BASE_URL to a running local app or an explicitly chosen acceptance target.');
 
-test('HU and EN public pages render, link to information, and switch language', async ({ page }) => {
+async function guardOrigin(page: import('@playwright/test').Page): Promise<string[]> {
     const unexpectedRequests: string[] = [];
     if (target) {
         await page.route('**/*', async (route) => {
             const request = new URL(route.request().url());
-            if (request.origin !== target!.origin) {
+            if (request.origin !== target.origin) {
                 unexpectedRequests.push(request.origin);
                 await route.abort();
                 return;
@@ -18,6 +22,20 @@ test('HU and EN public pages render, link to information, and switch language', 
             await route.continue();
         });
     }
+
+    return unexpectedRequests;
+}
+
+async function safeGet(page: import('@playwright/test').Page, path: string) {
+    if (!target) throw new Error('E2E_BASE_URL is required.');
+    const url = new URL(path, target);
+    if (url.origin !== target.origin) throw new Error('Acceptance probe escaped its configured origin.');
+
+    return page.request.get(url.toString(), { maxRedirects: 0 });
+}
+
+test('HU and EN public pages render, link to information, and switch language', async ({ page }) => {
+    const unexpectedRequests = await guardOrigin(page);
 
     for (const width of [375, 1440]) {
       for (const locale of ['en', 'hu'] as const) {
@@ -50,6 +68,7 @@ test('HU and EN public pages render, link to information, and switch language', 
 });
 
 test('public home and pricing pages fit desktop and mobile viewports', async ({ page }) => {
+    const unexpectedRequests = await guardOrigin(page);
     for (const width of [375, 1440]) {
         await page.setViewportSize({ width, height: width < 500 ? 812 : 900 });
         for (const locale of ['en', 'hu'] as const) {
@@ -67,9 +86,11 @@ test('public home and pricing pages fit desktop and mobile viewports', async ({ 
             }
         }
     }
+    expect(unexpectedRequests).toEqual([]);
 });
 
 test('marketing pages do not expose registration, provisioning, or paid SaaS actions', async ({ page }) => {
+    const unexpectedRequests = await guardOrigin(page);
     const publicPaths = ['/en/', '/hu/', '/en/pricing', '/hu/pricing'];
     const forbidden = /\/(?:register|signup|checkout|account|connector|api\/v1\/connector|subscriptions?)(?:[/?#]|$)|stripe\/webhook|provision/i;
     for (const path of publicPaths) {
@@ -92,29 +113,32 @@ test('marketing pages do not expose registration, provisioning, or paid SaaS act
         '/register', '/signup', '/checkout', '/checkout/success',
         '/account/websites/new', '/api/v1/connector/pair',
     ]) {
-        const response = await page.request.get(path, { maxRedirects: 0 });
+        const response = await safeGet(page, path);
         expect([404, 405, 410, 419, 422]).toContain(response.status());
     }
-    const webhook = await page.request.get('/stripe/webhook', { maxRedirects: 0 });
+    const webhook = await safeGet(page, '/stripe/webhook');
     expect([404, 405, 419]).toContain(webhook.status());
-    const connectorJobs = await page.request.get('/api/v1/connector/jobs', { maxRedirects: 0 });
+    const connectorJobs = await safeGet(page, '/api/v1/connector/jobs');
     expect([401, 403, 404, 405]).toContain(connectorJobs.status());
-    const account = await page.request.get('/account', { maxRedirects: 0 });
+    const account = await safeGet(page, '/account');
     expect([302, 303, 401, 403, 404]).toContain(account.status());
-    const paidSaaS = await page.request.get('/account/subscription', { maxRedirects: 0 });
+    const paidSaaS = await safeGet(page, '/account/subscription');
     expect([302, 303, 401, 403, 404]).toContain(paidSaaS.status());
+    expect(unexpectedRequests).toEqual([]);
 });
 
 test('HTTPS target redirects and sends baseline security headers', async ({ page }) => {
     test.skip(!target || target.protocol !== 'https:', 'HTTPS/header acceptance applies only to an explicitly configured HTTPS target.');
-    const root = await page.request.get('/', { maxRedirects: 0 });
+    const unexpectedRequests = await guardOrigin(page);
+    const root = await safeGet(page, '/');
     expect([301, 302, 307, 308]).toContain(root.status());
     expect(root.headers().location).toMatch(/^https:\/\//i);
 
-    const response = await page.request.get('/en/');
+    const response = await safeGet(page, '/en/');
     expect(response.status()).toBe(200);
     const headers = response.headers();
     expect(headers['strict-transport-security']).toBeTruthy();
     expect(headers['x-content-type-options']).toBe('nosniff');
     expect(headers['x-frame-options'] ?? headers['content-security-policy']).toBeTruthy();
+    expect(unexpectedRequests).toEqual([]);
 });
