@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "repository": "zsoltacsai/wpcaregrid",
+  "protected_primary": "claude/ecstatic-wozniak-oemyuf",
+  "candidate_sha": "5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8",
+  "candidate_status": "PROPOSED_NOT_APPROVED",
+  "release_tag_created": false,
+  "deployment_performed": false,
+  "ci": {
+    "run_id": 43386058267,
+    "url": "https://github.com/zsoltacsai/wpcaregrid/actions/runs/43386058267",
+    "head_sha": "5e0e784c69bcd5cfdcaa3f03a4734cb62ed40bd8",
+    "status": "completed",
+    "conclusion": "success",
+    "check_runs": {
+      "success": 38,
+      "total": 38
+    }
+  },
+  "scope": {
+    "included": [
+      "HU/EN public marketing pages"
+    ],
+    "excluded": [
+      "customer registration and account creation",
+      "customer and operational authentication flows",
+      "checkout",
+      "live payment processing",
+      "provisioning and subscription activation",
+      "Connector onboarding",
+      "paid SaaS operations",
+      "unfinished customer-facing operational features"
+    ]
+  },
+  "reviews": {
+    "integration_qa": {
+      "decision": "PASS",
+      "scope": "static source route isolation only; no runtime acceptance",
+      "provider": "T3 Code / Codex",
+      "model": "gpt-6-luna",
+      "report": "release-evidence/qa-5e0e784.md",
+      "report_sha256": "82d6b3ebef14fdde464fa173fbf5a91e11c496577647f4977ac8d3272a17dca4"
+    },
+    "appsec": {
+      "decision": "BLOCKED",
+      "scope": "static source review; production runtime fence evidence missing",
+      "finding": "Fresh exact-release evidence must prove workers and scheduler are fenced; no claim is made about current host state.",
+      "provider": "T3 Code / Codex",
+      "model": "gpt-6-luna",
+      "report": "release-evidence/appsec-5e0e784.md",
+      "report_sha256": "c58201104e2170cbc7f73db9da80f02ff596d515ce614eba8bb2e7a4357f6409"
+    },
+    "v3_ledger": "NOT_POSTED: no open release PR has candidate_sha as its exact HEAD; policy requires PR/head binding"
+  },
+  "staging_acceptance": "UNKNOWN",
+  "migration_readiness": "HOLD: synthetic MySQL 8.4.11 qualification reports UNRESOLVED_SUPER_ONLY",
+  "backup_restore_readiness": "HOLD: no current exact-release backup and isolated restore proof",
+  "runtime_scope_isolation": "UNKNOWN",
+  "deployment_controller_compatibility": "HOLD: production runbook/helper baseline is older and V3 enforcement is not confirmed",
+  "go_6_4_diagnostic_helper": "SEPARATE_WORKSTREAM_HOLD; not an application release prerequisite",
+  "production_decision": "NO_GO",
+  "owner_go": "REQUIRED_BEFORE_PRODUCTION_ACTIVATION"
+}

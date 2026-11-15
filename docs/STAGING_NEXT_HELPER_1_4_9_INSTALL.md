@@ -54,6 +54,13 @@ different source revision requires a new manifest and review.
 
 ## Scope of installation
 
+Before a separately authorized Phase B migration, the shared staging-next
+application `.env` must contain `DB_PHASE2B_TRIGGER_DEFINER` equal to the
+durable `user@host` identity of all six installed guards. Helper 1.4.9 does not
+preflight this Laravel setting; an absent or mismatched value fails closed when
+the forward verifier migration runs. This note does not approve a definer
+identity or authorize a migration.
+
 The root installer is `scripts/install_staging_next_helper_1_4_9.py`. Place it
 at `/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py`.
 Place exactly the five pinned source artifacts (no extra files or links) in

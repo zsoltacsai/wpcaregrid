@@ -748,6 +748,21 @@ release_gate() {
     privileged gate-off
 }
 
+phase2b_definer_preflight() {
+    local verifier_migration="${1:-${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php}"
+
+    # Clear inherited config on both forward and rollback deployments. A rollback
+    # to a release predating the verifier has no definer key to validate.
+    php artisan config:clear --no-interaction >/dev/null || return 1
+
+    if [[ "$DEPLOYMENT_MODE" == 'rollback' && ! -f "$verifier_migration" ]]; then
+        log 'Rollback target predates the Phase 2B definer verifier; skipping its definer-key check.'
+        return 0
+    fi
+    php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $key = "database.connections.".config("database.default").".phase2b_trigger_definer"; $value = config($key); exit(is_string($value) && trim($value) !== "" ? 0 : 1);' \
+        || return 1
+}
+
 mark_gate_released() {
     GATE_ACTIVE=0
 }
@@ -1129,6 +1144,12 @@ main() {
     umask 077
     privileged vendor-readable || fail 'PHP-FPM cannot read one or more Composer PHP files.'
     privileged file-check www-data read vendor/autoload.php || fail 'PHP-FPM cannot read the Composer autoloader.'
+
+    # The checked-out target may inherit the baseline's cached configuration.
+    # Clear it while traffic and workers are fenced, then validate Laravel's
+    # effective value before migrations. Old rollback targets predate this key.
+    phase2b_definer_preflight "${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php" \
+        || fail 'Could not validate the effective Phase 2B trigger definer configuration before applying migrations.'
 
     log 'Building frontend assets.'
     umask 022
