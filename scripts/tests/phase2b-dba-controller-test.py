@@ -14,11 +14,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 TX_SPEC = importlib.util.spec_from_file_location(
-    "staging_next_db_transaction_1_4_9", ROOT / "scripts" / "staging_next_db_transaction_1_4_9.py")
+    "staging_next_db_transaction_1_4_10", ROOT / "scripts" / "staging_next_db_transaction_1_4_10.py")
 TX = importlib.util.module_from_spec(TX_SPEC)
 sys.modules[TX_SPEC.name] = TX
 TX_SPEC.loader.exec_module(TX)
-from scripts import staging_next_deploy_backend_1_4_9 as BACKEND
+from scripts import staging_next_deploy_backend_1_4_10 as BACKEND
 MIGRATIONS = TX.PHASE2B_MIGRATIONS
 receipt_digest = TX._dba_receipt_hash
 
@@ -128,6 +128,42 @@ class Phase2BDbaControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(TX.TransactionRefused, "phase2b_dba_handoff_required"):
             self.tx.apply_rehearsed_migrations(expected_after=self.expected,
                 observe=lambda: dict(self.before), apply_one=lambda _name: self.fail("unexpected migration"))
+
+    def test_pause_is_reached_at_real_nonzero_migration_cursor(self):
+        prior = tuple(f"2026_10_01_{index + 1:06d}_prior_{index}" for index in range(71))
+        migrations = (*prior, *self.names, "2026_11_16_000001_after_trigger_boundary")
+        identity = TX.TransactionIdentity(
+            application_sha="a" * 40, previous_sha="b" * 40,
+            artifact_sha256="c" * 64, backup_sha256="d" * 64,
+            backup_filename=f"staging-next-{'a' * 40}-123456789-abcdef12.sql.gz",
+            mysql_uuid_sha256="e" * 64, migrations=migrations)
+        transaction = TX.DatabaseReleaseTransaction(self.directory, identity)
+        transaction._lock_fd = 1
+        transaction._state = transaction._new_state()
+        transaction._state["state"] = "FENCES_CLOSED"
+        transaction._state["migration_cursor"] = len(prior)
+        transaction._state["evidence"] = {
+            "RESTORE_REHEARSAL_VERIFIED": {
+                "target_schema_sha256": "1" * 64, "target_ledger_sha256": "2" * 64,
+                "target_data_sha256": "3" * 64,
+            },
+            "migration:" + prior[-1]: {
+                "schema_sha256": self.before["schema_sha256"],
+                "ledger_sha256": self.before["ledger_sha256"],
+                "data_sha256": self.before["data_sha256"],
+            },
+        }
+        with mock.patch.object(transaction, "_persist", side_effect=lambda state, **_kwargs:
+                               setattr(transaction, "_state", state)):
+            with self.assertRaisesRegex(TX.TransactionRefused, "phase2b_dba_handoff_required"):
+                transaction.apply_rehearsed_migrations(
+                    expected_after={name: {"schema_sha256": "4" * 64,
+                                           "ledger_sha256": "5" * 64,
+                                           "data_sha256": "6" * 64} for name in migrations},
+                    observe=lambda: dict(self.before),
+                    apply_one=lambda name: self.fail(f"migration crossed DBA boundary: {name}"))
+        self.assertEqual(transaction.state["state"], "DBA_HANDOFF_REQUIRED")
+        self.assertEqual(transaction.state["migration_cursor"], len(prior))
 
     def test_missing_stale_or_malformed_receipts_do_not_resume(self):
         self.pause()

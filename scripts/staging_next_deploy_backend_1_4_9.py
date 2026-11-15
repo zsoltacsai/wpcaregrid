@@ -791,21 +791,6 @@ def _verify_shared_inputs(profile: StagingProfile) -> None:
              and stat.S_IMODE(autoload_info.st_mode) == 0o644, "shared_vendor_incomplete")
 
 
-def _phase2b_expected_definer(profile: StagingProfile) -> str:
-    """Read the exact locked guard definer from the protected shared Laravel env."""
-    raw = _read_regular_nofollow(profile.shared_env_file, max_bytes=1_000_000,
-                                 expected_uid=profile.expected_owner_uid, expected_mode=0o640)
-    try:
-        lines = raw.decode("utf-8").splitlines()
-    except UnicodeError:
-        raise DeployRefused("phase2b_dba_definer_configuration_invalid") from None
-    values = [line.split("=", 1)[1].strip().strip("\"'") for line in lines
-              if line.startswith("DB_PHASE2B_TRIGGER_DEFINER=")]
-    _require(len(values) == 1 and re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", values[0]) is not None,
-             "phase2b_dba_definer_configuration_missing")
-    return values[0]
-
-
 def _verify_shared_vendor_for_lock(profile: StagingProfile, release_dir: Path) -> None:
     """Bind shared Composer code to this release's locked production packages."""
     lock_raw = _read_regular_nofollow(release_dir / "composer.lock", max_bytes=16_000_000,
@@ -2174,64 +2159,12 @@ def _verify_maintenance_gate_closed(profile: StagingProfile) -> None:
              "phase_b_maintenance_gate_invalid")
 
 
-def _consume_phase2b_dba_handoff(profile: StagingProfile, transaction, policy) -> bool:
-    """Read and consume the transaction-bound, root-owned DBA receipt if paused."""
-    if transaction.state.get("state") != "DBA_HANDOFF_REQUIRED":
-        return False
-    receipt_path = profile.state_dir / f"phase2b-dba-receipt-{transaction.transaction_id}.json"
-    try:
-        receipt_info = _lstat(receipt_path, "phase2b_dba_receipt_missing_or_unprotected")
-        _require(stat.S_ISREG(receipt_info.st_mode) and not stat.S_ISLNK(receipt_info.st_mode)
-                 and receipt_info.st_uid == 0 and stat.S_IMODE(receipt_info.st_mode) == 0o400
-                 and receipt_info.st_nlink == 1,
-                 "phase2b_dba_receipt_missing_or_unprotected")
-        receipt_raw = _read_regular_nofollow(
-            receipt_path, max_bytes=64_000, expected_uid=0, expected_mode=0o400)
-    except DeployRefused:
-        raise DeployRefused("phase2b_dba_receipt_missing_or_unprotected") from None
-    try:
-        receipt = _strict_json(receipt_raw)
-    except (UnicodeError, ValueError):
-        raise DeployRefused("phase2b_dba_receipt_invalid") from None
-    observed_snapshot = database_fingerprint(policy, database=DATABASE, isolated=False)
-    observed_target = {key: observed_snapshot[key] for key in (
-        "schema_sha256", "ledger_sha256", "data_sha256", "migrations")}
-    observed_triggers = _TRANSACTION_MODULE.database_trigger_inventory(policy, database=DATABASE)
-    receipt_inventory = receipt.get("trigger_inventory") if isinstance(receipt, Mapping) else None
-    normalized_receipt_inventory = ([{"name": item.get("name"), "definer": item.get("definer")}
-        for item in receipt_inventory if isinstance(item, Mapping)]
-        if isinstance(receipt_inventory, list) else None)
-    _require(observed_triggers == normalized_receipt_inventory,
-             "phase2b_dba_trigger_inventory_observation_mismatch")
-    expected_definer = _phase2b_expected_definer(profile)
-    try:
-        transaction.resume_dba_handoff(
-            receipt=receipt, observed=observed_target, trigger_inventory=receipt_inventory,
-            source_sha256=transaction.identity.previous_sha, expected_definer=expected_definer,
-        )
-    except TransactionRefused as error:
-        raise DeployRefused(str(error)) from None
-    return True
-
-
 def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
                               previous_sha: str, application_sha: str,
                               artifact_sha256: str, migrations: list[dict[str, str]]):
     """Back up, restore and rehearse, resuming only one exact durable transaction."""
     _require(bool(migrations) and migrations == sorted(migrations, key=lambda item: item["name"]),
              "release_migration_manifest_invalid")
-    pinned_pair = tuple(_TRANSACTION_MODULE.PHASE2B_MIGRATIONS)
-    by_name = {item["name"]: item["sha256"] for item in migrations}
-    present = [name for name, _digest in pinned_pair if name in by_name]
-    if present:
-        names = [item["name"] for item in migrations]
-        first_index = names.index(pinned_pair[0][0]) if pinned_pair[0][0] in names else -1
-        _require(len(present) == 2 and first_index >= 0
-                 and names[first_index:first_index + 2] == [item[0] for item in pinned_pair]
-                 and all(by_name[name] == digest for name, digest in pinned_pair),
-                 "phase2b_trigger_migration_pin_mismatch")
-        # Resolve the locked definer before any target migration can begin.
-        _phase2b_expected_definer(profile)
     policy = _load_phase_b_policy(profile)
     _verify_phase_b_fences(profile, policy)
     transaction = None
@@ -2272,7 +2205,7 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
         _bound_resume(state)
         _require(state.get("state") in {
             "PREPARED", "BACKUP_VERIFIED", "RESTORE_REHEARSAL_VERIFIED",
-            "MIGRATION_REHEARSAL_VERIFIED", "FENCES_CLOSED", "DBA_HANDOFF_REQUIRED", "MIGRATING",
+            "MIGRATION_REHEARSAL_VERIFIED", "FENCES_CLOSED", "MIGRATING",
             "MIGRATIONS_VERIFIED",
         }, "phase_b_transaction_state_requires_recovery")
         # Rebuild only the two transaction-named schemas on the pinned isolated
@@ -2283,7 +2216,7 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
         restored = database_fingerprint(policy, database=restore_name, isolated=True)
         rehearsal_base = database_fingerprint(policy, database=rehearsal_name, isolated=True)
         target_may_have_changed = transaction.state["state"] in {
-            "FENCES_CLOSED", "DBA_HANDOFF_REQUIRED", "MIGRATING", "MIGRATIONS_VERIFIED",
+            "FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED",
         }
         if not target_may_have_changed and target_before["schema_sha256"] != restored["schema_sha256"]:
             components = target_before.get("schema_components", {})
@@ -2385,7 +2318,7 @@ def _prepare_phase_b_database(profile: StagingProfile, release_path: Path, *,
             fences_sha256 = _verify_phase_b_fences(profile, policy)
             current_fence_receipt = hashlib.sha256((fences_sha256 + gate[2]).encode("ascii")).hexdigest()
             transaction.advance("FENCES_CLOSED", {"fence_receipt_sha256": current_fence_receipt})
-        elif state["state"] in {"FENCES_CLOSED", "DBA_HANDOFF_REQUIRED", "MIGRATING", "MIGRATIONS_VERIFIED"}:
+        elif state["state"] in {"FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED"}:
             gate = _ensure_maintenance_gate_closed(profile)
             fences_sha256 = _verify_phase_b_fences(profile, policy)
             current_fence_receipt = hashlib.sha256((fences_sha256 + gate[2]).encode("ascii")).hexdigest()
@@ -2990,8 +2923,6 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                         if mysql_failure else "phase_b_migration_command_failed")
                     return False
 
-            _consume_phase2b_dba_handoff(profile, tx, policy)
-
             try:
                 tx.apply_rehearsed_migrations(
                     expected_after=phase_b["expected_after"], observe=observe_target_database,
@@ -3003,12 +2934,6 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
                 # schema and ledger hashes. Preserve that explicit retryable
                 # checkpoint; never mark it ambiguous or retry in this process.
                 tx_state = tx.state
-                if (str(error) == "phase2b_dba_handoff_required"
-                        and tx_state.get("state") == "DBA_HANDOFF_REQUIRED"):
-                    _verify_maintenance_gate_closed(profile)
-                    _verify_phase_b_fences(profile, policy)
-                    return DeploymentResult("HOLD", str(error), application_sha,
-                                            previous_sha, artifact_sha256)
                 if (str(error) == "migration_execution_not_verified"
                         and tx_state.get("state") == "FENCES_CLOSED"):
                     _verify_maintenance_gate_closed(profile)

@@ -6,7 +6,7 @@ with binary logging enabled and `log_bin_trust_function_creators=OFF`. The teste
 privilege ladder is reported as `UNRESOLVED_SUPER_ONLY`; this document does not
 claim that `SUPER` is the only possible path on every MySQL release.
 
-The staging-next 1.4.9 source controller now journals a hold immediately before
+The staging-next 1.4.10 source controller now journals a hold immediately before
 the first pinned Phase 2B trigger migration and accepts a root-owned receipt to
 resume the Laravel migration sequence. This source integration is not a
 staging/production authorization. Target identity and backup/restore receipt

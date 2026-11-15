@@ -6,14 +6,14 @@
   "entrypoint_path": "scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py",
   "entrypoint_sha256": "7b4fda009e1d098b7886866b6b0cafc4166dccf480c5cead595c89beabadd798",
   "backend_path": "scripts/staging_next_deploy_backend_1_4_9.py",
-  "backend_sha256": "1580fa6880bdb2c360e56ecc5078f60a3daa20e331d2ad0308760cbe3727ca7a",
+  "backend_sha256": "68bc80ad8a87b06e19a2f9be1a52dc50f80db25183f66a39b1936f8434b1975f",
   "transaction_module_path": "scripts/staging_next_db_transaction_1_4_9.py",
-  "transaction_module_sha256": "80714d46b3ea88d7dcda67649532e783c38aad8e18d64a6e90aed1b9ab2a37f4",
+  "transaction_module_sha256": "809faa581019a9349eaae09ed18198f164781354ba5a89de55a858258dd7d290",
   "target_binding_path": "scripts/deployment_target_binding.py",
   "target_binding_sha256": "987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910",
   "environment_contract_path": "scripts/deployment_environment_contract.py",
   "environment_contract_sha256": "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1",
-  "helper_artifact_sha256": "52b0e8c6f4437b2be37b89aa001d6890ffe2dc0253955b92def705c383859f3d",
+  "helper_artifact_sha256": "d88de19203770680e919000484b4d26f916ee03b906c5d8a55ff70d6887d229f",
   "release_validation": {
     "required_independent_agent_passes": [
       "integration_qa",

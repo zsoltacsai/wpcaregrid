@@ -13,19 +13,18 @@ this document has been executed on any host; installing it needs a separate Owne
 
 ## Pinned source
 
-Source is the GO-8.3 branch candidate tree and the manifest
-`deploy/release-manifests/staging-next-helper-1.4.9.json`. These source pins do
-not mean the helper is installed on staging; no host has been read or changed.
+Source is the exact protected-primary commit containing this document and the
+manifest `deploy/release-manifests/staging-next-helper-1.4.9.json`.
 
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
 | Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py` | `7b4fda009e1d098b7886866b6b0cafc4166dccf480c5cead595c89beabadd798` |
-| Backend | `scripts/staging_next_deploy_backend_1_4_9.py` | `1580fa6880bdb2c360e56ecc5078f60a3daa20e331d2ad0308760cbe3727ca7a` |
-| Transaction module | `scripts/staging_next_db_transaction_1_4_9.py` | `80714d46b3ea88d7dcda67649532e783c38aad8e18d64a6e90aed1b9ab2a37f4` |
+| Backend | `scripts/staging_next_deploy_backend_1_4_9.py` | `68bc80ad8a87b06e19a2f9be1a52dc50f80db25183f66a39b1936f8434b1975f` |
+| Transaction module | `scripts/staging_next_db_transaction_1_4_9.py` | `809faa581019a9349eaae09ed18198f164781354ba5a89de55a858258dd7d290` |
 | Target binding | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
 | Environment contract | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| Combined helper artifact | Manifest-derived | `52b0e8c6f4437b2be37b89aa001d6890ffe2dc0253955b92def705c383859f3d` |
-| Root installer | `scripts/install_staging_next_helper_1_4_9.py` | `0f67ad75b35e3936aca8eeaf6343a8e044d36c59213ab02345da3dbbc428cfca` |
+| Combined helper artifact | Manifest-derived | `d88de19203770680e919000484b4d26f916ee03b906c5d8a55ff70d6887d229f` |
+| Root installer | `scripts/install_staging_next_helper_1_4_9.py` | `d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v14`. Recalculate
 these values from the final merged Git tree (LF bytes) before any installation; a
@@ -90,7 +89,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 0f67ad75b35e3936aca8eeaf6343a8e044d36c59213ab02345da3dbbc428cfca; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,
