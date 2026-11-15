@@ -261,7 +261,9 @@ class Phase2BDbaControllerTests(unittest.TestCase):
             self.assertEqual(resumed.state["state"], "DBA_HANDOFF_REQUIRED")
             resumed._validate_state(dict(resumed.state))
             receipt = self.receipt()
-            digest = resumed.resume_dba_handoff(receipt=receipt, observed=dict(self.after),
+            observed_tuple = dict(self.after)
+            observed_tuple["migrations"] = tuple(observed_tuple["migrations"])
+            digest = resumed.resume_dba_handoff(receipt=receipt, observed=observed_tuple,
                 trigger_inventory=self.inventory, source_sha256=self.identity.previous_sha,
                 expected_definer="phase2b_guard@localhost")
             self.assertEqual(digest, receipt["receipt_sha256"])

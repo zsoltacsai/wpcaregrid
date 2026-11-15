@@ -20,22 +20,22 @@ not mean the helper is installed on staging; no host has been read or changed.
 
 | Artifact | Source path | SHA-256 |
 | --- | --- | --- |
-| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py` | `73ad1cca452aefb76b3f0e0f380ee950d69a50da008719000b41690bcb7dc969` |
-| Backend | `scripts/staging_next_deploy_backend_1_4_10.py` | `2ac86e5b04f0a7312dc701757c7b9912f006cc437030a7a57c6d70480b8b2ec2` |
-| Transaction module | `scripts/staging_next_db_transaction_1_4_10.py` | `580a52530c9229ce4be0008a36657bdae113e392e6c21c09ad8125306092b8e9` |
-| Target binding | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
+| Entrypoint | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py` | `893b77919aa87c1103ee0ecc54bd433a376e31cc85b797638618ed13e9344d65` |
+| Backend | `scripts/staging_next_deploy_backend_1_4_10.py` | `0857a9d81c5d368da634bdab846accd40dd24f296057d4234706b5b4e52ca66f` |
+| Transaction module | `scripts/staging_next_db_transaction_1_4_10.py` | `d1a382728180526ae6a0b27f70abc5e42b512fb389eb8339b9c2c544c7567848` |
+| Target binding | `scripts/deployment_target_binding_1_4_10.py` | `e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16` |
 | Environment contract | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| Combined helper artifact | Manifest-derived | `1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed` |
-| Root installer | `scripts/install_staging_next_helper_1_4_10.py` | `3764891b897d5c7e83d15cece014abb45366867caa873648b66fa24ba7cd8115` |
+| Combined helper artifact | Manifest-derived | `cc945c1acdb7d6ae5554d8674c1573ee619960d706fb94c77d635dd9abfb27b8` |
+| Root installer | `scripts/install_staging_next_helper_1_4_10.py` | `f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v15`. Recalculate
 these values from the final merged Git tree (LF bytes) before any installation; a
 different source revision requires a new manifest and review.
 
-## What changes relative to 1.4.8
+## What changes relative to 1.4.9
 
 * Two more root-owned, mode 0644 files are installed next to the helper
-  (`deployment_target_binding.py`, `deployment_environment_contract.py`); the helper
+  (`deployment_target_binding_1_4_10.py`, `deployment_environment_contract.py`); the helper
   policy pins both (`target_binding_sha256`, `environment_contract_sha256`) and the combined
   artifact digest covers them.
 * The privileged entrypoint executes the transaction module and the binding from the
@@ -116,7 +116,7 @@ From a root console on `stg1.wpcaregrid.com`, run this single command in a
 subshell so failure does not close the console:
 
 ```sh
-( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.10.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = 3764891b897d5c7e83d15cece014abb45366867caa873648b66fa24ba7cd8115; exec /usr/bin/python3 -I "$i" )
+( set -eu; i=/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.10.py; test -f "$i"; test ! -L "$i"; test "$(stat -c '%U:%G:%a' "$i")" = deploy:deploy:600; test "$(sha256sum "$i" | cut -d' ' -f1)" = f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c; exec /usr/bin/python3 -I "$i" )
 ```
 
 The script itself checks the exact source hashes and directory contents,

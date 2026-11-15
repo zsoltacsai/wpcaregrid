@@ -885,7 +885,8 @@ def _validate_dba_receipt(receipt: object, *, identity, transaction_id: str,
         "before", "after", "dba", "trigger_inventory", "receipt_sha256",
     }
     _require(set(receipt) == required, "phase2b_dba_receipt_shape_invalid")
-    _require(receipt["schema"] == 1, "phase2b_dba_receipt_schema_invalid")
+    _require(type(receipt["schema"]) is int and receipt["schema"] == 1,
+             "phase2b_dba_receipt_schema_invalid")
     _require(receipt["transaction_id"] == transaction_id, "phase2b_dba_transaction_mismatch")
     _require(receipt["application_sha"] == identity.application_sha,
              "phase2b_dba_release_sha_mismatch")
@@ -1771,8 +1772,10 @@ class DatabaseReleaseTransaction:
                  and list(observed["migrations"]) == checkpoint["ledger_before"]
                      + [item[0] for item in PHASE2B_MIGRATIONS],
                  "phase2b_dba_observed_target_mismatch")
-        _require(receipt.get("after") == {key: observed[key] for key in (
-            "schema_sha256", "ledger_sha256", "data_sha256", "migrations")},
+        observed_after = {key: observed[key] for key in (
+            "schema_sha256", "ledger_sha256", "data_sha256")}
+        observed_after["migrations"] = list(observed["migrations"])
+        _require(receipt.get("after") == observed_after,
                  "phase2b_dba_receipt_observation_mismatch")
         _require(trigger_inventory == receipt.get("trigger_inventory"),
                  "phase2b_dba_trigger_inventory_observation_mismatch")

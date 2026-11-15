@@ -46,16 +46,23 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
             "entrypoint": ROOT / "scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py",
             "backend": ROOT / "scripts/staging_next_deploy_backend_1_4_10.py",
             "transaction_module": ROOT / "scripts/staging_next_db_transaction_1_4_10.py",
+            "target_binding": ROOT / "scripts/deployment_target_binding_1_4_10.py",
+            "environment_contract": ROOT / "scripts/deployment_environment_contract.py",
         }
         hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in files.items()}
         helper = load_module("staging_next_priv_1_4_10", files["entrypoint"])
         backend = load_module("staging_next_backend_1_4_10", files["backend"])
+        binding = load_module("staging_next_binding_1_4_10", files["target_binding"])
         installer = load_module("staging_next_installer_1_4_10",
                                 ROOT / "scripts/install_staging_next_helper_1_4_10.py")
         self.assertEqual((helper.VERSION, helper.CONTRACT),
                          ("1.4.10", "wpcaregrid-staging-next-deploy-v15"))
         self.assertEqual((backend.HELPER_VERSION, backend.HELPER_CONTRACT),
                          (helper.VERSION, helper.CONTRACT))
+        self.assertIn("DBA_HANDOFF_REQUIRED", binding.TRANSACTION_STATES)
+        self.assertIn("DBA_HANDOFF_REQUIRED", binding._FENCED_STATES)
+        backend._bound_resume({"profile": "staging-next", "database": "wpcg_staging_next",
+                               "state": "DBA_HANDOFF_REQUIRED"})
         self.assertEqual((manifest["helper_version"], manifest["compatibility_contract"]),
                          (helper.VERSION, helper.CONTRACT))
         for key, path in files.items():
@@ -66,16 +73,17 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
                    "compatibility_contract": helper.CONTRACT,
                    "entrypoint_sha256": hashes["entrypoint"], "backend_sha256": hashes["backend"],
                    "transaction_module_sha256": hashes["transaction_module"],
-                   "target_binding_sha256": manifest["target_binding_sha256"],
-                   "environment_contract_sha256": manifest["environment_contract_sha256"]}
+                   "target_binding_sha256": hashes["target_binding"],
+                   "environment_contract_sha256": hashes["environment_contract"]}
         artifact_sha = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.assertEqual(manifest["helper_artifact_sha256"], artifact_sha)
         self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, artifact_sha)
         self.assertEqual(CONTROLLER.HELPER, helper.ENTRYPOINT)
         self.assertEqual((installer.VERSION, installer.CONTRACT), (helper.VERSION, helper.CONTRACT))
-        self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256,
-                          installer.TRANSACTION_SHA256, installer.ARTIFACT_SHA256),
-                         (hashes["entrypoint"], hashes["backend"], hashes["transaction_module"], artifact_sha))
+        self.assertEqual((installer.ENTRY_SHA256, installer.BACKEND_SHA256, installer.TRANSACTION_SHA256,
+                          installer.BINDING_SHA256, installer.CONTRACT_SHA256, installer.ARTIFACT_SHA256),
+                         (hashes["entrypoint"], hashes["backend"], hashes["transaction_module"],
+                          hashes["target_binding"], hashes["environment_contract"], artifact_sha))
         legacy_manifest = json.loads((ROOT / "deploy/release-manifests/staging-next-helper-1.4.9.json")
                                      .read_text(encoding="utf-8"))
         self.assertEqual((legacy_manifest["helper_version"], legacy_manifest["helper_artifact_sha256"]),
@@ -256,7 +264,7 @@ class StagingNextHelperConsistencyTests(unittest.TestCase):
         active_manifest = json.loads((ROOT / "deploy/release-manifests/staging-next-helper-1.4.10.json")
                                      .read_text(encoding="utf-8"))
         self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, active_manifest["helper_artifact_sha256"])
-        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, "1ab73851b543cce5643a0e6dd7a0f30f2807f89ff23c71c3e38d0731b5c96eed")
+        self.assertEqual(CONTROLLER.HELPER_ARTIFACT_SHA256, active_manifest["helper_artifact_sha256"])
         self.assertEqual(CONTROLLER.HELPER, Path("/usr/local/libexec/wpcaregrid-deploy/staging-next/1.4.10/"
                                                   "wpcaregrid-deploy-staging-next-priv"))
         self.assertEqual((installer.VERSION, installer.CONTRACT),

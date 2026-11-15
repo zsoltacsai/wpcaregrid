@@ -198,17 +198,17 @@ class StagingNextHelperInstallerTests(unittest.TestCase):
                    b"LOADED_BINDING = True\n"
                    b"CONTRACT = globals().get('_PRELOADED_CONTRACT_SOURCE')\n")
         contract = b"AUTHENTICATED_CONTRACT = True\n"
-        backend = backend + b"    assert sys.modules['_wpcg_deployment_target_binding_v1'].LOADED_BINDING\n"
+        backend = backend + b"    assert sys.modules['_wpcg_deployment_target_binding_1_4_10'].LOADED_BINDING\n"
         with patch.object(INSTALLER, "_run", side_effect=calls):
             INSTALLER._verify_nginx(backend, transaction, binding, contract)
-        self.assertNotIn("_wpcg_deployment_target_binding_v1", INSTALLER.sys.modules)
+        self.assertNotIn("_wpcg_deployment_target_binding_1_4_10", INSTALLER.sys.modules)
         self.assertNotIn("_wpcg_staging_next_db_transaction_v1", INSTALLER.sys.modules)
 
     def test_policy_pins_the_binding_and_contract_files(self):
         policy = __import__("json").loads(INSTALLER._policy(996))
         self.assertEqual(policy["target_binding_sha256"], INSTALLER.BINDING_SHA256)
         self.assertEqual(policy["environment_contract_sha256"], INSTALLER.CONTRACT_SHA256)
-        self.assertEqual(INSTALLER.BINDING.name, "deployment_target_binding.py")
+        self.assertEqual(INSTALLER.BINDING.name, "deployment_target_binding_1_4_10.py")
         self.assertEqual(INSTALLER.CONTRACT_FILE.name, "deployment_environment_contract.py")
         self.assertEqual(INSTALLER.BINDING.parent, INSTALLER.ENTRYPOINT.parent)
 

@@ -74,11 +74,11 @@ LEGACY_PHASE_B_CONTROLS = tuple(
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
 
-# Target binding (scripts/deployment_target_binding.py), pinned by the helper
+# Target binding (scripts/deployment_target_binding_1_4_10.py), pinned by the helper
 # policy. The privileged entrypoint preloads the authenticated bytes; the file
 # fallback exists for the installer self-check and the source test suite.
-_BINDING_PATH = Path(__file__).with_name("deployment_target_binding.py")
-_BINDING_MODULE_NAME = "_wpcg_deployment_target_binding_v1"
+_BINDING_PATH = Path(__file__).with_name("deployment_target_binding_1_4_10.py")
+_BINDING_MODULE_NAME = "_wpcg_deployment_target_binding_1_4_10"
 _BINDING_MODULE = _transaction_sys.modules.get(_BINDING_MODULE_NAME)
 if _BINDING_MODULE is None:
     _BINDING_SPEC = importlib.util.spec_from_file_location(_BINDING_MODULE_NAME, _BINDING_PATH)
