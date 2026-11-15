@@ -18,6 +18,7 @@ def require(condition, message):
 dockerfile = (HARNESS / "Dockerfile").read_text()
 runner = (HARNESS / "run-ci.sh").read_text()
 pool = (HARNESS / "pool.conf").read_text()
+test_runtime_marker = (HARNESS / "enable-test-runtime.php").read_text()
 nginx = (HARNESS / "nginx.conf").read_text()
 entrypoint = (HARNESS / "entrypoint.py").read_text()
 
@@ -38,6 +39,12 @@ for forbidden in ("--privileged", "--network host", "--pid host", "--env-file", 
     require(forbidden not in runner, f"Forbidden container escape/control option present: {forbidden}")
 require("clear_env = yes" in pool and "env[APP_KEY] = $APP_KEY" in pool,
         "FPM must clear inherited process environment and receive only explicit pool variables.")
+require("php_admin_value[auto_prepend_file] = /opt/php-fpm-test/enable-test-runtime.php" in pool
+        and "PHP_SAPI === 'fpm-fcgi'" in test_runtime_marker
+        and "getenv('APP_ENV') === 'testing'" in test_runtime_marker
+        and "getenv('CAREGRID_DEPLOYMENT_ENV') === 'testing'" in test_runtime_marker
+        and "define('WPCG_TEST_RUNTIME', true)" in test_runtime_marker,
+        "The marketing-gate test marker must be injected only by the exact isolated PHP-FPM test runtime.")
 require("listen 127.0.0.1:8080;" in nginx and "fastcgi_pass unix:/tmp/php-fpm.sock;" in nginx,
         "HTTP gateway must be loopback-only and use the real FPM FastCGI socket.")
 require("QUEUE_CONNECTION=database" in dockerfile and "env[QUEUE_CONNECTION] = database" in pool,
