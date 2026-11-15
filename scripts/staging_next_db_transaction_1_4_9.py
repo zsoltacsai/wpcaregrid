@@ -46,6 +46,12 @@ PHASE_B_WORKER_DISABLED_MARKER = Path(
 PHASE_B_SCHEDULER_PAUSED_MARKER = Path(
     "/var/lib/wpcaregrid-deploy/staging-next/state/scheduler-paused"
 )
+PHASE2B_MIGRATIONS = (
+    ("2026_11_02_000002_create_transition_v2_requests_table",
+     "f616d65af26cce1677582b48d3165b8e5811169f1a8735d221b8e5d82ae494da"),
+    ("2026_11_02_000003_create_transition_history_events_table",
+     "fec0ae70fcd373bce7f21ec5dc274c9f53d9961d5c0833b92ab437912741e5c1"),
+)
 MIGRATION_RE = re.compile(r"[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+\Z")
 STATES = (
     "PREPARED",
@@ -53,6 +59,7 @@ STATES = (
     "RESTORE_REHEARSAL_VERIFIED",
     "MIGRATION_REHEARSAL_VERIFIED",
     "FENCES_CLOSED",
+    "DBA_HANDOFF_REQUIRED",
     "MIGRATING",
     "MIGRATIONS_VERIFIED",
     "RELEASE_ACTIVATED",
@@ -577,6 +584,29 @@ def database_fingerprint(policy: DatabaseExecutionPolicy, *, database: str,
     }
 
 
+def database_trigger_inventory(policy: DatabaseExecutionPolicy, *, database: str) -> list[dict[str, str]]:
+    """Return the ordered trigger names and definers observed on the target DB."""
+    _require(re.fullmatch(r"wpcg_staging_next(?:_(?:restore|rehearsal)_[0-9a-f]{32})?", database)
+             is not None, "phase_b_database_name_invalid")
+    raw = _mysql_query(
+        policy, isolated=False,
+        sql="SELECT TRIGGER_NAME,DEFINER FROM information_schema.TRIGGERS "
+            "WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME",
+        database=database, timeout=30.0, maximum=64_000,
+    )
+    try:
+        result = []
+        for row in raw.decode("utf-8", "strict").splitlines():
+            fields = row.split("\t")
+            _require(len(fields) == 2 and re.fullmatch(r"[A-Za-z0-9_$]{1,64}", fields[0]) is not None
+                     and re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", fields[1]) is not None,
+                     "phase_b_trigger_inventory_invalid")
+            result.append({"name": fields[0], "definer": fields[1]})
+        return result
+    except UnicodeError:
+        raise TransactionRefused("phase_b_trigger_inventory_invalid") from None
+
+
 def _verify_backup_sql(path: Path, *, expected_uid: int | None = None,
                        expected_mode: int | None = None) -> tuple[str, int]:
     digest = hashlib.sha256()
@@ -829,6 +859,95 @@ def _unique_json(pairs):
 
 def _hash(value: object) -> bool:
     return isinstance(value, str) and SHA_RE.fullmatch(value) is not None
+
+
+def _valid_fingerprint(value: Mapping[str, object]) -> bool:
+    return (all(_hash(value.get(key)) for key in ("schema_sha256", "ledger_sha256", "data_sha256"))
+            and isinstance(value.get("migrations"), (tuple, list))
+            and all(isinstance(name, str) for name in value["migrations"]))
+
+
+def _dba_receipt_hash(receipt: Mapping[str, object]) -> str:
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=True).encode("ascii")).hexdigest()
+
+
+def _validate_dba_receipt(receipt: object, *, identity, transaction_id: str,
+                          source_sha256: str, expected_before: Mapping[str, object],
+                          expected_after: Mapping[str, object], expected_checkpoints: list[Mapping[str, str]],
+                          expected_definer: str) -> str:
+    if not isinstance(receipt, dict):
+        raise TransactionRefused("phase2b_dba_receipt_missing")
+    required = {
+        "schema", "transaction_id", "application_sha", "artifact_sha256", "source_sha256",
+        "target_uuid_sha256", "database", "mysql", "migration_files", "migration_checkpoints",
+        "before", "after", "dba", "trigger_inventory", "receipt_sha256",
+    }
+    _require(set(receipt) == required, "phase2b_dba_receipt_shape_invalid")
+    _require(receipt["schema"] == 1, "phase2b_dba_receipt_schema_invalid")
+    _require(receipt["transaction_id"] == transaction_id, "phase2b_dba_transaction_mismatch")
+    _require(receipt["application_sha"] == identity.application_sha,
+             "phase2b_dba_release_sha_mismatch")
+    _require(receipt["artifact_sha256"] == identity.artifact_sha256,
+             "phase2b_dba_artifact_sha256_mismatch")
+    _require(receipt["source_sha256"] == source_sha256,
+             "phase2b_dba_source_sha256_mismatch")
+    _require(receipt["target_uuid_sha256"] == identity.mysql_uuid_sha256,
+             "phase2b_dba_target_uuid_sha256_mismatch")
+    _require(receipt["database"] == DATABASE, "phase2b_dba_database_mismatch")
+    _require(receipt["mysql"] == {"log_bin": True, "binlog_format": "ROW",
+                                  "trust_function_creators": "OFF"},
+             "phase2b_dba_mysql_contract_mismatch")
+    expected_files = [{"name": name + ".php", "sha256": digest}
+                      for name, digest in PHASE2B_MIGRATIONS]
+    _require(receipt["migration_files"] == expected_files,
+             "phase2b_dba_migration_hash_mismatch")
+    checkpoints = receipt["migration_checkpoints"]
+    _require(isinstance(checkpoints, list) and len(checkpoints) == 2,
+             "phase2b_dba_migration_checkpoints_invalid")
+    for index, ((name, digest), checkpoint) in enumerate(zip(PHASE2B_MIGRATIONS, checkpoints)):
+        expected_names = list(expected_before["migrations"]) + [
+            item[0] for item in PHASE2B_MIGRATIONS[:index + 1]]
+        _require(isinstance(checkpoint, dict) and set(checkpoint) == {
+            "name", "sha256", "schema_sha256", "ledger_sha256", "data_sha256", "migrations",
+        } and checkpoint.get("name") == name and checkpoint.get("sha256") == digest
+                 and checkpoint.get("migrations") == expected_names
+                 and all(_hash(checkpoint.get(key)) for key in (
+                     "schema_sha256", "ledger_sha256", "data_sha256")),
+                 "phase2b_dba_migration_checkpoints_invalid")
+        _require(index < len(expected_checkpoints)
+                 and all(checkpoint.get(key) == expected_checkpoints[index].get(key)
+                         for key in ("schema_sha256", "ledger_sha256", "data_sha256")),
+                 "phase2b_dba_migration_checkpoint_mismatch")
+    for label in ("before", "after"):
+        expected = expected_before if label == "before" else expected_after
+        actual = receipt[label]
+        _require(isinstance(actual, dict) and set(actual) == {
+            "schema_sha256", "ledger_sha256", "data_sha256", "migrations",
+        } and all(actual.get(key) == expected.get(key) for key in (
+            "schema_sha256", "ledger_sha256", "data_sha256", "migrations")),
+                 f"phase2b_dba_{label}_fingerprint_mismatch")
+    last = checkpoints[-1]
+    _require(all(last.get(key) == receipt["after"].get(key) for key in (
+        "schema_sha256", "ledger_sha256", "data_sha256", "migrations")),
+        "phase2b_dba_final_migration_checkpoint_mismatch")
+    _require(isinstance(expected_definer, str)
+             and re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", expected_definer) is not None,
+             "phase2b_dba_definer_contract_invalid")
+    expected_dba = {"approved_definer": expected_definer, "temporary_super_revoked": True,
+        "elevated_sessions_terminated": True, "global_privileges_only_usage": True,
+        "account_locked": True, "definer_durable": True, "schema_grants_minimized": True}
+    _require(receipt["dba"] == expected_dba, "phase2b_dba_cleanup_unverified")
+    inventory = receipt["trigger_inventory"]
+    _require(isinstance(inventory, list) and len(inventory) == 6
+             and all(isinstance(item, dict) and item.get("definer") == expected_definer
+                     and item.get("valid") is True for item in inventory)
+             and len({item.get("name") for item in inventory if isinstance(item, dict)}) == 6,
+             "phase2b_dba_trigger_inventory_mismatch")
+    digest = _dba_receipt_hash(receipt)
+    _require(receipt["receipt_sha256"] == digest, "phase2b_dba_receipt_hash_mismatch")
+    return digest
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
@@ -1176,6 +1295,54 @@ class DatabaseReleaseTransaction:
                  and 0 <= value["migration_cursor"] <= len(self.identity.migrations),
                  "transaction_state_invalid")
         _require(isinstance(value.get("evidence"), dict), "transaction_evidence_invalid")
+        if value["state"] == "DBA_HANDOFF_REQUIRED":
+            cursor = value["migration_cursor"]
+            handoff = value["evidence"].get("DBA_HANDOFF_REQUIRED")
+            _require(cursor + 2 <= len(self.identity.migrations)
+                     and self.identity.migrations[cursor:cursor + 2]
+                     == tuple(item[0] for item in PHASE2B_MIGRATIONS)
+                     and isinstance(handoff, dict) and set(handoff) == {
+                         "migration_cursor", "before", "expected_after", "migration_expected_after",
+                         "ledger_before",
+                     } and handoff.get("migration_cursor") == cursor
+                     and isinstance(handoff.get("before"), dict)
+                     and set(handoff["before"]) == {"schema_sha256", "ledger_sha256", "data_sha256"}
+                     and all(_hash(handoff["before"].get(key)) for key in handoff["before"])
+                     and isinstance(handoff.get("expected_after"), dict)
+                     and set(handoff["expected_after"]) == {"schema_sha256", "ledger_sha256", "data_sha256"}
+                     and all(_hash(handoff["expected_after"].get(key)) for key in handoff["expected_after"])
+                     and isinstance(handoff.get("migration_expected_after"), list)
+                     and len(handoff["migration_expected_after"]) == 2
+                     and all(isinstance(item, dict) and set(item) == {
+                         "schema_sha256", "ledger_sha256", "data_sha256",
+                     } and all(_hash(item.get(key)) for key in item)
+                             for item in handoff["migration_expected_after"])
+                     and isinstance(handoff.get("ledger_before"), list)
+                     and all(isinstance(name, str) for name in handoff["ledger_before"])
+                     and not any(name in handoff["ledger_before"]
+                                 for name, _digest in PHASE2B_MIGRATIONS),
+                     "phase2b_dba_pause_journal_invalid")
+        if "DBA_HANDOFF_VERIFIED" in value["evidence"]:
+            verified = value["evidence"]["DBA_HANDOFF_VERIFIED"]
+            trigger_names = tuple(item[0] for item in PHASE2B_MIGRATIONS)
+            trigger_positions = [self.identity.migrations.index(name) for name in trigger_names
+                                 if name in self.identity.migrations]
+            _require(isinstance(verified, dict) and set(verified) == {"receipt_sha256"}
+                     and _hash(verified.get("receipt_sha256")) and len(trigger_positions) == 2
+                     and trigger_positions[1] == trigger_positions[0] + 1
+                     and value["migration_cursor"] >= trigger_positions[0] + 2
+                     and all(f"migration:{name}" in value["evidence"] for name in trigger_names)
+                     and value["state"] != "DBA_HANDOFF_REQUIRED",
+                     "phase2b_dba_resume_journal_invalid")
+            for name, pinned_digest in PHASE2B_MIGRATIONS:
+                checkpoint = value["evidence"].get(f"migration:{name}")
+                _require(isinstance(checkpoint, dict) and set(checkpoint) == {
+                    "schema_sha256", "ledger_sha256", "data_sha256", "receipt_sha256", "migration_sha256",
+                } and all(_hash(checkpoint.get(key)) for key in (
+                    "schema_sha256", "ledger_sha256", "data_sha256", "receipt_sha256"))
+                         and checkpoint.get("receipt_sha256") == verified["receipt_sha256"]
+                         and checkpoint.get("migration_sha256") == pinned_digest,
+                         "phase2b_dba_resume_journal_invalid")
         restore_evidence = value["evidence"].get("RESTORE_REHEARSAL_VERIFIED")
         if restore_evidence is not None:
             _require(isinstance(restore_evidence, dict)
@@ -1408,8 +1575,15 @@ class DatabaseReleaseTransaction:
         the durable, restart-safe ordering and never supplies SQL or DB targets.
         """
         state = self._ensure_open()
-        _require(state["state"] in {"FENCES_CLOSED", "MIGRATING", "MIGRATIONS_VERIFIED"},
+        _require(state["state"] in {"FENCES_CLOSED", "DBA_HANDOFF_REQUIRED", "MIGRATING", "MIGRATIONS_VERIFIED"},
                  "migration_state_invalid")
+        trigger_names = tuple(item[0] for item in PHASE2B_MIGRATIONS)
+        trigger_positions = [self.identity.migrations.index(name) for name in trigger_names
+                            if name in self.identity.migrations]
+        _require(not trigger_positions or (len(trigger_positions) == 2
+                 and trigger_positions[1] == trigger_positions[0] + 1
+                 and self.identity.migrations[trigger_positions[0]:trigger_positions[0] + 2] == trigger_names),
+                 "phase2b_trigger_migration_pair_invalid")
         _require(set(expected_after) == set(self.identity.migrations),
                  "migration_rehearsal_set_mismatch")
         for name in self.identity.migrations:
@@ -1426,6 +1600,9 @@ class DatabaseReleaseTransaction:
         while state["migration_cursor"] < len(self.identity.migrations):
             cursor = state["migration_cursor"]
             name = self.identity.migrations[cursor]
+            if cursor < len(trigger_names) and self.identity.migrations[cursor:cursor + len(trigger_names)] == trigger_names:
+                self.pause_for_dba_handoff(expected_after=expected_after, observe=observe)
+                raise TransactionRefused("phase2b_dba_handoff_required")
             after_expected = expected_after[name]
             if state["state"] == "MIGRATING":
                 current = observe()
@@ -1517,6 +1694,111 @@ class DatabaseReleaseTransaction:
             )
             state = self._ensure_open()
         _require(state["state"] == "MIGRATIONS_VERIFIED", "migration_sequence_incomplete")
+
+    def pause_for_dba_handoff(self, *, expected_after: Mapping[str, Mapping[str, str]],
+                              observe: Callable[[], Mapping[str, object]]) -> None:
+        """Persist a durable pause exactly at the two pinned trigger migrations."""
+        state = self._ensure_open()
+        pair = tuple(item[0] for item in PHASE2B_MIGRATIONS)
+        cursor = state["migration_cursor"]
+        _require(state["state"] in {"FENCES_CLOSED", "DBA_HANDOFF_REQUIRED"}
+                 and self.identity.migrations[cursor:cursor + 2] == pair,
+                 "phase2b_dba_pause_not_at_trigger_boundary")
+        if state["state"] == "DBA_HANDOFF_REQUIRED":
+            _require(state["evidence"].get("DBA_HANDOFF_REQUIRED", {}).get("migration_cursor") == cursor,
+                     "phase2b_dba_pause_journal_mismatch")
+            return
+        before = observe()
+        _require(isinstance(before, Mapping) and _valid_fingerprint(before),
+                 "phase2b_dba_pause_observation_invalid")
+        if cursor == 0:
+            restore = state["evidence"].get("RESTORE_REHEARSAL_VERIFIED", {})
+            expected_before = {key: restore.get("target_" + key.removesuffix("_sha256") + "_sha256")
+                               for key in ("schema_sha256", "ledger_sha256", "data_sha256")}
+        else:
+            previous = self.identity.migrations[cursor - 1]
+            expected_before = state["evidence"].get(f"migration:{previous}", {})
+        _require(all(before.get(key) == expected_before.get(key)
+                     for key in ("schema_sha256", "ledger_sha256", "data_sha256"))
+                 and all(name not in before["migrations"] for name in pair),
+                 "phase2b_dba_pause_target_mismatch")
+        final_expected = expected_after.get(pair[-1])
+        _require(isinstance(final_expected, Mapping) and set(final_expected) == {
+            "schema_sha256", "ledger_sha256", "data_sha256",
+        } and all(_hash(final_expected.get(key)) for key in final_expected),
+                 "phase2b_dba_rehearsal_checkpoint_missing")
+        updated = dict(state)
+        updated["state"] = "DBA_HANDOFF_REQUIRED"
+        updated["evidence"] = {**state["evidence"], "DBA_HANDOFF_REQUIRED": {
+            "migration_cursor": cursor,
+            "before": {key: before[key] for key in ("schema_sha256", "ledger_sha256", "data_sha256")},
+            "expected_after": dict(final_expected),
+            "migration_expected_after": [dict(expected_after[name]) for name, _digest in PHASE2B_MIGRATIONS],
+            "ledger_before": list(before["migrations"]),
+        }}
+        self._persist(updated)
+
+    def resume_dba_handoff(self, *, receipt: object,
+                           observed: Mapping[str, object], trigger_inventory: object,
+                           source_sha256: str, expected_definer: str) -> str:
+        """Consume one root-authenticated receipt and journal the external migration pair."""
+        state = self._ensure_open()
+        if state["state"] != "DBA_HANDOFF_REQUIRED":
+            verified = state["evidence"].get("DBA_HANDOFF_VERIFIED")
+            if isinstance(receipt, dict) and isinstance(verified, dict):
+                digest = _dba_receipt_hash(receipt)
+                if verified.get("receipt_sha256") == digest:
+                    return digest
+            raise TransactionRefused("phase2b_dba_pause_missing")
+        checkpoint = state["evidence"].get("DBA_HANDOFF_REQUIRED")
+        _require(isinstance(checkpoint, Mapping), "phase2b_dba_pause_journal_invalid")
+        if not isinstance(receipt, dict):
+            raise TransactionRefused("phase2b_dba_receipt_missing")
+        # The receipt is authenticated by its root-owned, mode-0400 protected
+        # handoff file at the backend boundary; a self-hash is only integrity.
+        digest = _validate_dba_receipt(
+            receipt, identity=self.identity, transaction_id=self.transaction_id,
+            source_sha256=source_sha256,
+            expected_before={**checkpoint["before"], "migrations": checkpoint["ledger_before"]},
+            expected_after={**checkpoint["expected_after"],
+                            "migrations": checkpoint["ledger_before"] + [item[0] for item in PHASE2B_MIGRATIONS]},
+            expected_checkpoints=checkpoint["migration_expected_after"],
+            expected_definer=expected_definer,
+        )
+        _require(isinstance(observed, Mapping) and _valid_fingerprint(observed)
+                 and all(observed.get(key) == checkpoint["expected_after"].get(key)
+                         for key in ("schema_sha256", "ledger_sha256", "data_sha256"))
+                 and list(observed["migrations"]) == checkpoint["ledger_before"]
+                     + [item[0] for item in PHASE2B_MIGRATIONS],
+                 "phase2b_dba_observed_target_mismatch")
+        _require(receipt.get("after") == {key: observed[key] for key in (
+            "schema_sha256", "ledger_sha256", "data_sha256", "migrations")},
+                 "phase2b_dba_receipt_observation_mismatch")
+        _require(trigger_inventory == receipt.get("trigger_inventory"),
+                 "phase2b_dba_trigger_inventory_observation_mismatch")
+        updated = dict(state)
+        cursor = state["migration_cursor"]
+        for offset, (name, digest_sha) in enumerate(PHASE2B_MIGRATIONS):
+            _require(self.identity.migrations[cursor + offset] == name,
+                     "phase2b_dba_migration_order_mismatch")
+            migration_checkpoint = receipt["migration_checkpoints"][offset]
+            updated["evidence"][f"migration:{name}"] = {
+                "schema_sha256": migration_checkpoint["schema_sha256"],
+                "ledger_sha256": migration_checkpoint["ledger_sha256"],
+                "data_sha256": migration_checkpoint["data_sha256"],
+                "receipt_sha256": digest,
+                "migration_sha256": digest_sha,
+            }
+        updated["migration_cursor"] = cursor + 2
+        updated["state"] = ("MIGRATIONS_VERIFIED"
+                             if updated["migration_cursor"] == len(self.identity.migrations)
+                             else "FENCES_CLOSED")
+        updated["evidence"]["DBA_HANDOFF_VERIFIED"] = {"receipt_sha256": digest}
+        if updated["state"] == "MIGRATIONS_VERIFIED":
+            updated["evidence"]["MIGRATIONS_VERIFIED"] = {"migration_receipt_sha256": digest}
+        updated["evidence"].pop("DBA_HANDOFF_REQUIRED", None)
+        self._persist(updated)
+        return digest
 
     def _migration_receipt_hash(self, name: str, before: Mapping[str, object],
                                 after: Mapping[str, object]) -> str:

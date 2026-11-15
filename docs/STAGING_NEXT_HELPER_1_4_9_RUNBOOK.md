@@ -1,21 +1,26 @@
 # staging-next helper 1.4.9 - Owner runbook (preflight, staging, install, verify, rollback)
 
-Source: merge commit `49234694f062168a27b471fc43774409e6c4219a` (PR #333). Companion documents:
+Historical baseline: merge commit `49234694f062168a27b471fc43774409e6c4219a` (PR #333). Companion documents:
 `docs/STAGING_NEXT_HELPER_1_4_9_INSTALL.md` (what the installer does) and
 `scripts/staging-149-preflight.py` (read-only host check). **Nothing here has been run on a host.**
 Every step below that changes the host is behind its own Owner GO; steps 0-1 are read-only.
 
-## Pinned values (LF bytes of the merge commit)
+The GO-8.3 controller integration updates the helper source pins below. The
+`staging-149-*` staging scripts remain pinned to the historical #333 bytes and
+must not be used to stage this source candidate. No host has been read or
+changed by this source work.
+
+## GO-8.3 source candidate pins (recalculate from the final tree)
 
 | File | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py` | `7b4fda009e1d098b7886866b6b0cafc4166dccf480c5cead595c89beabadd798` |
-| `scripts/staging_next_deploy_backend_1_4_9.py` | `68bc80ad8a87b06e19a2f9be1a52dc50f80db25183f66a39b1936f8434b1975f` |
-| `scripts/staging_next_db_transaction_1_4_9.py` | `809faa581019a9349eaae09ed18198f164781354ba5a89de55a858258dd7d290` |
+| `scripts/staging_next_deploy_backend_1_4_9.py` | `1580fa6880bdb2c360e56ecc5078f60a3daa20e331d2ad0308760cbe3727ca7a` |
+| `scripts/staging_next_db_transaction_1_4_9.py` | `80714d46b3ea88d7dcda67649532e783c38aad8e18d64a6e90aed1b9ab2a37f4` |
 | `scripts/deployment_target_binding.py` | `987220381d5ea5d02aea1571e7b150f3f9596b27ff56d4b764a4a9e1bbdbb910` |
 | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| `scripts/install_staging_next_helper_1_4_9.py` (installer) | `d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5` |
-| helper artifact digest (printed by the installer/probe) | `d88de19203770680e919000484b4d26f916ee03b906c5d8a55ff70d6887d229f` |
+| `scripts/install_staging_next_helper_1_4_9.py` (installer) | `0f67ad75b35e3936aca8eeaf6343a8e044d36c59213ab02345da3dbbc428cfca` |
+| helper artifact digest (printed by the installer/probe) | `52b0e8c6f4437b2be37b89aa001d6890ffe2dc0253955b92def705c383859f3d` |
 
 ## Step 0 - read-only preflight (permitted now; no GO needed beyond the read-only authorization)
 
