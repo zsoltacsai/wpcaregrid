@@ -51,7 +51,7 @@ The `_github_json` guard fix is required: 2.0.0 rejected the repository
 resource path, so the repository-owner lookup (needed to attribute OWNER-authored
 records) could never succeed.
 
-## V3 admission rules (enforced by `verify_agent_release_reviews`)
+## V3 admission rules (enforced by the privileged helper)
 
 For the merged PR that produced the candidate primary SHA, taking the PR's **exact head
 SHA** from GitHub, ledger issue #174 must contain, as comments by the repository owner
@@ -78,6 +78,9 @@ evidence_sha256=<64 hex>
   allowlisted in the policy module (PR #377); nothing else is normalised.
 * An incomplete or changing ledger (comment count differs from comments read, before or
   after the read; more than 5000 comments) is `HOLD`, never evidence.
+* For each accepted role, the helper also reads the Owner-authored
+  `WPCG_RELEASE_REVIEW_ARTIFACT_V3` comment, decodes its report bytes, verifies its SHA-256,
+  and requires its role, agent, PR, head and base to match the V3 record and merged PR.
 
 Stable refusal codes returned on `HOLD`: `review_subject_invalid`,
 `review_evidence_invalid`, `review_evidence_ambiguous`, `review_correction_invalid`,
@@ -103,14 +106,14 @@ not by directory name.
 | Source file | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-deploy-production-priv-2_1_0.py` | `c303a4d84a282ffc7211bc8781a5442e62cb90deeef4651b450113ad7a912f30` |
-| `scripts/deployment_backend_v2_1_0.py` | `432b8c95038a7c0f3b97baeb810437c339012147f41eafd35d5baa55aee83d46` |
+| `scripts/deployment_backend_v2_1_0.py` | `c820872fdee721716278a66109045c7dc994bfdc0f8dc4de1312480799ad63b2` |
 | `scripts/deployment_transaction_v2.py` (identical to 2.0.0) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
 | `scripts/deployment_environment_contract.py` (identical to 2.0.0) | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
 | `scripts/release_review_policy_v3.py` | `1961bea6ff4fdf6ff116c5a454ed04c878e4b628ac5260ffe89073b512ccc792` |
-| Combined helper artifact (derived) | `02f1ed56f42bc2e976aa9216261b9e76e214f1ab86e2128879d3ce8b64d3edff` |
-| `scripts/production_deploy_controller_2_1_0.py` | `fabbbdbd82c16c3d72d88c47c0c9e1cae602e8ac54497d92461fb9534ef0745a` |
+| Combined helper artifact (derived) | `283350d3160d016c6e4fb55577b6e5b8d5d47fbcd4e099d6ee11bb25b074dda7` |
+| `scripts/production_deploy_controller_2_1_0.py` | `0cea983a4aa4ff6d733e404885abe1b7d5b836071d8a68155c55fd41ca3ab867` |
 | `deploy/sudoers/wpcaregrid-production-v2.1.0` | `33f82b453161adde3ab231e9dfa1e7eae71e1ac69d88d0ed9b326b1af03aa105` |
-| Root installer `scripts/install_production_helper_2_1_0.py` | `24bb2c30dc8a9500e29ec0d2c90f011d66d45c074c304ee14ab033279297f307` |
+| Root installer `scripts/install_production_helper_2_1_0.py` | `63fd84b9b1b7a397f0eeeb2300a353f68e325e843eb37f6fc4fede964757d0ad` |
 
 The combined helper artifact digest is the SHA-256 of the canonical JSON
 (`sort_keys`, compact separators) of `schema=1`, `helper_version`,
@@ -156,9 +159,11 @@ The installer **refuses** (`legacy_production_helper_2_0_0_present`) while any o
 exists: `/usr/local/libexec/wpcaregrid-deploy/production/2.0.0`,
 `/etc/wpcaregrid-deploy/profiles/production-v2.0.0.json`,
 `/etc/sudoers.d/wpcaregrid-production-v2.0.0`. It also keeps the 2.0.0 requirement that
-`deploy-production` has no pre-existing sudo rules. The legacy V2 admission therefore can
-never be co-resident and callable beside 2.1.0. Removing an installed 2.0.0 is a separate
-Owner-approved decision outside this change; this change does not edit or delete it.
+`deploy-production` has no pre-existing sudo rules. Since the immutable 2.0.0 installer
+cannot detect a later 2.1.0 installation, the Owner/operator must also prohibit running
+the 2.0.0 installer after 2.1.0 is installed and verify that the 2.0.0 paths remain absent
+at every host preflight. This successor does not edit or delete 2.0.0; any removal is a
+separate Owner-approved action.
 
 ### Release artifacts and the controller
 
@@ -175,7 +180,7 @@ directory described in the 2.0.0 runbook.
 (
   set -eu
   src=/home/deploy/.private/wpcg-production-helper-installer-2.1.0/install_production_helper_2_1_0.py
-  expected=24bb2c30dc8a9500e29ec0d2c90f011d66d45c074c304ee14ab033279297f307
+  expected=63fd84b9b1b7a397f0eeeb2300a353f68e325e843eb37f6fc4fede964757d0ad
   d=$(/usr/bin/mktemp -d /root/wpcg-production-installer.XXXXXX)
   trap '/usr/bin/rm -f -- "$d/install.py"; /usr/bin/rmdir -- "$d"' EXIT
   test "$(/usr/bin/stat -c '%U:%G:%a' "$d")" = root:root:700
@@ -208,14 +213,11 @@ retain state for review. The installer never calls `preflight`, `verify-install`
 
 ## Known limitations
 
-* The helper verifies the V3 ledger records only. It does not verify that
-  `evidence_sha256` matches a report body (`WPCG_RELEASE_REVIEW_ARTIFACT_V3`
-  verification belongs to the read-only `production_release_controller_v3.py`
-  admission gate, which is not part of the privileged helper).
 * The helper calls the GitHub API unauthenticated (its environment is cleared), so GitHub's
-  anonymous per-IP quota applies. With the ledger at ~1.3k comments one admission is about
-  22 requests and a `sync` performs three admissions (`authorize`, `stage`, `deploy`).
-  If the quota is exhausted the helper returns `HOLD` (`github_evidence_unavailable`); wait
-  and retry. Not changed here.
+  anonymous per-IP quota applies. With the ledger at ~1.3k comments, each full admission
+  uses about 29 API requests; `sync` performs two admissions (`authorize` and `deploy`),
+  for roughly 58 requests. This is close to the 60-request hourly limit and can be exhausted
+  by other requests from the same IP. On `github_evidence_unavailable`, stop and retry only
+  after the rate-limit window resets; do not treat the HOLD as authorization.
 * The ledger is fixed to issue #174 and capped at 5000 comments; beyond that the helper
   holds until a new helper version raises or changes the bound.

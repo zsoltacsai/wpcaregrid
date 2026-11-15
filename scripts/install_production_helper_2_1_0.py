@@ -3,8 +3,8 @@
 
 Successor installer of ``install_production_helper_2_0_0.py`` (unchanged). The
 helper it installs admits releases only on release-review policy V3 evidence.
-It refuses to run on a host that still carries any helper 2.0.0 artifact, so
-the legacy V2 admission can never be co-resident with this helper.
+It refuses to run on a host that still carries any helper 2.0.0 artifact.
+The immutable 2.0.0 installer must not be run after this successor is installed.
 
 This installer is deliberately separate from Laravel releases. It creates a
 disabled production policy, installs only versioned root-owned artifacts, and
@@ -41,12 +41,12 @@ CONTROLLER_SOURCE = "production_deploy_controller_2_1_0.py"
 SUDOERS_SOURCE = "wpcaregrid-production-v2.1.0"
 
 ENTRY_SHA256 = "c303a4d84a282ffc7211bc8781a5442e62cb90deeef4651b450113ad7a912f30"
-BACKEND_SHA256 = "432b8c95038a7c0f3b97baeb810437c339012147f41eafd35d5baa55aee83d46"
+BACKEND_SHA256 = "c820872fdee721716278a66109045c7dc994bfdc0f8dc4de1312480799ad63b2"
 TRANSACTION_SHA256 = "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00"
 ENVIRONMENT_SHA256 = "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1"
 REVIEW_POLICY_SHA256 = "1961bea6ff4fdf6ff116c5a454ed04c878e4b628ac5260ffe89073b512ccc792"
-HELPER_ARTIFACT_SHA256 = "02f1ed56f42bc2e976aa9216261b9e76e214f1ab86e2128879d3ce8b64d3edff"
-CONTROLLER_SHA256 = "fabbbdbd82c16c3d72d88c47c0c9e1cae602e8ac54497d92461fb9534ef0745a"
+HELPER_ARTIFACT_SHA256 = "283350d3160d016c6e4fb55577b6e5b8d5d47fbcd4e099d6ee11bb25b074dda7"
+CONTROLLER_SHA256 = "0cea983a4aa4ff6d733e404885abe1b7d5b836071d8a68155c55fd41ca3ab867"
 SUDOERS_SHA256 = "33f82b453161adde3ab231e9dfa1e7eae71e1ac69d88d0ed9b326b1af03aa105"
 
 ENTRYPOINT = Path(

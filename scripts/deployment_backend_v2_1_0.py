@@ -111,7 +111,22 @@ RELEASE_REVIEW_REFUSAL_CODES = frozenset({
     "review_correction_not_append_only", "review_correction_subject_mismatch",
     "review_correction_ambiguous", "review_record_invalid", "review_evidence_missing",
     "review_not_pass", "review_roles_not_separate",
+    "review_artifact_invalid", "review_artifact_size_invalid",
+    "review_artifact_hash_mismatch", "review_artifact_encoding_invalid",
+    "review_artifact_missing", "review_artifact_record_mismatch",
 })
+REVIEW_ARTIFACT_PREFIX = "WPCG_RELEASE_REVIEW_ARTIFACT_V3"
+REVIEW_ARTIFACT_RE = re.compile(
+    r"WPCG_RELEASE_REVIEW_ARTIFACT_V3\n"
+    r"role=(integration_qa|appsec)\n"
+    r"pr=([1-9][0-9]{0,8})\n"
+    r"head_sha=([0-9a-f]{40})\n"
+    r"base_sha=([0-9a-f]{40})\n"
+    r"agent=([a-z0-9][a-z0-9._-]{2,63})\n"
+    r"report_sha256=([0-9a-f]{64})\n"
+    r"report_base64=([A-Za-z0-9+/]+={0,2})\n?\Z"
+)
+MAX_REVIEW_REPORT_BYTES = 45 * 1024
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 GITHUB_API = "https://api.github.com"
 GITHUB_REPOSITORY = "zsoltacsai/wpcaregrid"
@@ -1070,7 +1085,7 @@ def _github_release_review_ledger() -> list[object]:
 
 
 def _verify_agent_release_reviews_v3(comments: list[object], *, pr_number: int,
-                                     head_sha: str, repository_owner: str) -> None:
+                                     head_sha: str, repository_owner: str) -> Mapping[str, object]:
     """Admit a release only on V3 agent QA/AppSec PASS records for this exact PR head."""
     try:
         records = verify_agent_release_reviews(
@@ -1091,6 +1106,56 @@ def _verify_agent_release_reviews_v3(comments: list[object], *, pr_number: int,
                      for record in records.values())
              and records["integration_qa"]["agent"] != records["appsec"]["agent"],
              "review_evidence_invalid")
+    return records
+
+
+def _verify_review_report_artifacts(comments: list[object], *, records: Mapping[str, object],
+                                    pr_number: int, head_sha: str, base_sha: str,
+                                    repository_owner: str) -> None:
+    """Bind Owner-posted report bytes to each accepted V3 record digest."""
+    latest: dict[str, dict[str, object]] = {}
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not body.startswith(REVIEW_ARTIFACT_PREFIX):
+            continue
+        user = comment.get("user")
+        if not (isinstance(user, dict) and user.get("login") == repository_owner
+                and comment.get("author_association") == "OWNER"):
+            continue
+        match = REVIEW_ARTIFACT_RE.fullmatch(body)
+        _require(match is not None, "review_artifact_invalid")
+        role, raw_pr, report_head, report_base, agent, digest, encoded = match.groups()
+        if int(raw_pr) != pr_number or report_head != head_sha or report_base != base_sha:
+            continue
+        try:
+            report_bytes = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise DeployRefused("review_artifact_invalid") from None
+        _require(0 < len(report_bytes) <= MAX_REVIEW_REPORT_BYTES,
+                 "review_artifact_size_invalid")
+        _require(hashlib.sha256(report_bytes).hexdigest() == digest,
+                 "review_artifact_hash_mismatch")
+        try:
+            report_text = report_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise DeployRefused("review_artifact_encoding_invalid") from None
+        _require("\x00" not in report_text, "review_artifact_encoding_invalid")
+        created_at, comment_id = comment.get("created_at"), comment.get("id")
+        _require(isinstance(created_at, str) and type(comment_id) is int and comment_id > 0,
+                 "review_artifact_invalid")
+        old = latest.get(role)
+        if old is None or (created_at, comment_id) > (old["created_at"], old["id"]):
+            latest[role] = {"agent": agent, "report_sha256": digest,
+                            "created_at": created_at, "id": comment_id}
+    _require(set(latest) == {"integration_qa", "appsec"}, "review_artifact_missing")
+    for role, record in records.items():
+        artifact = latest.get(role)
+        _require(isinstance(record, dict) and isinstance(artifact, dict)
+                 and artifact.get("agent") == record.get("agent")
+                 and artifact.get("report_sha256") == record.get("evidence_sha256"),
+                 "review_artifact_record_mismatch")
 
 
 def _local_git_tree(profile: StagingProfile, application_sha: str) -> Mapping[str, str]:
@@ -1223,6 +1288,12 @@ def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str
     _require(type(pr_number) is int and isinstance(pr_head_sha, str)
              and re.fullmatch(r"[0-9a-f]{40}", pr_head_sha) is not None,
              "merged_pr_evidence_invalid")
+    merge_commit = _github_json(f"/repos/{GITHUB_REPOSITORY}/commits/{application_sha}")
+    parents = merge_commit.get("parents") if isinstance(merge_commit, dict) else None
+    base_sha = (parents[0].get("sha") if isinstance(parents, list) and parents
+                and isinstance(parents[0], dict) else None)
+    _require(isinstance(base_sha, str) and re.fullmatch(r"[0-9a-f]{40}", base_sha) is not None,
+             "merged_pr_base_invalid")
     verify_run(pr_head_sha, event="pull_request", branch=None, pr_number=pr_number)
     verify_run(application_sha, event="push", branch=PRIMARY_BRANCH)
     repository = _github_json(f"/repos/{GITHUB_REPOSITORY}")
@@ -1231,8 +1302,12 @@ def _verify_primary_ci_and_reviews(profile: StagingProfile, application_sha: str
     _require(isinstance(repository_owner, str) and repository_owner,
              "release_review_authority_unavailable")
     comments = _github_release_review_ledger()
-    _verify_agent_release_reviews_v3(comments, pr_number=pr_number, head_sha=pr_head_sha,
-                                     repository_owner=repository_owner)
+    records = _verify_agent_release_reviews_v3(
+        comments, pr_number=pr_number, head_sha=pr_head_sha,
+        repository_owner=repository_owner)
+    _verify_review_report_artifacts(comments, records=records, pr_number=pr_number,
+                                    head_sha=pr_head_sha, base_sha=base_sha,
+                                    repository_owner=repository_owner)
 
 
 def authorize_release(profile: StagingProfile, *, invoking_uid: int,
@@ -1242,12 +1317,6 @@ def authorize_release(profile: StagingProfile, *, invoking_uid: int,
         _safe_profile(profile)
         _require(invoking_uid == profile.allowed_uid, "caller_identity_invalid")
         _require(_sha(application_sha, APPLICATION_SHA_RE), "release_identity_invalid")
-        branch = quote(PRIMARY_BRANCH, safe="")
-        ref = _github_json(f"/repos/{GITHUB_REPOSITORY}/branches/{branch}") if not profile.test_only else None
-        if not profile.test_only:
-            commit = ref.get("commit") if isinstance(ref, dict) else None
-            _require(isinstance(commit, dict) and commit.get("sha") == application_sha,
-                     "primary_sha_is_not_latest")
         (_local_git_tree(profile, application_sha) if profile.test_only
          else _github_primary_tree(profile, application_sha))
         _verify_primary_ci_and_reviews(profile, application_sha)

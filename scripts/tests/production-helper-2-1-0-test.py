@@ -11,6 +11,7 @@ Nothing here touches a host, the network, a database or production.
 from __future__ import annotations
 
 import ast
+import base64
 import hashlib
 import importlib.util
 import json
@@ -308,12 +309,14 @@ class SuccessorDifferenceTests(unittest.TestCase):
             "RELEASE_REVIEW_LEDGER_PAGE_SIZE", "RELEASE_REVIEW_LEDGER_MAX_COMMENTS",
             "RELEASE_REVIEW_LEDGER_MAX_PAGE_BYTES",
             "RELEASE_REVIEW_REFUSAL_CODES", "_github_release_review_ledger",
-            "_verify_agent_release_reviews_v3",
+            "_verify_agent_release_reviews_v3", "REVIEW_ARTIFACT_PREFIX",
+            "REVIEW_ARTIFACT_RE", "MAX_REVIEW_REPORT_BYTES",
+            "_verify_review_report_artifacts",
         } | {key for key in new if key.startswith("__") and key not in old})
         changed = {name for name in old if name in new and old[name] != new[name]
                    and not name.startswith("__")}
         self.assertEqual(changed, {"HELPER_VERSION", "HELPER_CONTRACT", "_github_json",
-                                   "_verify_primary_ci_and_reviews"})
+                                   "_verify_primary_ci_and_reviews", "authorize_release"})
 
     def test_backend_has_no_v2_or_github_review_object_dependency(self):
         source = (ROOT / "scripts/deployment_backend_v2_1_0.py").read_text(encoding="utf-8")
@@ -467,7 +470,9 @@ APP_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 OTHER_HEAD = "c" * 40
 PR = 412
-EVIDENCE = "d" * 64
+BASE_SHA = "e" * 40
+REPORT_BYTES = b"synthetic review report bytes\n"
+EVIDENCE = hashlib.sha256(REPORT_BYTES).hexdigest()
 REPOSITORY_PATH = "/repos/zsoltacsai/wpcaregrid"
 LEDGER_PATH = f"{REPOSITORY_PATH}/issues/174"
 
@@ -485,6 +490,23 @@ def review(role, *, head=HEAD_SHA, pr=PR, agent=None, decision="PASS", comment_i
 
 
 review.next_id = 9_000_000
+
+
+def review_artifact(role, *, head=HEAD_SHA, pr=PR, agent=None, report=REPORT_BYTES,
+                    digest=None, comment_id=None, created="2026-11-15T10:01:00Z",
+                    login=OWNER, association="OWNER"):
+    agent = agent or ("qa-agent-one" if role == "integration_qa" else "appsec-agent-one")
+    digest = digest or hashlib.sha256(report).hexdigest()
+    body = (f"{BACKEND.REVIEW_ARTIFACT_PREFIX}\nrole={role}\npr={pr}\nhead_sha={head}\n"
+            f"base_sha={BASE_SHA}\nagent={agent}\nreport_sha256={digest}\n"
+            f"report_base64={base64.b64encode(report).decode('ascii')}\n")
+    comment_id = comment_id if comment_id is not None else review_artifact.next_id
+    review_artifact.next_id += 1
+    return {"id": comment_id, "created_at": created, "author_association": association,
+            "user": {"login": login}, "body": body}
+
+
+review_artifact.next_id = 9_100_000
 
 
 def v2_record(role, *, head=HEAD_SHA, reviewer="someone", review_id=77):
@@ -522,6 +544,8 @@ class FakeGitHub:
         if route == f"{REPOSITORY_PATH}/pulls/{PR}":
             return {"merged_at": "2026-11-15T11:00:00Z", "base": {"ref": PRIMARY},
                     "head": {"sha": self.head}, "user": {"login": "any-author"}}
+        if route == f"{REPOSITORY_PATH}/commits/{APP_SHA}":
+            return {"parents": [{"sha": BASE_SHA}]}
         if route == f"{REPOSITORY_PATH}/actions/runs":
             sha, event = query["head_sha"], query["event"]
             run = {"id": 100 if event == "pull_request" else 200, "head_sha": sha, "event": event,
@@ -550,12 +574,14 @@ class V3AdmissionTests(unittest.TestCase):
     PROFILE = SimpleNamespace(test_only=False)
 
     def admit(self, ledger, **kwargs):
+        ledger = self.with_artifacts(ledger)
         fake = FakeGitHub(ledger, **kwargs)
         with patch.object(BACKEND, "_github_json", side_effect=fake):
             BACKEND._verify_primary_ci_and_reviews(self.PROFILE, APP_SHA)
         return fake
 
     def refusal(self, ledger, **kwargs):
+        ledger = self.with_artifacts(ledger)
         fake = FakeGitHub(ledger, **kwargs)
         with patch.object(BACKEND, "_github_json", side_effect=fake), \
                 self.assertRaises(BACKEND.DeployRefused) as error:
@@ -565,11 +591,48 @@ class V3AdmissionTests(unittest.TestCase):
     def passing_ledger(self):
         return [review("integration_qa"), review("appsec")]
 
+    @staticmethod
+    def with_artifacts(ledger):
+        result = list(ledger)
+        for comment in ledger:
+            if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+                continue
+            match = POLICY._RECORD.fullmatch(comment["body"])
+            if match is None:
+                continue
+            role, raw_pr, head, agent, _kind, _decision, _digest = match.groups()
+            result.append(review_artifact(role, head=head, pr=int(raw_pr), agent=agent,
+                                          created=comment["created_at"]))
+        return result
+
     def test_valid_owner_qa_and_appsec_pass_records_admit_and_no_review_object_is_read(self):
         fake = self.admit(self.passing_ledger())
         self.assertFalse(any("/reviews" in path for path in fake.paths))
         self.assertTrue(any(path.endswith("/issues/174") for path in fake.paths))
         self.assertTrue(any("/issues/174/comments" in path for path in fake.paths))
+
+    def test_review_reports_are_hash_verified_and_bound_to_records(self):
+        ledger = self.passing_ledger()
+        records = POLICY.verify_agent_release_reviews(
+            ledger, pr_number=PR, head_sha=HEAD_SHA, repository_owner=OWNER)
+        valid = [review_artifact("integration_qa"), review_artifact("appsec")]
+        BACKEND._verify_review_report_artifacts(
+            valid, records=records, pr_number=PR, head_sha=HEAD_SHA,
+            base_sha=BASE_SHA, repository_owner=OWNER)
+        bad_hash = [review_artifact("integration_qa", digest="0" * 64), valid[1]]
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "review_artifact_hash_mismatch"):
+            BACKEND._verify_review_report_artifacts(
+                bad_hash, records=records, pr_number=PR, head_sha=HEAD_SHA,
+                base_sha=BASE_SHA, repository_owner=OWNER)
+        wrong_report = [review_artifact("integration_qa", report=b"other report"), valid[1]]
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "review_artifact_record_mismatch"):
+            BACKEND._verify_review_report_artifacts(
+                wrong_report, records=records, pr_number=PR, head_sha=HEAD_SHA,
+                base_sha=BASE_SHA, repository_owner=OWNER)
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "review_artifact_missing"):
+            BACKEND._verify_review_report_artifacts(
+                valid[:1], records=records, pr_number=PR, head_sha=HEAD_SHA,
+                base_sha=BASE_SHA, repository_owner=OWNER)
 
     def test_legacy_v2_ledger_and_github_approvals_no_longer_admit(self):
         ledger = [v2_record("integration_qa", reviewer="r1"), v2_record("m17_appsec", reviewer="r2")]
@@ -684,7 +747,11 @@ class V3AdmissionTests(unittest.TestCase):
         source = (ROOT / "scripts/release_review_policy_v3.py").read_text()
         codes = set(re.findall(r'ReviewRefused\("([a-z_]+)"\)', source))
         self.assertTrue(codes)
-        self.assertEqual(codes, set(BACKEND.RELEASE_REVIEW_REFUSAL_CODES))
+        self.assertTrue(codes <= set(BACKEND.RELEASE_REVIEW_REFUSAL_CODES))
+        self.assertEqual(set(BACKEND.RELEASE_REVIEW_REFUSAL_CODES) - codes, {
+            "review_artifact_invalid", "review_artifact_size_invalid",
+            "review_artifact_hash_mismatch", "review_artifact_encoding_invalid",
+            "review_artifact_missing", "review_artifact_record_mismatch"})
 
     def test_helper_blocks_authorize_stage_and_deploy_through_the_same_admission(self):
         source = (ROOT / "scripts/deployment_backend_v2_1_0.py").read_text()
