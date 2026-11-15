@@ -1,0 +1,80 @@
+# Test-only. Runs the complete migration list of this tree against a disposable, pinned MySQL 8.4.11
+# service with log_bin=ON, binlog_format=ROW and log_bin_trust_function_creators=OFF, as an application
+# account without SUPER. Synthetic data only; nothing is deployed and no setting is changed.
+name: Migration binlog qualification (synthetic)
+
+on:
+  push:
+    branches:
+      - claude/ecstatic-wozniak-oemyuf
+    paths:
+      - database/migrations/**
+      - scripts/tests/migration-binlog-qualification.py
+      - .github/workflows/migration-binlog-qualification.yml
+      - .github/workflows/actions.lock
+  pull_request:
+    paths:
+      - database/migrations/**
+      - scripts/tests/migration-binlog-qualification.py
+      - .github/workflows/migration-binlog-qualification.yml
+      - .github/workflows/actions.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-binlog-qualification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Full migration set, binlog ON, trust OFF, app without SUPER (MySQL 8.4.11)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4.11@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - '127.0.0.1:3309:3306'
+        command: --server-id=275 --log-bin=mysql-bin --binlog-format=ROW --log-bin-trust-function-creators=OFF
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Offline self-test
+        run: python3 -I scripts/tests/migration-binlog-qualification.py --self-test
+
+      - name: Qualify the complete migration set
+        env:
+          WPCG_QUAL_MYSQL_HOST: 127.0.0.1
+          WPCG_QUAL_MYSQL_PORT: '3309'
+          WPCG_QUAL_MYSQL_ROOT_PASSWORD: ci-root-password
+        run: |
+          set -euo pipefail
+          python3 -I scripts/tests/migration-binlog-qualification.py | tee "$RUNNER_TEMP/qualification.log"
+
+      - name: Publish classification summary (no raw output)
+        if: always()
+        run: |
+          {
+            echo '```'
+            grep '^WPCG_QUAL|' "$RUNNER_TEMP/qualification.log" 2>/dev/null || echo 'no classification output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
