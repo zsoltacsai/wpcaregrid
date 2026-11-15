@@ -140,7 +140,9 @@ Installed helper bytes and manifests are never edited in place. V3 takes effect 
 helper only through a new version and a separate, Owner-approved host installation:
 
 * production helper successor to 2.0.0 calling `verify_agent_release_reviews` in place of
-  the V2 check (all other authorisation steps unchanged);
+  the V2 check (all other authorisation steps unchanged). Prepared as helper **2.1.0** in
+  [PRODUCTION_HELPER_INSTALL_2_1_0.md](PRODUCTION_HELPER_INSTALL_2_1_0.md) (source only, not
+  installed).
 * the next staging-next helper, combined with the target-binding integration, optionally
   enforcing V3 evidence before release authorisation.
 
