@@ -58,11 +58,15 @@ or authorize host changes.
   file first, then the policy file, then the five files in the version directory and finally the (then empty)
   version directory itself (all root-owned, all created by this installer);
   older helper versions and the legacy staging tools are untouched by this installation.
-* Preserve the 1.4.9 helper binaries during a version transition, but disable and remove its
-  Phase B policy and `wpcaregrid-staging-next-1.4.9` sudoers route before installing 1.4.10.
-  If a release journal reaches `DBA_HANDOFF_REQUIRED`, do not switch the active controller back to 1.4.9: that older controller
-  does not implement receipt consumption and cannot safely resume the journal. Keep traffic and
-  background work fenced and use the reviewed 1.4.10 forward-recovery procedure.
+* **No 1.4.9 transition action is authorized while this runbook is on HOLD.** If a separate
+  Owner GO later authorizes a reviewed 1.4.10 installation procedure, that procedure must
+  specify how to disable the legacy Phase B policy and `wpcaregrid-staging-next-1.4.9` sudoers
+  route while preserving the helper binaries. This document does not authorize or describe
+  those host changes.
+* If an existing release journal reaches `DBA_HANDOFF_REQUIRED`, do not switch the active
+  controller back to 1.4.9: that older controller does not implement receipt consumption and
+  cannot safely resume the journal. Keep traffic and background work fenced and escalate for an
+  approved recovery procedure; this runbook does not provide one.
 * STOP on: any hash mismatch, any preflight `STOP`, any unexpected file in the source directory, any non-`PASS`
   installer/probe line, an active deploy lock, fence marker, maintenance gate, running worker or scheduler.
 
