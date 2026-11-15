@@ -307,12 +307,12 @@ def _release_fixture(directory):
                "action_sha256": "e" * 64}
     now = datetime.datetime.now(datetime.timezone.utc)
     manifest = {
-        "schema_version": 1, "manifest_id": "synthetic-manifest-v1",
+        "schema_version": 2, "manifest_id": "synthetic-manifest-v2",
         "owner_authorization_id": "synthetic-owner-approval",
         "release": {"application_sha": source_sha, "base_sha": "b" * 40, "artifact_sha256": "a" * 64},
         "backup": {"id": "synthetic-backup-v1", "path": str(backup_path),
                    "sha256": hashlib.sha256(archive).hexdigest(), "size_bytes": len(archive),
-                   "source_schema": "wpcaregrid"},
+                   "source_schema": "wpcaregrid", "source_application_sha": source_sha},
         "source_identity": {"environment_id": "source-env", "host_id": "source-host",
                              "database_id": "source-db", "server_uuid": "source-server-uuid",
                              "database": "wpcaregrid", "application_sha": source_sha},
@@ -356,7 +356,7 @@ def test_manifest_and_destination_policy_are_protected_and_bound():
         else:
             raise AssertionError("Publicly exposed destination accepted")
         for mutate, expected_code in (
-                (lambda m: m["source_identity"].update(application_sha="c" * 40), "SOURCE_RELEASE_BINDING_MISMATCH"),
+                (lambda m: m["source_identity"].update(application_sha="c" * 40), "SOURCE_BACKUP_BINDING_MISMATCH"),
                 (lambda m: m.update(approved_definer="root@localhost"), "DEFINER_ALLOWLIST_INVALID"),
                 (lambda m: m.update(expires_at="2020-01-01T00:00:00+00:00"), "RELEASE_MANIFEST_EXPIRED_OR_INVALID")):
             invalid = json.loads(manifest_path.read_text())
@@ -367,6 +367,50 @@ def test_manifest_and_destination_policy_are_protected_and_bound():
                 assert str(error) == expected_code
             else:
                 raise AssertionError(f"Invalid manifest accepted: {expected_code}")
+
+
+def test_source_backup_and_target_release_may_be_distinct_but_remain_individually_bound():
+    with tempfile.TemporaryDirectory() as directory:
+        manifest_path, _policy_path, _config_path, manifest = _release_fixture(directory)
+        manifest["release"]["application_sha"] = "d" * 40
+        manifest["release"]["base_sha"] = "e" * 40
+        assert manifest["source_identity"]["application_sha"] == manifest["backup"]["source_application_sha"]
+        assert manifest["source_identity"]["application_sha"] != manifest["release"]["application_sha"]
+        RESTORE._manifest_object(manifest)
+        manifest["backup"]["source_application_sha"] = "c" * 40
+        try:
+            RESTORE._manifest_object(manifest)
+        except RESTORE.RestoreRefused as error:
+            assert str(error) == "SOURCE_BACKUP_BINDING_MISMATCH"
+        else:
+            raise AssertionError("Backup source identity mismatch was accepted")
+
+
+def test_manifest_schema_version_rejects_boolean_alias():
+    with tempfile.TemporaryDirectory() as directory:
+        _manifest_path, _policy_path, _config_path, manifest = _release_fixture(directory)
+        manifest["schema_version"] = True
+        try:
+            RESTORE._manifest_object(manifest)
+        except RESTORE.RestoreRefused as error:
+            assert str(error) == "RELEASE_MANIFEST_SCHEMA_INVALID"
+        else:
+            raise AssertionError("Boolean manifest schema version was accepted")
+
+
+def test_archive_and_expanded_sql_limits_are_independent_and_bounded():
+    assert RESTORE.MAX_COMPRESSED_BACKUP_BYTES == 32 * 1024 * 1024
+    assert RESTORE.MAX_UNCOMPRESSED_SQL_BYTES == 32 * 1024 * 1024
+    assert RESTORE.MAX_COMPRESSED_BACKUP_BYTES == RESTORE.MAX_UNCOMPRESSED_SQL_BYTES
+    # A tiny gzip payload can expand beyond the SQL budget. The decoder must
+    # stop at the decompressed limit without allocating the full expansion.
+    compressed = gzip.compress(b"x" * (RESTORE.MAX_UNCOMPRESSED_SQL_BYTES + 1))
+    try:
+        RESTORE.decode_verified_archive(compressed, hashlib.sha256(compressed).hexdigest())
+    except RESTORE.RestoreRefused as error:
+        assert str(error) == "DUMP_SIZE_LIMIT"
+    else:
+        raise AssertionError("Oversized decompressed SQL was accepted")
 
 
 def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():

@@ -28,7 +28,8 @@ RECOVERY_TOOL_SHA = "0c0a30f28c72c0602b9b5e665ac4da4d9328e474"
 BACKUP_PATH = Path("/home/deploy/private-backups/wpcaregrid-pre-deploy-20261104T133855Z.sql.gz")
 BACKUP_SHA256 = "5a2cce05c8a0cc44cfa76be3619f86bcdb748793dd6fed098fd8ef349b02c431"
 BACKUP_ID = "wpcaregrid-pre-deploy-20261104T133855Z"
-MAX_SQL_BYTES = 32 * 1024 * 1024
+MAX_COMPRESSED_BACKUP_BYTES = 32 * 1024 * 1024
+MAX_UNCOMPRESSED_SQL_BYTES = 32 * 1024 * 1024
 MAX_SQL_LINES = 250_000
 MAX_SQL_TOKENS = 250_000
 TARGET_RE = re.compile(r"wpcg_recovery_restore_[0-9]{8}_[0-9a-f]{8}\Z")
@@ -540,16 +541,16 @@ def decode_verified_archive(compressed, expected_sha):
         refuse("BACKUP_HASH_MISMATCH")
     try:
         decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        sql = decompressor.decompress(compressed, MAX_SQL_BYTES + 1)
-        if len(sql) > MAX_SQL_BYTES or decompressor.unconsumed_tail:
+        sql = decompressor.decompress(compressed, MAX_UNCOMPRESSED_SQL_BYTES + 1)
+        if len(sql) > MAX_UNCOMPRESSED_SQL_BYTES or decompressor.unconsumed_tail:
             refuse("DUMP_SIZE_LIMIT")
         if not decompressor.eof:
             refuse("BACKUP_GZIP_INVALID")
         if decompressor.unused_data:
             refuse("DUMP_TRAILING_COMPRESSED_DATA")
-        remaining = MAX_SQL_BYTES + 1 - len(sql)
+        remaining = MAX_UNCOMPRESSED_SQL_BYTES + 1 - len(sql)
         tail = decompressor.flush(remaining)
-        if len(sql) + len(tail) > MAX_SQL_BYTES:
+        if len(sql) + len(tail) > MAX_UNCOMPRESSED_SQL_BYTES:
             refuse("DUMP_SIZE_LIMIT")
         sql += tail
     except RestoreRefused:
@@ -585,12 +586,12 @@ def read_verified_dump(path=BACKUP_PATH, expected_sha=BACKUP_SHA256):
         chunks = []
         total = 0
         while True:
-            chunk = os.read(descriptor, min(1024 * 1024, MAX_SQL_BYTES + 1 - total))
+            chunk = os.read(descriptor, min(1024 * 1024, MAX_COMPRESSED_BACKUP_BYTES + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
             total += len(chunk)
-            if total > MAX_SQL_BYTES:
+            if total > MAX_COMPRESSED_BACKUP_BYTES:
                 refuse("BACKUP_SIZE_LIMIT")
         compressed = b"".join(chunks)
     except OSError:
@@ -751,7 +752,8 @@ def _manifest_object(manifest, *, now=None):
         "expected", "database_charset", "database_collation", "config", "issued_at",
         "expires_at", "owner_authorization_id",
     }
-    if set(manifest) != required or manifest.get("schema_version") != 1:
+    if (set(manifest) != required or type(manifest.get("schema_version")) is not int
+            or manifest["schema_version"] != 2):
         refuse("RELEASE_MANIFEST_SCHEMA_INVALID")
     _require_string(manifest["manifest_id"], "RELEASE_MANIFEST_ID_INVALID", maximum=80)
     _require_string(manifest["owner_authorization_id"], "RELEASE_MANIFEST_OWNER_AUTH_INVALID", maximum=128)
@@ -762,14 +764,17 @@ def _manifest_object(manifest, *, now=None):
         _require_hex(release[key], RELEASE_SHA_RE, "RELEASE_MANIFEST_RELEASE_INVALID")
     _require_hex(release["artifact_sha256"], SHA256_RE, "RELEASE_MANIFEST_RELEASE_INVALID")
     backup = manifest["backup"]
-    if not isinstance(backup, dict) or set(backup) != {"id", "path", "sha256", "size_bytes", "source_schema"}:
+    if not isinstance(backup, dict) or set(backup) != {
+            "id", "path", "sha256", "size_bytes", "source_schema", "source_application_sha"}:
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
     if not isinstance(backup["id"], str) or not BACKUP_ID_RE.fullmatch(backup["id"]):
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
     if not isinstance(backup["path"], str) or not Path(backup["path"]).is_absolute():
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
     _require_hex(backup["sha256"], SHA256_RE, "RELEASE_MANIFEST_BACKUP_INVALID")
-    if type(backup["size_bytes"]) is not int or not 1 <= backup["size_bytes"] <= MAX_SQL_BYTES:
+    _require_hex(backup["source_application_sha"], RELEASE_SHA_RE, "RELEASE_MANIFEST_BACKUP_INVALID")
+    if (type(backup["size_bytes"]) is not int
+            or not 1 <= backup["size_bytes"] <= MAX_COMPRESSED_BACKUP_BYTES):
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
     if backup["source_schema"] != "wpcaregrid":
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
@@ -786,8 +791,12 @@ def _manifest_object(manifest, *, now=None):
     if source["database"] != "wpcaregrid":
         refuse("SOURCE_IDENTITY_EVIDENCE_INVALID")
     _require_hex(source["application_sha"], RELEASE_SHA_RE, "SOURCE_IDENTITY_EVIDENCE_INVALID")
-    if source["application_sha"] != release["application_sha"]:
-        refuse("SOURCE_RELEASE_BINDING_MISMATCH")
+    # A pre-deployment recovery backup is produced by the currently deployed
+    # application, while the target release is the code whose migrations will
+    # be rehearsed on a separate restored clone. Bind those two identities
+    # independently; requiring equality would reject every normal upgrade.
+    if source["application_sha"] != backup["source_application_sha"]:
+        refuse("SOURCE_BACKUP_BINDING_MISMATCH")
     _require_hex(manifest["destination_policy_sha256"], SHA256_RE, "DESTINATION_POLICY_HASH_INVALID")
     target_schema = manifest["target_schema"]
     if not isinstance(target_schema, str) or not TARGET_RE.fullmatch(target_schema):
@@ -1339,7 +1348,9 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
         receipt = {
             "receipt_version": 2, "classification": "release_bound_isolated_restore",
             "release_bound": True, "restore": "PASS", "release": manifest["release"],
-            "backup": {"id": backup["id"], "sha256": backup["sha256"], "size_bytes": backup["size_bytes"]},
+            "backup": {"id": backup["id"], "sha256": backup["sha256"],
+                       "size_bytes": backup["size_bytes"],
+                       "source_application_sha": backup["source_application_sha"]},
             "manifest_sha256": manifest_sha, "destination_policy_sha256": policy_sha,
             "source_identity": manifest["source_identity"],
             "destination_identity": {**policy["destination_identity"], "mysql_server_uuid": identity["server_uuid"]},
@@ -1430,16 +1441,16 @@ def read_backup_for_manifest(backup, *, owner_uid):
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != 0o600:
             refuse("BACKUP_METADATA_INVALID")
-        if info.st_size != backup["size_bytes"] or info.st_size > MAX_SQL_BYTES:
+        if info.st_size != backup["size_bytes"] or info.st_size > MAX_COMPRESSED_BACKUP_BYTES:
             refuse("BACKUP_SIZE_OR_IDENTITY_MISMATCH")
         chunks = []
         total = 0
         while True:
-            block = os.read(descriptor, min(1024 * 1024, MAX_SQL_BYTES + 1 - total))
+            block = os.read(descriptor, min(1024 * 1024, MAX_COMPRESSED_BACKUP_BYTES + 1 - total))
             if not block:
                 break
             total += len(block)
-            if total > MAX_SQL_BYTES:
+            if total > MAX_COMPRESSED_BACKUP_BYTES:
                 refuse("BACKUP_SIZE_LIMIT")
             chunks.append(block)
         compressed = b"".join(chunks)
