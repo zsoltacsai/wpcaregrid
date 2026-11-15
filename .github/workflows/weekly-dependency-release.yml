@@ -1,0 +1,522 @@
+name: Weekly dependency and release management
+
+on:
+  schedule:
+    - cron: '0 19 * * 5'
+      timezone: Europe/Budapest
+    - cron: '0 18 * * 6'
+      timezone: Europe/Budapest
+    - cron: '0 20 * * 0'
+      timezone: Europe/Budapest
+    - cron: '0 8 * * 1'
+      timezone: Europe/Budapest
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Owner-triggered phase; all source and deployment gates still apply
+        required: true
+        type: choice
+        options:
+          - intake
+          - candidate
+          - staging
+          - security-hotfix
+          - handoff
+
+permissions:
+  contents: read
+
+# Serializes this workflow. The existing staging and production controllers keep
+# their own host-side deployment locks and remain the mutation authority.
+concurrency:
+  group: wpcg-weekly-release-management
+  cancel-in-progress: false
+
+env:
+  WPCG_PRIMARY_BRANCH: claude/ecstatic-wozniak-oemyuf
+
+jobs:
+  dependency-intake:
+    name: Dependabot and advisory intake
+    if: >-
+      github.event.schedule == '0 19 * * 5' || github.event.schedule == '0 8 * * 1' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.phase == 'intake' || inputs.phase == 'security-hotfix' || inputs.phase == 'handoff'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: read
+      issues: write
+      actions: read
+      deployments: read
+    steps:
+      - name: Refuse non-owner manual execution and non-primary refs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTOR" = zsoltacsai
+          test "$GITHUB_REF" = "refs/heads/$WPCG_PRIMARY_BRANCH"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Collect open Dependabot PRs and Dependabot security alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" > "$RUNNER_TEMP/dependabot-prs.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/dependabot/alerts?state=open&per_page=100" > "$RUNNER_TEMP/dependabot-alerts.json"
+
+      - name: Classify and prioritize maintenance
+        id: report
+        run: |
+          set -uo pipefail
+          python3 scripts/weekly_release_management.py intake \
+            --pull-requests "$RUNNER_TEMP/dependabot-prs.json" \
+            --alerts "$RUNNER_TEMP/dependabot-alerts.json" \
+            --output "$RUNNER_TEMP/dependency-intake.json" > "$RUNNER_TEMP/dependency-intake.stdout.json"
+          python3 - "$RUNNER_TEMP/dependency-intake.json" "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, pathlib, sys
+          report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          with open(sys.argv[2], "a", encoding="utf-8") as summary:
+              summary.write(report["markdown"])
+          print("INTAKE_STATUS=" + report["status"])
+          PY
+
+      - name: Create Monday Owner handoff issue
+        if: github.event.schedule == '0 8 * * 1' || (github.event_name == 'workflow_dispatch' && inputs.phase == 'handoff')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_RECURRING_ENABLED: ${{ vars.WPCG_RECURRING_PRODUCTION_ENABLED }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&branch=$WPCG_PRIMARY_BRANCH&per_page=100" > "$RUNNER_TEMP/handoff-ci.json"
+          deployment_summary() {
+            local environment="$1" safe_name="$2" identity status
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/deployments?environment=$environment&per_page=100" > "$RUNNER_TEMP/$safe_name-deployments.json"
+            identity="$(python3 - "$RUNNER_TEMP/$safe_name-deployments.json" <<'PY'
+          import json, pathlib, sys
+          value=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          pages=value if value and isinstance(value[0],list) else [value]
+          items=[item for page in pages for item in page if isinstance(item,dict)]
+          if not items: print('')
+          else:
+              item=max(items,key=lambda x:x.get('created_at',''))
+              print(f"{item.get('id','')} {item.get('sha','')}")
+          PY
+            )"
+            if [[ -z "$identity" ]]; then printf 'UNKNOWN (no deployment record)'; return; fi
+            read -r deployment_id deployment_sha <<< "$identity"
+            if [[ ! "$deployment_id" =~ ^[1-9][0-9]*$ || ! "$deployment_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              printf 'HOLD (deployment identity malformed)'; return
+            fi
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses?per_page=100" > "$RUNNER_TEMP/$safe_name-statuses.json"
+            status="$(python3 - "$RUNNER_TEMP/$safe_name-statuses.json" <<'PY'
+          import json, pathlib, sys
+          value=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          pages=value if value and isinstance(value[0],list) else [value]
+          items=[item for page in pages for item in page if isinstance(item,dict)]
+          print(max(items,key=lambda x:x.get('created_at','')).get('state','UNKNOWN') if items else 'UNKNOWN')
+          PY
+            )"
+            printf '`%s` (%s, deployment %s)' "$deployment_sha" "$status" "$deployment_id"
+          }
+          staging_summary="$(deployment_summary staging staging)"
+          production_summary="$(deployment_summary production production)"
+          week="$(TZ=Europe/Budapest date +%G-W%V)"
+          ci_summary="$(python3 - "$RUNNER_TEMP/handoff-ci.json" "$GITHUB_SHA" <<'PY'
+          import json, pathlib, sys
+          value=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          runs=[r for r in value.get('workflow_runs',[]) if r.get('head_sha')==sys.argv[2]
+                and r.get('path')=='.github/workflows/ci.yml' and r.get('event')=='push']
+          if not runs: print('UNKNOWN (no exact-SHA primary CI run)')
+          else:
+              r=max(runs,key=lambda x:(x.get('created_at',''),x.get('id',0)))
+              print(f"{r.get('conclusion') or r.get('status','UNKNOWN')} (run {r.get('id')})")
+          PY
+          )"
+          {
+            printf '# Weekly WP CareGrid owner handoff — %s\n\n' "$week"
+            printf '%s\n\n' "Generated by the protected-primary weekly workflow. This report does not authorize deployment."
+            printf -- '- Primary SHA: `%s`\n' "$GITHUB_SHA"
+            printf -- '- Exact primary CI: %s\n' "$ci_summary"
+            printf -- '- Latest staging: %s\n' "$staging_summary"
+            printf -- '- Latest production: %s\n' "$production_summary"
+            printf -- '- Recurring production enabled: `%s`\n' "${PRODUCTION_RECURRING_ENABLED:-false}"
+            printf -- '- Workflow run: %s\n\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            cat "$RUNNER_TEMP/dependency-intake.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["markdown"])'
+            printf '\n## Release status\n\nStaging and production evidence must be checked against this exact release SHA. Missing or stale evidence is HOLD.\n'
+          } > "$RUNNER_TEMP/owner-handoff.md"
+          gh issue create --title "[GO-SEC-WEEKLY] Owner handoff $week" --body-file "$RUNNER_TEMP/owner-handoff.md"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: weekly-dependency-intake-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/dependency-intake.json
+            ${{ runner.temp }}/dependabot-prs.json
+            ${{ runner.temp }}/dependabot-alerts.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  candidate:
+    name: Exact-SHA candidate admission and freeze preflight
+    if: >-
+      github.event.schedule == '0 18 * * 6' ||
+      github.event.schedule == '0 20 * * 0' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.phase == 'candidate' || inputs.phase == 'staging' || inputs.phase == 'security-hotfix'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: read
+      issues: read
+      actions: read
+    outputs:
+      candidate_ready: ${{ steps.admission.outputs.ready }}
+      candidate_sha: ${{ steps.admission.outputs.sha }}
+    steps:
+      - name: Refuse non-owner manual execution and non-primary refs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTOR" = zsoltacsai
+          test "$GITHUB_REF" = "refs/heads/$WPCG_PRIMARY_BRANCH"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require latest primary, exact CI, V3 QA/AppSec reports and no pending dependency PRs
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WPCG_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$WPCG_PRIMARY_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git ls-remote origin "refs/heads/$WPCG_PRIMARY_BRANCH" | awk 'NR==1 {print $1}')" = "$GITHUB_SHA"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" > "$RUNNER_TEMP/open-pulls.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/dependabot/alerts?state=open&per_page=100" > "$RUNNER_TEMP/open-alerts.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/174/comments?per_page=100" > "$RUNNER_TEMP/review-ledger.json"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100" > "$RUNNER_TEMP/merged-prs.json"
+          python3 scripts/weekly_release_management.py intake \
+            --pull-requests "$RUNNER_TEMP/open-pulls.json" --alerts "$RUNNER_TEMP/open-alerts.json" \
+            --output "$RUNNER_TEMP/candidate-intake.json" >/dev/null
+          python3 - "$RUNNER_TEMP/open-pulls.json" "$RUNNER_TEMP/open-alerts.json" <<'PY'
+          import json, pathlib, sys
+          pages = [json.loads(pathlib.Path(arg).read_text(encoding="utf-8")) for arg in sys.argv[1:]]
+          def flatten(value):
+              return [item for page in value for item in page] if value and isinstance(value[0], list) else value
+          prs = flatten(pages[0])
+          pending = [pr for pr in prs if isinstance(pr, dict)
+                     and isinstance(pr.get("user"), dict)
+                     and pr["user"].get("login") == "dependabot[bot]"]
+          if pending:
+              raise SystemExit("HOLD: open Dependabot PRs remain; merge compatible updates through protected PRs before freeze.")
+          PY
+          python3 scripts/weekly_release_management.py review-subject \
+            --candidate-sha "$GITHUB_SHA" --pull-requests "$RUNNER_TEMP/merged-prs.json" \
+            --ledger-comments "$RUNNER_TEMP/review-ledger.json" --output "$RUNNER_TEMP/review-subject.json" >/dev/null
+          pr_number="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pr_number"])' "$RUNNER_TEMP/review-subject.json")"
+          pr_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head_sha"])' "$RUNNER_TEMP/review-subject.json")"
+          pr_base="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base_sha"])' "$RUNNER_TEMP/review-subject.json")"
+          python3 scripts/production_release_controller_v3.py verify-release "$GITHUB_SHA" "$pr_number" "$pr_head" "$pr_base" > "$RUNNER_TEMP/release-admission.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&branch=$WPCG_PRIMARY_BRANCH&per_page=100" > "$RUNNER_TEMP/ci-runs.json"
+          python3 scripts/weekly_release_management.py ci-run --candidate-sha "$GITHUB_SHA" \
+            --runs "$RUNNER_TEMP/ci-runs.json" --output "$RUNNER_TEMP/exact-ci-run.json" >/dev/null
+          ci_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow_run_id"])' "$RUNNER_TEMP/exact-ci-run.json")"
+          python3 scripts/weekly_release_management.py candidate --sha "$GITHUB_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" --ci-run-id "$ci_run_id" \
+            --output "$RUNNER_TEMP/release-candidate.json" >/dev/null
+          python3 - "$RUNNER_TEMP/release-candidate.json" "$RUNNER_TEMP/review-subject.json" "$RUNNER_TEMP/release-admission.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          manifest=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
+          manifest['merged_pr_subject']=json.loads(pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))
+          manifest['v3_admission_sha256']=hashlib.sha256(pathlib.Path(sys.argv[3]).read_bytes()).hexdigest()
+          pathlib.Path(sys.argv[1]).write_text(json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+          PY
+          sha256sum "$RUNNER_TEMP/release-candidate.json" > "$RUNNER_TEMP/release-candidate.json.sha256"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/release-candidate.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.admission.outputs.ready == 'true'
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/release-candidate.json
+            ${{ runner.temp }}/release-candidate.json.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  staging-deploy:
+    name: Existing updater staging deployment and smoke acceptance
+    needs: candidate
+    if: >-
+      needs.candidate.result == 'success' && needs.candidate.outputs.candidate_ready == 'true' &&
+      vars.WPCG_WEEKLY_STAGING_ENABLED == 'true' && vars.WPCG_STAGING_RECOVERY_GATE_READY == 'true' &&
+      (github.event.schedule == '0 18 * * 6' ||
+       (github.event_name == 'workflow_dispatch' && (inputs.phase == 'staging' || inputs.phase == 'security-hotfix') && github.actor == 'zsoltacsai'))
+    runs-on: [self-hosted, linux, wpcg-staging]
+    environment: staging
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate exact-SHA recovery receipt and installed controller pin
+        id: recovery
+        env:
+          CONTROLLER_SOURCE_SHA: ${{ vars.WPCG_STAGING_CONTROLLER_SOURCE_SHA }}
+          CONTROLLER_SHA256: ${{ vars.WPCG_STAGING_CONTROLLER_SHA256 }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = deploy
+          [[ "$CONTROLLER_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONTROLLER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          controller="/home/deploy/private-deploy-controller/$CONTROLLER_SOURCE_SHA/deploy-staging.sh"
+          test ! -L "$controller"
+          test "$(stat -c '%U:%a' "$controller")" = root:755
+          echo "$CONTROLLER_SHA256  $controller" | sha256sum --check
+          python3 scripts/weekly_release_management.py validate-recovery \
+            --environment staging --candidate-sha "$CANDIDATE_SHA" \
+            --receipt /var/lib/wpcaregrid-release/recovery/staging.json \
+            --output "$RUNNER_TEMP/staging-recovery-validation.json"
+          rollback_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rollback_sha"])' "$RUNNER_TEMP/staging-recovery-validation.json")"
+          [[ "$rollback_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "rollback_sha=$rollback_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create exact-SHA staging deployment record
+        id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            -f ref="$CANDIDATE_SHA" -f environment=staging -F auto_merge=false \
+            -F required_contexts='[]' -F production_environment=false \
+            -f description="WPCG weekly exact-SHA staging qualification run $GITHUB_RUN_ID" \
+            --jq .id)"
+          [[ "$deployment_id" =~ ^[1-9][0-9]*$ ]]
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=in_progress -f description="Protected updater deployment in progress" \
+            -f environment=staging >/dev/null
+
+      - name: Deploy only through the installed staging updater
+        env:
+          CONTROLLER_SOURCE_SHA: ${{ vars.WPCG_STAGING_CONTROLLER_SOURCE_SHA }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          controller="/home/deploy/private-deploy-controller/$CONTROLLER_SOURCE_SHA/deploy-staging.sh"
+          bash "$controller" "$CANDIDATE_SHA"
+        working-directory: /var/www/wpcaregrid
+
+      - name: HU/EN HTTPS and marketing-only smoke checks
+        env:
+          CONTROLLER_SOURCE_SHA: ${{ vars.WPCG_STAGING_CONTROLLER_SOURCE_SHA }}
+          ROLLBACK_SHA: ${{ steps.recovery.outputs.rollback_sha }}
+        working-directory: /var/www/wpcaregrid
+        run: |
+          set -euo pipefail
+          if python3 "$GITHUB_WORKSPACE/scripts/weekly_release_smoke.py" > "$GITHUB_WORKSPACE/staging-marketing-smoke.json"; then
+            exit 0
+          fi
+          echo 'Post-deploy marketing smoke failed. Starting the exact receipt-approved rollback through the installed controller.' >&2
+          controller="/home/deploy/private-deploy-controller/$CONTROLLER_SOURCE_SHA/deploy-staging.sh"
+          [[ "$ROLLBACK_SHA" =~ ^[0-9a-f]{40}$ ]]
+          bash "$controller" --rollback "$ROLLBACK_SHA"
+          python3 "$GITHUB_WORKSPACE/scripts/weekly_release_smoke.py" > "$GITHUB_WORKSPACE/staging-rollback-smoke.json"
+          echo 'Smoke failed after deploy; approved rollback completed and the baseline smoke passed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Write a secret-safe staging receipt
+        if: success()
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+          CONTROLLER_SOURCE_SHA: ${{ vars.WPCG_STAGING_CONTROLLER_SOURCE_SHA }}
+          CONTROLLER_SHA256: ${{ vars.WPCG_STAGING_CONTROLLER_SHA256 }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+        run: |
+          set -euo pipefail
+          python3 - "$CANDIDATE_SHA" "$CONTROLLER_SOURCE_SHA" "$CONTROLLER_SHA256" "$GITHUB_RUN_ID" "$DEPLOYMENT_ID" <<'PY'
+          import hashlib, json, pathlib, sys
+          p = pathlib.Path('/var/lib/wpcaregrid-release/recovery/staging.json')
+          recovery = json.loads(p.read_text(encoding='utf-8'))
+          smoke = pathlib.Path('staging-marketing-smoke.json')
+          receipt = {"schema":"wpcg-staging-release-receipt-v1","status":"PASS",
+                     "freeze_status":"FROZEN","staging_smoke_sha256":hashlib.sha256(smoke.read_bytes()).hexdigest(),
+                     "candidate_sha":sys.argv[1],"controller_source_sha":sys.argv[2],
+                     "controller_sha256":sys.argv[3],"workflow_run_id":int(sys.argv[4]),
+                     "deployment_id":int(sys.argv[5]),
+                     "rollback_sha":recovery["rollback_sha"],
+                     "recovery_receipt_sha256":hashlib.sha256(p.read_bytes()).hexdigest(),
+                     "backup_sha256":recovery["backup_sha256"],
+                     "restore_evidence_sha256":recovery["restore_evidence_sha256"],
+                     "migration_rehearsal_sha256":recovery["migration_rehearsal_sha256"]}
+          pathlib.Path('staging-release-receipt.json').write_text(
+              json.dumps(receipt, sort_keys=True, separators=(',',':'))+'\n', encoding='utf-8')
+          PY
+          sha256sum staging-release-receipt.json > staging-release-receipt.json.sha256
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: >-
+          always() && (hashFiles('staging-release-receipt.json') != '' ||
+                       hashFiles('staging-marketing-smoke.json') != '' ||
+                       hashFiles('staging-rollback-smoke.json') != '')
+        with:
+          name: staging-release-evidence-${{ needs.candidate.outputs.candidate_sha }}
+          path: |
+            staging-release-receipt.json
+            staging-release-receipt.json.sha256
+            staging-marketing-smoke.json
+            staging-rollback-smoke.json
+          if-no-files-found: error
+          retention-days: 365
+
+      - name: Record staging deployment outcome
+        if: always() && steps.deployment.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=error
+          description="Staging deployment or acceptance failed; inspect recovery receipt and host gate"
+          if [[ "$JOB_STATUS" == success ]]; then
+            state=success
+            description="Exact-SHA staging deployment and marketing smoke passed"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state="$state" -f description="$description" -f environment=staging \
+            -f environment_url=https://stg1.wpcaregrid.com \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+
+  production-deploy:
+    name: Scheduled or Owner-triggered exact-SHA production promotion through helper 2.1.0
+    needs: candidate
+    if: >-
+      needs.candidate.result == 'success' && needs.candidate.outputs.candidate_ready == 'true' &&
+      ((github.event.schedule == '0 20 * * 0' && vars.WPCG_RECURRING_PRODUCTION_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.phase == 'security-hotfix' &&
+        github.actor == 'zsoltacsai' && vars.WPCG_SECURITY_HOTFIX_ENABLED == 'true')) &&
+      vars.WPCG_FIRST_PRODUCTION_LAUNCH_SHA != '' &&
+      vars.WPCG_PRODUCTION_RECOVERY_GATE_READY == 'true' &&
+      vars.WPCG_PRODUCTION_ROLLBACK_READY == 'true' &&
+      vars.WPCG_PRODUCTION_INCIDENTS_CLEAR == 'true'
+    runs-on: [self-hosted, linux, wpcg-production]
+    environment: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      deployments: write
+      actions: read
+      pull-requests: read
+      security-events: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the configured deployment identity and host recovery receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WPCG_GITHUB_TOKEN: ${{ github.token }}
+          FIRST_LAUNCH_SHA: ${{ vars.WPCG_FIRST_PRODUCTION_LAUNCH_SHA }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = deploy-production
+          [[ "$FIRST_LAUNCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = "refs/heads/$WPCG_PRIMARY_BRANCH"
+          python3 scripts/weekly_release_management.py validate-recovery \
+            --environment production --candidate-sha "$CANDIDATE_SHA" \
+            --receipt /var/lib/wpcaregrid-release/recovery/production.json \
+            --output "$RUNNER_TEMP/production-recovery-validation.json"
+
+      - name: Verify the latest staging deployment is this exact candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/deployments?environment=staging&per_page=100" > "$RUNNER_TEMP/staging-deployments.json"
+          python3 scripts/weekly_release_management.py staging-deployment \
+            --candidate-sha "$CANDIDATE_SHA" --deployments "$RUNNER_TEMP/staging-deployments.json" \
+            --output "$RUNNER_TEMP/staging-deployment-gate.json"
+          deployment_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["deployment_id"])' "$RUNNER_TEMP/staging-deployment-gate.json")"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses?per_page=100" > "$RUNNER_TEMP/staging-deployment-statuses.json"
+          python3 scripts/weekly_release_management.py staging-status \
+            --candidate-sha "$CANDIDATE_SHA" --deployment-id "$deployment_id" \
+            --statuses "$RUNNER_TEMP/staging-deployment-statuses.json" \
+            --output "$RUNNER_TEMP/staging-status-gate.json"
+
+      - name: Create exact-SHA production deployment record
+        id: production-deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" \
+            -f ref="$CANDIDATE_SHA" -f environment=production -F auto_merge=false \
+            -F required_contexts='[]' -F production_environment=true \
+            -f description="WPCG weekly exact-SHA production promotion run $GITHUB_RUN_ID" \
+            --jq .id)"
+          [[ "$deployment_id" =~ ^[1-9][0-9]*$ ]]
+          echo "id=$deployment_id" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=in_progress -f description="Installed production controller running" \
+            -f environment=production >/dev/null
+
+      - name: Promote with the installed immutable production controller
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I /usr/local/libexec/wpcaregrid-deploy/production/2.1.0/production_deploy_controller.py sync "$CANDIDATE_SHA"
+
+      - name: Record exact production deployment identity
+        if: always() && steps.production-deployment.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.production-deployment.outputs.id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state=error
+          description="Production controller or post-deploy health gate failed; inspect host receipt and recovery state"
+          if [[ "$JOB_STATUS" == success ]]; then
+            state=success
+            description="Exact-SHA production promotion completed through the installed controller"
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$DEPLOYMENT_ID/statuses" \
+            -f state="$state" -f description="$description" -f environment=production \
+            -f log_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          echo "Production deployment $state for exact SHA $GITHUB_SHA; controller receipt remains authoritative." >> "$GITHUB_STEP_SUMMARY"

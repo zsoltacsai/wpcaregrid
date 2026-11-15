@@ -46,6 +46,29 @@ def assert_no_deployment(content):
     assert not re.search(r"(?i)\b(?:scripts/deploy-staging\.sh|deploy-production|deploy-staging)\b", content), "deployment command introduced into CI workflow"
 
 
+def validate_weekly_deployment_workflow(content):
+    """Only the explicitly reviewed weekly workflow may reach existing controllers."""
+    assert "pull_request:" not in content and "pull_request_target" not in content
+    assert "permissions:\n  contents: read" in content
+    assert "cancel-in-progress: false" in content
+    assert "runs-on: [self-hosted, linux, wpcg-staging]" in content
+    assert "runs-on: [self-hosted, linux, wpcg-production]" in content
+    assert "vars.WPCG_WEEKLY_STAGING_ENABLED == 'true'" in content
+    assert "vars.WPCG_STAGING_RECOVERY_GATE_READY == 'true'" in content
+    for gate in ("WPCG_FIRST_PRODUCTION_LAUNCH_SHA", "WPCG_RECURRING_PRODUCTION_ENABLED",
+                 "WPCG_PRODUCTION_RECOVERY_GATE_READY", "WPCG_PRODUCTION_ROLLBACK_READY",
+                 "WPCG_PRODUCTION_INCIDENTS_CLEAR", "WPCG_SECURITY_HOTFIX_ENABLED"):
+        assert gate in content, f"weekly production gate missing: {gate}"
+    assert "production_deploy_controller.py sync" in content
+    assert "deploy-staging.sh" in content
+    assert "--environment production" in content and "--environment staging" in content
+    assert "validate-recovery" in content
+    assert "production_deploy_controller.py sync" in content
+    assert "deployments: write" in content
+    assert "workflow_dispatch" in content and "inputs.phase == 'production'" not in content, \
+        "manual production deployment must remain unavailable"
+
+
 def validate_workflow_controls(workflow):
     assert "pull_request_target" not in workflow, "pull_request_target is prohibited"
     assert re.search(r"(?m)^\s*pull_request:\s*$", workflow), "public PR CI trigger missing"
@@ -167,7 +190,10 @@ def main():
         content = path.read_text(encoding="utf-8")
         validate_action_refs(content, str(path))
         validate_run_expressions(content, str(path))
-        assert_no_deployment(content)
+        if path.name == "weekly-dependency-release.yml":
+            validate_weekly_deployment_workflow(content)
+        else:
+            assert_no_deployment(content)
 
     composer_files = (ROOT / "composer.json", ROOT / "wordpress/composer.json")
     lock_files = (ROOT / "composer.lock", ROOT / "wordpress/composer.lock")
