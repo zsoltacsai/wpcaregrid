@@ -4,13 +4,14 @@
 import gzip
 import hashlib
 import importlib.util
+import contextlib
+import io
+import inspect
+import tempfile
 import os
-import socket
 import stat
 import sys
-import threading
 from types import SimpleNamespace
-import tempfile
 from pathlib import Path
 
 
@@ -156,37 +157,82 @@ def test_successor_pins_and_receipt_contract_are_separate_from_legacy():
     assert RESTORE.BACKUP_ID == "wpcaregrid-pre-deploy-20261104T133855Z"
     assert RESTORE.BACKUP_SHA256 == "5a2cce05c8a0cc44cfa76be3619f86bcdb748793dd6fed098fd8ef349b02c431"
     assert RESTORE.APPLICATION_SHA == "ee3d29818ff1647d82087446dfaf017ca688cb77"
-    assert RESTORE.MYSQL_UUID_SHA256 == "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
     import inspect
     params = inspect.signature(RESTORE.restore).parameters
-    assert {"backup_id", "backup_sha", "source_id", "destination_id", "approved_definer",
-            "source_config_fingerprint", "restored_config_fingerprint"} <= set(params)
+    assert list(params) == ["_args", "_kwargs"]  # evidence arguments are ignored and restore always refuses
 
 
 def test_admission_tuple_requires_every_exact_pin_and_matching_fingerprint():
-    pins = dict(backup_id=RESTORE.BACKUP_ID, backup_sha=RESTORE.BACKUP_SHA256,
-                source_id=RESTORE.APPLICATION_SHA, destination_id=RESTORE.MYSQL_UUID_SHA256,
-                approved_definer="restore_owner@localhost",
-                source_config_fingerprint="sha256:" + "a" * 64,
-                restored_config_fingerprint="sha256:" + "a" * 64)
-    RESTORE.validate_restore_pins(**pins)
-    for key, value, code in (
-        ("backup_id", "another", "BACKUP_ID_MISMATCH"),
-        ("backup_sha", "0" * 64, "BACKUP_HASH_PIN_MISMATCH"),
-        ("source_id", "0" * 40, "SOURCE_IDENTITY_MISMATCH"),
-        ("destination_id", "0" * 64, "DESTINATION_IDENTITY_MISMATCH"),
-        ("approved_definer", "root@%", "APPROVED_DEFINER_PIN_REQUIRED"),
-        ("source_config_fingerprint", "secret", "CONFIG_FINGERPRINT_EVIDENCE_INVALID"),
-        ("restored_config_fingerprint", "sha256:" + "b" * 64, "CONFIG_FINGERPRINT_MISMATCH"),
-    ):
-        candidate = dict(pins)
-        candidate[key] = value
+    source = {"environment_id": "source-env", "host_id": "source-host", "database_id": "source-db",
+              "release_sha": "a" * 40}
+    destination = {"environment_id": "recovery-env", "host_id": "isolated-host",
+                   "instance_uuid": "123e4567-e89b-42d3-a456-426614174000",
+                   "approved_isolation_policy": "approved-isolated-recovery:policy-1"}
+    assert RESTORE.validate_identity_bindings(source, destination)
+    variants = []
+    missing_source = dict(source); missing_source.pop("database_id")
+    variants.append((missing_source, destination, "SOURCE_IDENTITY_EVIDENCE_INVALID"))
+    bad_sha = dict(source); bad_sha["release_sha"] = "not-a-release"
+    variants.append((bad_sha, destination, "SOURCE_RELEASE_SHA_INVALID"))
+    same_host = dict(destination); same_host["host_id"] = source["host_id"]
+    variants.append((source, same_host, "DESTINATION_NOT_ISOLATED"))
+    same_environment = dict(destination); same_environment["environment_id"] = source["environment_id"]
+    variants.append((source, same_environment, "DESTINATION_NOT_ISOLATED"))
+    malformed_uuid = dict(destination); malformed_uuid["instance_uuid"] = "destination-uuid"
+    variants.append((source, malformed_uuid, "DESTINATION_INSTANCE_UUID_INVALID"))
+    unapproved = dict(destination); unapproved["approved_isolation_policy"] = "self-declared"
+    variants.append((source, unapproved, "DESTINATION_POLICY_NOT_APPROVED"))
+    missing_policy = dict(destination); missing_policy.pop("approved_isolation_policy")
+    variants.append((source, missing_policy, "DESTINATION_IDENTITY_EVIDENCE_INVALID"))
+    for candidate_source, candidate_destination, code in variants:
         try:
-            RESTORE.validate_restore_pins(**candidate)
+            RESTORE.validate_identity_bindings(candidate_source, candidate_destination)
         except RESTORE.RestoreRefused as error:
             assert str(error) == code
         else:
-            raise AssertionError(f"Invalid {key} evidence accepted")
+            raise AssertionError("Invalid identity evidence accepted")
+
+
+def test_no_release_manifest_means_historical_only_and_restore_refuses():
+    try:
+        RESTORE.verify_release_manifest("/synthetic/manifest.json")
+    except RESTORE.RestoreRefused as error:
+        assert str(error) == "TRUSTED_RELEASE_MANIFEST_VERIFIER_UNAVAILABLE"
+    else:
+        raise AssertionError("Unverified release manifest accepted")
+    receipt = RESTORE.historical_receipt(
+        backup_sha=RESTORE.BACKUP_SHA256, application_sha=RESTORE.APPLICATION_SHA,
+        recovery_tool_sha=RESTORE.RECOVERY_TOOL_SHA, started_at="2026-11-15T00:00:00+00:00",
+        completed_at="2026-11-15T00:00:01+00:00", archive_integrity_verified=True)
+    assert receipt["classification"] == "historical_non_release_bound"
+    assert receipt["release_bound"] is False
+    assert receipt["backup_date"] == "2026-11-04"
+    for name in ("complete_trigger_definition_and_definer_verified", "exact_data_integrity_verified",
+                 "protected_config_and_app_key_recovery_verified", "release_manifest_verified"):
+        assert receipt["assertions"][name] is False
+    try:
+        RESTORE.restore()
+    except RESTORE.RestoreRefused as error:
+        assert str(error) == "RELEASE_MANIFEST_AND_ISOLATED_DESTINATION_REQUIRED"
+    else:
+        raise AssertionError("Restore proceeded without trusted manifest and isolated destination")
+    assert "classification" not in inspect.signature(RESTORE.historical_receipt).parameters
+    assert "source_config_fingerprint" not in inspect.signature(RESTORE.main).parameters
+
+
+def test_restore_cli_refuses_before_mysql_or_manifest_access():
+    assert not hasattr(RESTORE, "_mysql")
+    previous_manifest = RESTORE.verify_release_manifest
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Refusal path attempted external access")
+    RESTORE.verify_release_manifest = forbidden
+    try:
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            assert RESTORE.main(["restore"]) == 1
+        assert "RELEASE_MANIFEST_AND_ISOLATED_DESTINATION_REQUIRED" in error.getvalue()
+    finally:
+        RESTORE.verify_release_manifest = previous_manifest
 
 
 def test_comments_and_quoted_data_are_not_sql_directives():
@@ -267,78 +313,6 @@ def test_archive_limit_and_trailing_members_fail_closed():
         raise AssertionError("Concatenated gzip member accepted")
 
 
-def test_mysql_connection_is_explicit_and_ignores_option_files():
-    argv = RESTORE.mysql_argv(["--execute", "SELECT 1"], "/run/mysqld/mysqld.sock")
-    assert argv[0] == RESTORE.MYSQL
-    assert argv[1] == "--no-defaults"
-    assert argv[2] == "--no-login-paths"
-    assert "--binary-mode" in argv
-    assert "--init-command=SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'" in argv
-    assert "--protocol=socket" in argv
-    assert "--socket=/run/mysqld/mysqld.sock" in argv
-    try:
-        RESTORE.mysql_argv(["--execute", "SELECT 1"], None)
-    except RESTORE.RestoreRefused as error:
-        assert str(error) == "MYSQL_SOCKET_REQUIRED"
-    else:
-        raise AssertionError("Unpinned MySQL socket accepted")
-
-
-def test_mysql_peer_must_be_the_systemd_main_process():
-    assert RESTORE.mysql_peer_identity_valid(42, 42, "/usr/sbin/mysqld", "0::/system.slice/mysql.service\n")
-    assert not RESTORE.mysql_peer_identity_valid(43, 42, "/usr/sbin/mysqld", "0::/system.slice/mysql.service\n")
-    assert not RESTORE.mysql_peer_identity_valid(42, 42, "/tmp/fake-mysqld", "0::/system.slice/mysql.service\n")
-    assert not RESTORE.mysql_peer_identity_valid(42, 42, "/usr/sbin/mysqld", "0::/user.slice/user-1000.slice\n")
-
-
-def test_mysql_proxy_round_trip_isolation():
-    if not hasattr(socket, "AF_UNIX"):
-        assert sys.platform == "win32"
-        print("MYSQL_PROXY_ROUNDTRIP=NOT_SUPPORTED_WINDOWS")
-        return
-    with tempfile.TemporaryDirectory() as directory:
-        os.chmod(directory, 0o700)
-        peer_path = str(Path(directory) / "peer.sock")
-        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        peer.bind(peer_path)
-        peer.listen(1)
-        received = []
-
-        def serve_peer():
-            connection, _ = peer.accept()
-            with connection:
-                connection.settimeout(5)
-                received.append(connection.recv(32))
-                connection.sendall(b"reply")
-
-        server_thread = threading.Thread(target=serve_peer)
-        server_thread.start()
-        previous_argv = RESTORE.mysql_argv
-        previous_verifier = RESTORE.verify_mysql_peer
-        previous_path_validator = RESTORE.validate_socket_path
-        RESTORE.mysql_argv = lambda _args, proxy_path: [
-            sys.executable, "-c",
-            "import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
-            "s.sendall(b'probe'); print(s.recv(32).decode('ascii')); s.close()",
-            proxy_path,
-        ]
-        RESTORE.verify_mysql_peer = lambda _connection: None
-        # This test exercises proxy relay only; its /tmp socket is intentionally
-        # not a valid production MySQL endpoint path.
-        RESTORE.validate_socket_path = lambda _path: None
-        try:
-            result = RESTORE._mysql([], peer_path, proxy_root=directory)
-        finally:
-            RESTORE.mysql_argv = previous_argv
-            RESTORE.verify_mysql_peer = previous_verifier
-            RESTORE.validate_socket_path = previous_path_validator
-            peer.close()
-        server_thread.join(timeout=5)
-        assert not server_thread.is_alive()
-        assert received == [b"probe"]
-        assert result.returncode == 0
-        assert result.stdout.strip() == b"reply"
-
 
 def main():
     tests = (
@@ -350,13 +324,12 @@ def main():
         test_definer_requires_exact_explicit_pin,
         test_successor_pins_and_receipt_contract_are_separate_from_legacy,
         test_admission_tuple_requires_every_exact_pin_and_matching_fingerprint,
+        test_no_release_manifest_means_historical_only_and_restore_refuses,
+        test_restore_cli_refuses_before_mysql_or_manifest_access,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,
         test_backup_hash_gzip_and_metadata_checks,
         test_archive_limit_and_trailing_members_fail_closed,
-        test_mysql_connection_is_explicit_and_ignores_option_files,
-        test_mysql_peer_must_be_the_systemd_main_process,
-        test_mysql_proxy_round_trip_isolation,
     )
     for test in tests:
         test()

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Version 2 of the isolated staging restore gate.
+"""Version 2 of the isolated staging restore evidence gate.
 
 This is deliberately separate from the interrupted-release recovery controller.
-It never writes the deployed application database, changes MySQL globals, or
-removes a disposable schema.  Raw SQL exists only in process memory and the
-mysql client's stdin.
+It audits a pinned historical archive only. It will not connect to MySQL or
+create a restore schema without trusted release and isolation evidence.
 """
 
 import argparse
@@ -12,14 +11,8 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import socket
 import stat
-import struct
-import subprocess
 import sys
-import tempfile
-import threading
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,11 +23,6 @@ RECOVERY_TOOL_SHA = "0c0a30f28c72c0602b9b5e665ac4da4d9328e474"
 BACKUP_PATH = Path("/home/deploy/private-backups/wpcaregrid-pre-deploy-20261104T133855Z.sql.gz")
 BACKUP_SHA256 = "5a2cce05c8a0cc44cfa76be3619f86bcdb748793dd6fed098fd8ef349b02c431"
 BACKUP_ID = "wpcaregrid-pre-deploy-20261104T133855Z"
-MYSQL_UUID_SHA256 = "bc35682d80f0894c2c2c2879552fb8fe13dc2a530868d79d817a6280e31bde1c"
-APP_PATH = Path("/var/www/wpcaregrid")
-MYSQL = "/usr/bin/mysql"
-MYSQL_SERVICE = "mysql.service"
-MYSQL_SERVER_EXECUTABLE = "/usr/sbin/mysqld"
 MAX_SQL_BYTES = 32 * 1024 * 1024
 MAX_SQL_LINES = 250_000
 MAX_SQL_TOKENS = 250_000
@@ -524,208 +512,6 @@ def read_verified_dump(path=BACKUP_PATH, expected_sha=BACKUP_SHA256):
     return decode_verified_archive(compressed, expected_sha)
 
 
-def _git(args):
-    result = subprocess.run(
-        ["/usr/sbin/runuser", "-u", "deploy", "--", "/usr/bin/git", "-C", str(APP_PATH), *args],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/home/deploy", "LC_ALL": "C"},
-    )
-    if result.returncode:
-        refuse("SOURCE_PROVENANCE_UNAVAILABLE")
-    return result.stdout.decode("ascii", errors="strict").strip()
-
-
-def verify_source_identity(restore_tool_sha, script_path):
-    if not re.fullmatch(r"[0-9a-f]{40}", restore_tool_sha):
-        refuse("RESTORE_TOOL_SHA_INVALID")
-    if _git(["rev-parse", "HEAD"]) != APPLICATION_SHA:
-        refuse("APPLICATION_SHA_MISMATCH")
-    if _git(["status", "--porcelain"]):
-        refuse("APPLICATION_WORKTREE_DIRTY")
-    _git(["cat-file", "-e", f"{RECOVERY_TOOL_SHA}:scripts/recover-staging-deployment.py"])
-    expected_blob = _git(["rev-parse", f"{restore_tool_sha}:scripts/isolated-staging-restore-v2.py"])
-    try:
-        source = script_path.read_bytes()
-    except OSError:
-        refuse("RESTORE_TOOL_SOURCE_UNAVAILABLE")
-    actual_blob = hashlib.sha1(f"blob {len(source)}\0".encode("ascii") + source).hexdigest()
-    if actual_blob != expected_blob:
-        refuse("RESTORE_TOOL_SOURCE_MISMATCH")
-
-
-def mysql_argv(args, socket_path):
-    if not socket_path:
-        refuse("MYSQL_SOCKET_REQUIRED")
-    return [MYSQL, "--no-defaults", "--no-login-paths", "--binary-mode",
-            "--protocol=socket", "--socket=" + socket_path,
-            "--init-command=SET SESSION sql_mode='NO_AUTO_VALUE_ON_ZERO'",
-            "--batch", "--skip-column-names", *args]
-
-
-def mysql_peer_identity_valid(peer_pid, service_pid, executable, cgroup):
-    return (
-        peer_pid > 1
-        and peer_pid == service_pid
-        and executable == MYSQL_SERVER_EXECUTABLE
-        and re.search(r"(?:^|/)mysql\.service(?:$|/)", cgroup, re.MULTILINE) is not None
-    )
-
-
-def verify_mysql_peer(connection):
-    if not hasattr(socket, "SO_PEERCRED"):
-        refuse("MYSQL_PEER_CREDENTIALS_UNAVAILABLE")
-    try:
-        peer_pid, _peer_uid, _peer_gid = struct.unpack(
-            "3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-        )
-        service = subprocess.run(
-            ["/usr/bin/systemctl", "show", "--property=MainPID", "--value", MYSQL_SERVICE],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/root", "LC_ALL": "C"},
-        )
-        if service.returncode or not re.fullmatch(rb"[1-9][0-9]*\s*", service.stdout):
-            refuse("MYSQL_SERVICE_IDENTITY_UNAVAILABLE")
-        service_pid = int(service.stdout.strip())
-        executable = os.path.realpath(f"/proc/{peer_pid}/exe")
-        cgroup = Path(f"/proc/{peer_pid}/cgroup").read_text(encoding="ascii")
-    except RestoreRefused:
-        raise
-    except (OSError, ValueError, struct.error):
-        refuse("MYSQL_PEER_IDENTITY_UNAVAILABLE")
-    if not mysql_peer_identity_valid(peer_pid, service_pid, executable, cgroup):
-        refuse("MYSQL_PEER_IDENTITY_MISMATCH")
-
-
-def validate_socket_path(socket_path):
-    path = Path(socket_path)
-    if not path.is_absolute() or len(os.fsencode(socket_path)) > 107:
-        refuse("MYSQL_SOCKET_PATH_INVALID")
-    current = Path(path.anchor)
-    try:
-        parent_owners = []
-        for index, part in enumerate(path.parts[1:]):
-            current = current / part
-            info = current.lstat()
-            if stat.S_ISLNK(info.st_mode):
-                refuse("MYSQL_SOCKET_PATH_SYMLINK")
-            if index < len(path.parts[1:]) - 1 and not stat.S_ISDIR(info.st_mode):
-                refuse("MYSQL_SOCKET_PATH_INVALID")
-            if index < len(path.parts[1:]) - 1 and info.st_mode & 0o022:
-                refuse("MYSQL_SOCKET_PATH_PARENT_WRITABLE")
-            if index < len(path.parts[1:]) - 1:
-                parent_owners.append(info.st_uid)
-        socket_info = current.lstat()
-        if not stat.S_ISSOCK(socket_info.st_mode):
-            refuse("MYSQL_SOCKET_NOT_UNIX_SOCKET")
-        if any(owner not in {0, socket_info.st_uid} for owner in parent_owners):
-            refuse("MYSQL_SOCKET_PATH_OWNER_MISMATCH")
-    except OSError:
-        refuse("MYSQL_SOCKET_UNAVAILABLE")
-
-
-def _relay(source, destination):
-    try:
-        while True:
-            data = source.recv(65536)
-            if not data:
-                break
-            destination.sendall(data)
-    except OSError:
-        pass
-    finally:
-        try:
-            destination.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
-
-
-def _mysql(args, socket_path, stdin=None, proxy_root="/run"):
-    proxy_directory = None
-    listener = None
-    backend = None
-    client = None
-    process = None
-    relay_threads = []
-    try:
-        validate_socket_path(socket_path)
-        backend = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        backend.connect(socket_path)
-        verify_mysql_peer(backend)
-        proxy_directory = tempfile.mkdtemp(prefix="wpcg-mysql-proxy-", dir=proxy_root)
-        os.chmod(proxy_directory, 0o700)
-        proxy_path = os.path.join(proxy_directory, "mysql.sock")
-        if len(os.fsencode(proxy_path)) > 107:
-            refuse("MYSQL_PROXY_PATH_TOO_LONG")
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(proxy_path)
-        listener.listen(1)
-        listener.settimeout(30)
-        command = mysql_argv(args, proxy_path)
-        process = subprocess.Popen(
-            command, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={"PATH": "/usr/bin:/bin", "HOME": "/root", "LC_ALL": "C", "LANG": "C"},
-        )
-        try:
-            client, _ = listener.accept()
-        except OSError:
-            process.terminate()
-            process.wait(timeout=5)
-            refuse("MYSQL_PROXY_CLIENT_UNAVAILABLE")
-        relay_threads = [
-            threading.Thread(target=_relay, args=(client, backend), daemon=True),
-            threading.Thread(target=_relay, args=(backend, client), daemon=True),
-        ]
-        for thread in relay_threads:
-            thread.start()
-        stdout, stderr = process.communicate(input=stdin)
-        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-    except OSError:
-        refuse("MYSQL_CLIENT_UNAVAILABLE")
-    finally:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        for connection in (client, listener, backend):
-            if connection is not None:
-                try:
-                    connection.close()
-                except OSError:
-                    pass
-        for thread in relay_threads:
-            thread.join(timeout=1)
-        if proxy_directory is not None:
-            try:
-                shutil.rmtree(proxy_directory)
-            except OSError:
-                refuse("MYSQL_PROXY_CLEANUP_FAILED")
-    return result
-
-
-def _scalar(sql, socket_path):
-    result = _mysql(["--execute", sql], socket_path)
-    if result.returncode:
-        refuse("MYSQL_READ_ONLY_PREFLIGHT_FAILED")
-    return result.stdout.decode("ascii", errors="strict").strip()
-
-
-def verify_mysql_identity(socket_path):
-    query = (
-        "SELECT CONCAT(VERSION(),'|',@@GLOBAL.log_bin,'|',@@GLOBAL.binlog_format,'|',"
-        "@@GLOBAL.log_bin_trust_function_creators,'|',SHA2(@@GLOBAL.server_uuid,256),'|',"
-        "FIND_IN_SET('ANSI_QUOTES',@@SESSION.sql_mode)=0,'|',"
-        "FIND_IN_SET('NO_BACKSLASH_ESCAPES',@@SESSION.sql_mode)=0,'|',"
-        "(SELECT schema_name FROM information_schema.schemata WHERE schema_name='wpcaregrid'));"
-    )
-    expected = "8.4.11|1|ROW|0|" + MYSQL_UUID_SHA256 + "|1|1|wpcaregrid"
-    if _scalar(query, socket_path) != expected:
-        refuse("MYSQL_IDENTITY_OR_SETTING_MISMATCH")
-
-
 def inspect_restore(schema, *, path=BACKUP_PATH, expected_sha=BACKUP_SHA256, approved_definer=None):
     sql = read_verified_dump(path, expected_sha)
     plan = audit_sql(sql, schema, approved_definer)
@@ -743,143 +529,110 @@ def inspect_restore(schema, *, path=BACKUP_PATH, expected_sha=BACKUP_SHA256, app
     }
 
 
-def validate_restore_pins(*, backup_id, backup_sha, source_id, destination_id,
-                          approved_definer, source_config_fingerprint,
-                          restored_config_fingerprint):
-    if backup_id != BACKUP_ID:
-        refuse("BACKUP_ID_MISMATCH")
+def validate_identity_bindings(source, destination):
+    """Validate identity field shape only; this does not authenticate a manifest."""
+    required_source = {"environment_id", "host_id", "database_id", "release_sha"}
+    required_destination = {"environment_id", "host_id", "instance_uuid", "approved_isolation_policy"}
+    if not isinstance(source, dict) or set(source) != required_source:
+        refuse("SOURCE_IDENTITY_EVIDENCE_INVALID")
+    if not isinstance(destination, dict) or set(destination) != required_destination:
+        refuse("DESTINATION_IDENTITY_EVIDENCE_INVALID")
+    for value in list(source.values()) + list(destination.values()):
+        if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 33 for c in value):
+            refuse("IDENTITY_FIELD_INVALID")
+    source_identity = (source["environment_id"], source["host_id"], source["database_id"])
+    destination_identity = (destination["environment_id"], destination["host_id"], destination["instance_uuid"])
+    if (source_identity == destination_identity or source["environment_id"] == destination["environment_id"]
+            or source["host_id"] == destination["host_id"]
+            or source["database_id"] == destination["instance_uuid"]):
+        refuse("DESTINATION_NOT_ISOLATED")
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", destination["instance_uuid"]):
+        refuse("DESTINATION_INSTANCE_UUID_INVALID")
+    if not re.fullmatch(r"approved-isolated-recovery:[A-Za-z0-9_.-]+", destination["approved_isolation_policy"]):
+        refuse("DESTINATION_POLICY_NOT_APPROVED")
+    if not re.fullmatch(r"[0-9a-f]{40}", source["release_sha"]):
+        refuse("SOURCE_RELEASE_SHA_INVALID")
+    return True
+
+
+def verify_release_manifest(_path):
+    """No owner-protected manifest verifier/key is configured in this version."""
+    refuse("TRUSTED_RELEASE_MANIFEST_VERIFIER_UNAVAILABLE")
+
+
+def historical_receipt(*, backup_sha, application_sha, recovery_tool_sha, started_at, completed_at,
+                       archive_integrity_verified):
     if backup_sha != BACKUP_SHA256:
         refuse("BACKUP_HASH_PIN_MISMATCH")
-    if source_id != APPLICATION_SHA:
-        refuse("SOURCE_IDENTITY_MISMATCH")
-    if destination_id != MYSQL_UUID_SHA256:
-        refuse("DESTINATION_IDENTITY_MISMATCH")
-    if not approved_definer or not re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+", approved_definer):
-        refuse("APPROVED_DEFINER_PIN_REQUIRED")
-    fingerprints = (source_config_fingerprint, restored_config_fingerprint)
-    if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", value or "") for value in fingerprints):
-        refuse("CONFIG_FINGERPRINT_EVIDENCE_INVALID")
-    if fingerprints[0] != fingerprints[1]:
-        refuse("CONFIG_FINGERPRINT_MISMATCH")
-
-
-def restore(schema, restore_tool_sha, script_path, socket_path, *, backup_id, backup_sha,
-            source_id, destination_id, approved_definer, source_config_fingerprint,
-            restored_config_fingerprint):
-    if os.geteuid() != 0:
-        refuse("DBA_PRIVILEGE_REQUIRED")
-    verify_source_identity(restore_tool_sha, script_path)
-    validate_restore_pins(backup_id=backup_id, backup_sha=backup_sha, source_id=source_id,
-                          destination_id=destination_id, approved_definer=approved_definer,
-                          source_config_fingerprint=source_config_fingerprint,
-                          restored_config_fingerprint=restored_config_fingerprint)
-    validate_socket_path(socket_path)
-    verify_mysql_identity(socket_path)
-    started = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-    plan = inspect_restore(schema, expected_sha=backup_sha, approved_definer=approved_definer)
-    exists = _scalar(
-        "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='" + schema + "';", socket_path
-    )
-    if exists != "0":
-        refuse("TARGET_SCHEMA_ALREADY_EXISTS")
-    created = _mysql(["--execute", plan["create_sql"]], socket_path)
-    if created.returncode:
-        refuse("TARGET_SCHEMA_CREATE_FAILED")
-    encoding = plan["charset"] + "|" + plan["collation"]
-    actual = _scalar(
-        "SELECT CONCAT(DEFAULT_CHARACTER_SET_NAME,'|',DEFAULT_COLLATION_NAME) "
-        "FROM information_schema.schemata WHERE schema_name='" + schema + "';", socket_path
-    )
-    if actual != encoding:
-        refuse("TARGET_SCHEMA_ENCODING_MISMATCH")
-    imported = _mysql(["--database=" + schema], socket_path, stdin=plan["transformed_sql"])
-    if imported.returncode:
-        code = "MYSQL_IMPORT_FAILED"
-        match = re.search(rb"ERROR ([0-9]{1,5}) \(([A-Z0-9]{5})\)", imported.stderr)
-        suffix = f";MYSQL_ERRNO={match.group(1).decode()};SQLSTATE={match.group(2).decode()}" if match else ""
-        print(f"RESTORE=FAIL;CODE={code}{suffix};DISPOSABLE_SCHEMA_PRESERVED=YES", file=sys.stderr)
-        return 1
-    table_result = _mysql(["--execute", "SELECT table_name FROM information_schema.tables WHERE table_schema='" + schema + "' AND table_type='BASE TABLE' ORDER BY table_name;"], socket_path)
-    if table_result.returncode:
-        refuse("RESTORE_OBJECT_VERIFICATION_FAILED")
-    actual_tables = table_result.stdout.decode("utf-8", errors="strict").splitlines()
-    if set(actual_tables) != set(plan["expected_tables"]):
-        print("RESTORE=FAIL;CODE=RESTORED_TABLE_SET_MISMATCH;DISPOSABLE_SCHEMA_PRESERVED=YES", file=sys.stderr)
-        return 1
-    trigger_result = _mysql(["--execute", "SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema='" + schema + "' ORDER BY trigger_name;"], socket_path)
-    if trigger_result.returncode:
-        refuse("RESTORE_OBJECT_VERIFICATION_FAILED")
-    actual_triggers = trigger_result.stdout.decode("utf-8", errors="strict").splitlines()
-    expected_triggers = sorted(set(plan["expected_triggers"]))
-    if actual_triggers != expected_triggers:
-        refuse("RESTORED_TRIGGER_SET_MISMATCH")
-    counts = _mysql(["--execute", "SELECT CONCAT(table_name,'=',table_rows) FROM information_schema.tables WHERE table_schema='" + schema + "' AND table_type='BASE TABLE' ORDER BY table_name;"], socket_path)
-    if counts.returncode:
-        refuse("RESTORED_DATA_EVIDENCE_MISMATCH")
-    row_counts = counts.stdout.decode("ascii", errors="strict").splitlines()
-    if len(row_counts) != len(actual_tables) or any(not re.fullmatch(r"[A-Za-z0-9_]+=[0-9]+", line) for line in row_counts):
-        refuse("RESTORED_DATA_EVIDENCE_MISMATCH")
-    ended = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-    receipt = {
-        "receipt_version": 2, "classification": "real",
-        "restore": "pass", "schema": schema, "backup_id": backup_id,
-        "backup_sha256": backup_sha, "source_identity": source_id,
-        "destination_identity_sha256": destination_id,
-        "application_sha": APPLICATION_SHA, "recovery_tool_sha": RECOVERY_TOOL_SHA,
-        "started_at": started, "completed_at": ended,
-        "expected_table_count": len(plan["expected_tables"]), "actual_table_count": len(actual_tables),
-        "expected_trigger_count": len(expected_triggers), "actual_trigger_count": len(actual_triggers),
-        "restored_table_row_counts": row_counts,
-        "approved_definer": approved_definer,
-        "config_fingerprint_sha256": source_config_fingerprint,
-        "assertions": {"archive_hash_and_integrity": True, "source_and_destination_bound": True,
-                       "fresh_isolated_schema": True, "tables_and_schema": True,
-                       "triggers_and_definer": True, "data_counts_captured": bool(row_counts),
-                       "protected_config_app_key_fingerprint": True,
-                       "original_backup_preserved": True},
+    return {
+        "receipt_version": 2,
+        "classification": "historical_non_release_bound",
+        "release_bound": False,
+        "restore": "not_performed",
+        "backup_id": BACKUP_ID,
+        "backup_sha256": backup_sha,
+        "backup_date": "2026-11-04",
+        "application_sha": application_sha,
+        "recovery_tool_sha": recovery_tool_sha,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "assertions": {
+            "archive_hash_and_integrity": bool(archive_integrity_verified),
+            "source_environment_host_database_bound": False,
+            "destination_instance_bound_and_isolated": False,
+            "complete_schema_verified": False,
+            "complete_trigger_definition_and_definer_verified": False,
+            "exact_data_integrity_verified": False,
+            "protected_config_and_app_key_recovery_verified": False,
+            "release_manifest_verified": False,
+        },
+        "unverified": ["source_identity", "isolated_destination", "schema_inventory",
+                       "trigger_definitions", "exact_data_integrity", "protected_config_app_key",
+                       "release_binding"],
     }
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+
+
+def restore(*_args, **_kwargs):
+    # A schema on the local mysql.service is not an isolated recovery system.
+    # Until a trusted, owner-protected manifest verifier and external-destination
+    # adapter are configured, this successor must not perform a real restore.
+    refuse("RELEASE_MANIFEST_AND_ISOLATED_DESTINATION_REQUIRED")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("action", choices=("inspect", "restore"))
-    parser.add_argument("--schema", required=True)
-    parser.add_argument("--restore-tool-sha", required=True)
-    parser.add_argument("--socket")
-    parser.add_argument("--backup-id", required=True)
-    parser.add_argument("--backup-sha256", required=True)
-    parser.add_argument("--source-id", required=True)
-    parser.add_argument("--destination-id", required=True)
-    parser.add_argument("--approved-definer", required=True)
-    parser.add_argument("--source-config-fingerprint", required=True)
-    parser.add_argument("--restored-config-fingerprint", required=True)
+    parser.add_argument("--schema")
+    parser.add_argument("--backup-id")
+    parser.add_argument("--backup-sha256")
+    parser.add_argument("--release-manifest")
     args = parser.parse_args(argv)
     try:
-        if not TARGET_RE.fullmatch(args.schema):
+        if args.action == "restore":
+            return restore()
+        if args.backup_id != BACKUP_ID:
+            refuse("BACKUP_ID_MISMATCH")
+        if args.backup_sha256 != BACKUP_SHA256:
+            refuse("BACKUP_HASH_PIN_MISMATCH")
+        if args.release_manifest:
+            verify_release_manifest(args.release_manifest)
+        if not args.schema or not TARGET_RE.fullmatch(args.schema):
             refuse("TARGET_SCHEMA_INVALID")
         if args.action == "inspect":
-            verify_source_identity(args.restore_tool_sha, Path(__file__).resolve())
-            plan = inspect_restore(args.schema)
-            print(json.dumps({
-                "INSPECTION": "PASS", "SCHEMA": args.schema,
-                "APPLICATION_SHA": APPLICATION_SHA, "RECOVERY_TOOL_SHA": RECOVERY_TOOL_SHA,
-                "BACKUP_SHA256": BACKUP_SHA256,
-                "SOURCE_SELECTOR_LINES": plan["source_selector_lines"],
-                "CROSS_SCHEMA_REFERENCES": plan["schema_references"],
-                "TARGET_COLLATION": plan["collation"],
-                "TRANSFORMATION": "ONE_CREATE_EXCISED_ONE_USE_REWRITTEN",
-            }, sort_keys=True, separators=(",", ":")))
+            started = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+            sql = read_verified_dump()
+            plan = audit_sql(sql, args.schema)
+            completed = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+            receipt = historical_receipt(
+                backup_sha=BACKUP_SHA256, application_sha=APPLICATION_SHA,
+                recovery_tool_sha=RECOVERY_TOOL_SHA, started_at=started,
+                completed_at=completed, archive_integrity_verified=True,
+            )
+            receipt["inspection"] = "pass"
+            receipt["source_selector_lines"] = plan["source_selector_lines"]
+            receipt["target_collation"] = plan["collation"]
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
             return 0
-        if not args.socket:
-            refuse("MYSQL_SOCKET_REQUIRED")
-        return restore(args.schema, args.restore_tool_sha, Path(__file__).resolve(), args.socket,
-                       backup_id=args.backup_id, backup_sha=args.backup_sha256,
-                       source_id=args.source_id, destination_id=args.destination_id,
-                       approved_definer=args.approved_definer,
-                       source_config_fingerprint=args.source_config_fingerprint,
-                       restored_config_fingerprint=args.restored_config_fingerprint)
     except RestoreRefused as error:
         print(f"RESTORE=STOP;CODE={error}", file=sys.stderr)
         return 1
