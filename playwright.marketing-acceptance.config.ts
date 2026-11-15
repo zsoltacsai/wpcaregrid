@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const configuredUrl = process.env.E2E_BASE_URL;
+const target = configuredUrl ? new URL(configuredUrl) : null;
+
 /**
  * Read-only acceptance checks for a verified marketing_only application.
  *

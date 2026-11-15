@@ -526,6 +526,8 @@ jobs:
           sudo chown "$e2e_user:$e2e_group" "$sandbox_script"
 
           python3 scripts/tests/marketing-acceptance-workflow-policy-test.py
+          E2E_BASE_URL=http://localhost:8001 \
+            ./node_modules/.bin/playwright test --list -c playwright.marketing-acceptance.config.ts
 
           service_env=()
           for name in \

@@ -22,8 +22,16 @@ if "define('WPCG_TEST_RUNTIME'" in router:
     raise SystemExit("Enforced acceptance router must never define WPCG_TEST_RUNTIME.")
 
 acceptance_config = (ROOT / "playwright.marketing-acceptance.config.ts").read_text()
-if "--host-resolver-rules=MAP localhost 127.0.0.1" not in acceptance_config:
-    raise SystemExit("Chromium localhost resolution must stay on allowed IPv4 loopback.")
+for value in (
+    "const configuredUrl = process.env.E2E_BASE_URL;",
+    "const target = configuredUrl ? new URL(configuredUrl) : null;",
+    "--host-resolver-rules=MAP localhost 127.0.0.1",
+):
+    if value not in acceptance_config:
+        raise SystemExit(f"Marketing acceptance Playwright config is missing: {value}")
+
+if "playwright test --list -c playwright.marketing-acceptance.config.ts" not in workflow:
+    raise SystemExit("Marketing acceptance workflow must load its Playwright config before sandbox startup.")
 
 for value in (
     "PHP_SAPI !== 'cli-server'",
