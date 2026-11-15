@@ -2529,6 +2529,9 @@ def main():
     assert '"$PHP_BIN" "$COMPOSER_BIN" "$@"' in controller
     assert 'composer_binary_preflight "$COMPOSER_BIN" "$COMPOSER_SHA256" "$COMPOSER_VERSION" 0 0 "$PHP_BIN"' in controller
     assert '/usr/bin/composer' not in controller, "Composer must not fall back to the obsolete path"
+    phase2b_preflight = "DB_PHASE2B_TRIGGER_DEFINER must be set before applying migrations."
+    assert phase2b_preflight in controller
+    assert controller.index(phase2b_preflight) < controller.index('php artisan migrate --force --no-interaction')
 
     bash = shutil.which("bash")
     if bash and os.name != "nt":

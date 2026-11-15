@@ -16,18 +16,19 @@ return new class extends Migration
 
     public function up(): void
     {
-        $connection = DB::connection();
+        $connectionName = $this->getConnection() ?: DB::getDefaultConnection();
+        $connection = DB::connection($connectionName);
         if (! in_array($connection->getDriverName(), ['mysql', 'mariadb'], true)) {
             return;
         }
 
-        $expectedDefiner = config('database.connections.'.DB::getDefaultConnection().'.phase2b_trigger_definer');
+        $expectedDefiner = config('database.connections.'.$connectionName.'.phase2b_trigger_definer');
         if (! is_string($expectedDefiner) || trim($expectedDefiner) === '') {
             throw new RuntimeException('The Phase 2B trigger definer is not configured.');
         }
 
         $triggers = $connection->table('information_schema.triggers')
-            ->select('trigger_name', 'definer')
+            ->selectRaw('TRIGGER_NAME AS trigger_name, DEFINER AS trigger_definer')
             ->where('trigger_schema', DB::raw('DATABASE()'))
             ->whereIn('trigger_name', self::TRIGGERS)
             ->get();
@@ -37,7 +38,7 @@ return new class extends Migration
         }
 
         foreach ($triggers as $trigger) {
-            if ($trigger->definer !== $expectedDefiner) {
+            if ($trigger->trigger_definer !== $expectedDefiner) {
                 throw new RuntimeException('A Phase 2B trigger has an unexpected DEFINER.');
             }
         }

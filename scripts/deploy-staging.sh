@@ -1145,6 +1145,8 @@ main() {
     fi
 
     log 'Running database migrations.'
+    /usr/bin/python3 -c 'from pathlib import Path; values=[line.partition("=")[2].strip() for line in Path(".env").read_text(encoding="utf-8").splitlines() if line.startswith("DB_PHASE2B_TRIGGER_DEFINER=")]; value=values[-1].strip(chr(34)+chr(39)) if values else ""; raise SystemExit(0 if value else 1)' \
+        || fail 'DB_PHASE2B_TRIGGER_DEFINER must be set before applying migrations.'
     migration_status="$(php artisan migrate:status --no-interaction)" || fail 'Could not inspect target migration status before running migrations.'
     if grep -q 'Pending' <<<"$migration_status"; then
         MIGRATIONS_PENDING=1

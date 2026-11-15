@@ -322,6 +322,7 @@ jobs:
             "DB_DATABASE=caregrid_test" \
             "DB_USERNAME=caregrid_ci" \
             "DB_PASSWORD=$db_password" \
+            "DB_PHASE2B_TRIGGER_DEFINER=caregrid_ci@%" \
             "DB_URL=" \
             "CAREGRID_EXPECTED_DATABASE_DRIVER=mysql" \
             "CAREGRID_EXPECTED_DATABASE_VERSION=8.4" \

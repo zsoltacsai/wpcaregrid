@@ -710,6 +710,7 @@ def main():
             "LOG_CHANNEL=stderr", "LOG_LEVEL=debug",
             "DB_HOST=" + os.environ["WPCG_MYSQL_HOST"], "DB_PORT=3306",
             "DB_DATABASE=wpcg_staging_next", "DB_USERNAME=" + os.environ["WPCG_MYSQL_USER"],
+            "DB_PHASE2B_TRIGGER_DEFINER=" + os.environ["WPCG_MYSQL_USER"] + "@%",
             "DB_PASSWORD=" + os.environ["WPCG_MYSQL_PASSWORD"], "SESSION_DRIVER=file",
             "CACHE_STORE=file", "QUEUE_CONNECTION=sync", "MAIL_MAILER=log",
             "STRIPE_KEY=", "STRIPE_SECRET=", "STRIPE_WEBHOOK_SECRET=",
