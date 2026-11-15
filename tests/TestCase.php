@@ -13,8 +13,8 @@ abstract class TestCase extends BaseTestCase
      */
     public function createApplication()
     {
-        if (! defined('WPCG_PHPUNIT_RUNTIME')) {
-            define('WPCG_PHPUNIT_RUNTIME', true);
+        if (! defined('WPCG_TEST_RUNTIME')) {
+            define('WPCG_TEST_RUNTIME', true);
         }
 
         $hadBasePath = array_key_exists('APP_BASE_PATH', $_SERVER);

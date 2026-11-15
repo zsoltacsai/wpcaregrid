@@ -363,7 +363,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
-    public function test_test_exemption_requires_phpunit_identity_and_all_three_exact_server_side_values(): void
+    public function test_test_exemption_requires_test_runtime_identity_and_all_three_exact_server_side_values(): void
     {
         $cases = [
             ['testing', 'testing', 'testing', true],
@@ -393,7 +393,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
-    public function test_testing_configuration_alone_does_not_disable_the_gate_outside_phpunit(): void
+    public function test_testing_configuration_alone_does_not_disable_the_gate_outside_test_runtime(): void
     {
         config([
             'app.env' => 'testing',
@@ -403,7 +403,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
             'marketing_release.test_deployment_environment' => 'testing',
         ]);
 
-        [$response, $dispatched] = $this->runGate('/checkout', phpUnitRuntime: false);
+        [$response, $dispatched] = $this->runGate('/checkout', testRuntime: false);
 
         $this->assertFalse($dispatched);
         $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
@@ -635,7 +635,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         mixed $profile = 'marketing_only',
         bool $setProfile = true,
         bool $https = true,
-        ?bool $phpUnitRuntime = null,
+        ?bool $testRuntime = null,
     ): array {
         if ($setProfile) {
             config(['marketing_release.profile' => $profile]);
@@ -656,7 +656,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
 
         $dispatched = false;
-        $response = (new MarketingOnlyReleaseGate($phpUnitRuntime))->handle(
+        $response = (new MarketingOnlyReleaseGate($testRuntime))->handle(
             $request,
             function () use (&$dispatched): Response {
                 $dispatched = true;

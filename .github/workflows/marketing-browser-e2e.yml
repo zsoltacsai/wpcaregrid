@@ -428,7 +428,7 @@ jobs:
           PHP_EGRESS_PROBE
           echo "PHP_EGRESS_NEGATIVE_TEST=PASS"
 
-          "$E2E_PHP_BIN" artisan serve --host=127.0.0.1 --port=8000 > /dev/null 2>&1 &
+          "$E2E_PHP_BIN" -S 127.0.0.1:8000 -t public tests/e2e/fixtures/marketing-test-router.php > /dev/null 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" 2>/dev/null || true

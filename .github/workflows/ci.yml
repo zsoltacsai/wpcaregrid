@@ -2435,7 +2435,7 @@ jobs:
           echo "Application-mode smoke cache identity and disabled billing configuration verified.\n";
           PHP
 
-          php -S 127.0.0.1:8001 -t public public/index.php > "$RUNNER_TEMP/application-smoke-server.log" 2>&1 &
+          php -S 127.0.0.1:8001 -t public tests/e2e/fixtures/marketing-test-router.php > "$RUNNER_TEMP/application-smoke-server.log" 2>&1 &
           server_pid=$!
 
           ready=0
