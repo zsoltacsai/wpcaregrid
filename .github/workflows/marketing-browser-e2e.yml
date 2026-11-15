@@ -21,6 +21,8 @@ on:
       - 'tests/acceptance/marketing-only.spec.ts'
       - 'playwright.marketing-acceptance.config.ts'
       - 'tests/e2e/fixtures/marketing-test-router.php'
+      - 'tests/e2e/fixtures/marketing-enforced-test-router.php'
+      - 'scripts/tests/marketing-acceptance-workflow-policy-test.py'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -49,6 +51,8 @@ on:
       - 'tests/acceptance/marketing-only.spec.ts'
       - 'playwright.marketing-acceptance.config.ts'
       - 'tests/e2e/fixtures/marketing-test-router.php'
+      - 'tests/e2e/fixtures/marketing-enforced-test-router.php'
+      - 'scripts/tests/marketing-acceptance-workflow-policy-test.py'
       - 'composer.json'
       - 'composer.lock'
       - 'package.json'
@@ -485,12 +489,14 @@ jobs:
           # Run the release-gate suite in a separate process with enforcement
           # forced on and no WPCG_TEST_RUNTIME marker. The primary test server
           # above remains available for the broader synthetic account flows.
-          APP_URL=http://127.0.0.1:8001 MARKETING_RELEASE_ENFORCEMENT_MODE=enforced \
-            "$E2E_PHP_BIN" artisan serve --host=127.0.0.1 --port=8001 > /dev/null 2>&1 &
+          # Use a DNS loopback host so the application host allowlist remains
+          # enforced. The app deliberately rejects numeric IP Host headers.
+          APP_URL=http://localhost:8001 MARKETING_RELEASE_ENFORCEMENT_MODE=enforced \
+            "$E2E_PHP_BIN" -S localhost:8001 -t public tests/e2e/fixtures/marketing-enforced-test-router.php > /dev/null 2>&1 &
           acceptance_server_pid=$!
           acceptance_ready=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:8001/en/ > /dev/null; then
+            if curl --fail --silent http://localhost:8001/en/ > /dev/null; then
               acceptance_ready=1
               break
             fi
@@ -505,13 +511,15 @@ jobs:
             exit 1
           fi
           echo "MARKETING_ACCEPTANCE_SERVER=PASS"
-          E2E_BASE_URL=http://127.0.0.1:8001 \
+          E2E_BASE_URL=http://localhost:8001 \
           PLAYWRIGHT_OUTPUT_DIR=storage/playwright/marketing-acceptance \
             ./node_modules/.bin/playwright test -c playwright.marketing-acceptance.config.ts \
               --reporter=list
           SANDBOX_SCRIPT
           chmod 500 "$sandbox_script"
           sudo chown "$e2e_user:$e2e_group" "$sandbox_script"
+
+          python3 scripts/tests/marketing-acceptance-workflow-policy-test.py
 
           service_env=()
           for name in \
