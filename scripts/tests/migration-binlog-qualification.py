@@ -375,9 +375,32 @@ def phase2b_failure_code(text):
     return 'NONE'
 
 
+def dump_error_class(text):
+    value = (text or '').lower()
+    if 'unknown option' in value or 'unknown variable' in value or 'unrecognized option' in value:
+        return 'client_option_unsupported'
+    if 'access denied' in value or 'privilege' in value or 'permission denied' in value:
+        return 'client_access_denied'
+    if 'unknown database' in value or 'no database selected' in value:
+        return 'client_database_selection_failed'
+    if 'couldn.t execute' in value or 'error in query' in value:
+        return 'client_query_failed'
+    if 'can.t connect' in value or 'connection refused' in value or 'server has gone away' in value:
+        return 'client_connection_failed'
+    if re.search(r'(?i)got error:\s*[0-9]+:', text or ''):
+        return 'client_mysql_errno'
+    if value.strip():
+        return 'client_other_error'
+    return 'no_stderr'
+
+
 def self_test():
     assert classify('SQLSTATE[HY000]: General error: 1419 You do not have the SUPER privilege') == ('HY000', '1419')
     assert classify('ERROR 1644 (45000) at line 1: x') == ('45000', '1644')
+    assert dump_error_class("mysqldump: unknown option '--example'") == 'client_option_unsupported'
+    assert dump_error_class('mysqldump: Got error: 2002: connection refused') == 'client_connection_failed'
+    assert dump_error_class('mysqldump: other failure') == 'client_other_error'
+    assert dump_error_class('') == 'no_stderr'
     assert classify('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate') == ('23000', '1062')
     assert phase2b_failure_code('RuntimeException: The Phase 2B trigger definer is not configured.') == 'DEFINER_CONFIG_MISSING'
     assert phase2b_failure_code('RuntimeException: A Phase 2B trigger has an unexpected DEFINER.') == 'DEFINER_MISMATCH'
@@ -685,21 +708,22 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
         dump_stderr = dump.stderr.decode('utf-8', errors='replace')
         dump_sqlstate, dump_errno = classify(dump_stderr)
         if dump.returncode or not dump.stdout or len(dump.stdout) > 32 * 1024 * 1024:
-            if re.search(r'(?i)unknown option|unrecognized option', dump_stderr):
-                reason = 'dump_unknown_option'
-            elif re.search(r'(?i)access denied', dump_stderr):
-                reason = 'dump_access_denied'
-            elif re.search(r'(?i)couldn.t execute|error in query', dump_stderr):
-                reason = 'dump_query_failed'
-            elif len(dump.stdout) > 32 * 1024 * 1024:
+            if len(dump.stdout) > 32 * 1024 * 1024:
                 reason = 'dump_size_limit'
             elif dump.returncode:
-                reason = 'dump_command_failed'
+                reason = dump_error_class(dump_stderr)
             else:
                 reason = 'dump_empty'
+            version_result = subprocess.run([MYSQLDUMP, '--version'], stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            timeout=10, check=False)
+            version_text = (version_result.stdout + version_result.stderr).decode('utf-8', errors='replace')
+            version_match = re.search(r'(?i)\b(Ver\s+[0-9][0-9A-Za-z.+-]*)', version_text)
+            client_version = version_match.group(1).replace(' ', '') if version_match else 'unparsed'
             return require_contract('synthetic_backup_created', False,
                                     f'reason={reason},exit={dump.returncode},bytes={len(dump.stdout)},'
-                                    f'sqlstate={dump_sqlstate},errno={dump_errno}')
+                                    f'stderr_bytes={len(dump.stderr)},stderr_sha256={hashlib.sha256(dump.stderr).hexdigest()},'
+                                    f'client={client_version},sqlstate={dump_sqlstate},errno={dump_errno}')
         original = dump.stdout
         expected_use = f'USE `{schema}`;'.encode()
         if original.count(expected_use) != 1:
