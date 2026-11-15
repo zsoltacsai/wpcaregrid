@@ -143,6 +143,12 @@ helper only through a new version and a separate, Owner-approved host installati
   the V2 check (all other authorisation steps unchanged). Prepared as helper **2.1.0** in
   [PRODUCTION_HELPER_INSTALL_2_1_0.md](PRODUCTION_HELPER_INSTALL_2_1_0.md) (source only, not
   installed).
+  Superseded by helper **2.1.1**
+  ([PRODUCTION_HELPER_INSTALL_2_1_1.md](PRODUCTION_HELPER_INSTALL_2_1_1.md)), which pins the
+  corrected policy bytes (the exact Owner-ledger correction allowlist changed the policy digest, so
+  2.1.0 must not be installed). The 2.1.0 files stay byte-identical; its policy pin is verified from
+  the immutable snapshot `deploy/release-snapshots/release_review_policy_v3-helper-2.1.0.py.snapshot`.
+  Any further change to `release_review_policy_v3.py` requires a new helper version.
 * the next staging-next helper, combined with the target-binding integration, optionally
   enforcing V3 evidence before release authorisation.
 

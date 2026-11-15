@@ -6,6 +6,13 @@ pins, installer, controller and sudoers are self-consistent, (3) the only
 backend behaviour change is the replacement of the legacy V2 review admission,
 and (4) the V3 admission behaves as documented in docs/RELEASE_REVIEW_POLICY.md.
 Nothing here touches a host, the network, a database or production.
+
+Historical artifact: helper 2.1.0 is superseded by 2.1.1 and pins the review
+policy bytes it was built with (SHA-256 1961bea6...). ``scripts/
+release_review_policy_v3.py`` is mutable and has since changed, so every check
+here uses the immutable 2.1.0 policy snapshot, which is itself verified against
+the exact approved Git blob. The 2.1.0 pin is never compared to the live policy
+source; that is the job of the 2.1.1 test.
 """
 
 from __future__ import annotations
@@ -27,9 +34,41 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-# Policy module first: the successor backend reuses an already registered one.
-from scripts import release_review_policy_v3 as POLICY
 from scripts import deployment_backend_v2 as BACKEND_V2_0_0
+
+# Immutable 2.1.0 review-policy identity. Independent of the mutable
+# scripts/release_review_policy_v3.py, which later changed for helper 2.1.1.
+POLICY_2_1_0_SHA256 = "1961bea6ff4fdf6ff116c5a454ed04c878e4b628ac5260ffe89073b512ccc792"
+POLICY_2_1_0_APPROVED_BASE_COMMIT = "063419d0631c9e42b9162fc7b9015641d099a67b"
+POLICY_2_1_0_APPROVED_BASE_BLOB = "f2f971fb622ca86022a7d9e0242a4f0a364f2fd0"
+POLICY_2_1_0_SNAPSHOT = "deploy/release-snapshots/release_review_policy_v3-helper-2.1.0.py.snapshot"
+POLICY_MODULE_NAME = "_wpcg_release_review_policy_v3"
+
+
+def _git_blob(spec: str) -> bytes:
+    return subprocess.run(["git", "cat-file", "blob", spec], cwd=ROOT, check=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+
+def policy_2_1_0_bytes() -> bytes:
+    """The exact 2.1.0 policy bytes, authenticated by digest before any use."""
+    raw = _git_blob(f"HEAD:{POLICY_2_1_0_SNAPSHOT}")
+    if hashlib.sha256(raw).hexdigest() != POLICY_2_1_0_SHA256:
+        raise AssertionError("2.1.0 policy snapshot does not match its immutable digest")
+    return raw
+
+
+def _register_policy_2_1_0():
+    """Register the snapshot where the 2.1.0 backend (and entrypoint) look for it."""
+    module = types.ModuleType(POLICY_MODULE_NAME)
+    module.__file__ = str(ROOT / POLICY_2_1_0_SNAPSHOT)
+    sys.modules[POLICY_MODULE_NAME] = module
+    exec(compile(policy_2_1_0_bytes(), module.__file__, "exec", dont_inherit=True), module.__dict__)
+    return module
+
+
+# Policy module first: the successor backend reuses an already registered one.
+POLICY = _register_policy_2_1_0()
 
 
 def _load(name: str, relative: str):
@@ -105,6 +144,33 @@ class FrozenLegacyHelperTests(unittest.TestCase):
         self.assertEqual(ENTRY.POLICY, INSTALLER.POLICY)
 
 
+class HistoricalPolicySnapshotTests(unittest.TestCase):
+    """The 2.1.0 policy pin is verified from immutable bytes, not the live source."""
+
+    def test_snapshot_equals_the_approved_base_git_blob_independently(self):
+        snapshot = _git_blob(f"HEAD:{POLICY_2_1_0_SNAPSHOT}")
+        approved = _git_blob(f"{POLICY_2_1_0_APPROVED_BASE_COMMIT}:scripts/release_review_policy_v3.py")
+        self.assertEqual(sha256(approved), POLICY_2_1_0_SHA256)
+        self.assertEqual(snapshot, approved)
+        blob_id = subprocess.run(
+            ["git", "rev-parse", f"{POLICY_2_1_0_APPROVED_BASE_COMMIT}:scripts/release_review_policy_v3.py"],
+            cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout.decode().strip()
+        self.assertEqual(blob_id, POLICY_2_1_0_APPROVED_BASE_BLOB)
+
+    def test_snapshot_digest_is_the_manifest_installer_and_runbook_pin(self):
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["release_review_policy_sha256"], POLICY_2_1_0_SHA256)
+        self.assertEqual(INSTALLER.REVIEW_POLICY_SHA256, POLICY_2_1_0_SHA256)
+        self.assertEqual(sha256(policy_2_1_0_bytes()), POLICY_2_1_0_SHA256)
+        self.assertIn(f"`{POLICY_2_1_0_SHA256}`",
+                      (ROOT / "docs/PRODUCTION_HELPER_INSTALL_2_1_0.md").read_text(encoding="utf-8"))
+
+    def test_registered_policy_is_the_snapshot_not_the_live_source(self):
+        self.assertEqual(Path(POLICY.__file__), ROOT / POLICY_2_1_0_SNAPSHOT)
+        self.assertIs(sys.modules[POLICY_MODULE_NAME], POLICY)
+        self.assertIs(BACKEND._REVIEW_POLICY_MODULE, POLICY)
+
+
 class ManifestAndPinTests(unittest.TestCase):
     def setUp(self):
         self.manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -125,6 +191,11 @@ class ManifestAndPinTests(unittest.TestCase):
         }
         for path_key, digest_key in pins.items():
             with self.subTest(path_key):
+                if path_key == "release_review_policy_module":
+                    # Historical pin: the immutable 2.1.0 bytes, never the live source.
+                    self.assertEqual(m[digest_key], sha256(policy_2_1_0_bytes()))
+                    self.assertEqual(m[digest_key], POLICY_2_1_0_SHA256)
+                    continue
                 self.assertEqual(m[digest_key], sha256(committed_bytes(m[path_key])))
         material = {"schema": 1, "helper_version": m["helper_version"],
                     "compatibility_contract": m["compatibility_contract"],
@@ -370,7 +441,7 @@ class EntrypointTests(unittest.TestCase):
                 self.assertIn(guard, text, guard)
 
     def test_policy_module_bytes_are_registered_and_backend_is_bound_to_them(self):
-        raw = (ROOT / "scripts/release_review_policy_v3.py").read_bytes()
+        raw = policy_2_1_0_bytes()
         name = "_wpcg_release_review_policy_v3"
         saved = sys.modules.get(name)
         try:
@@ -401,7 +472,7 @@ class EntrypointTests(unittest.TestCase):
             self.assertNotIn(name, sys.modules)
             with self.assertRaisesRegex(ENTRY.Refused, "release_review_policy_contract_invalid"):
                 ENTRY._load_review_policy(b"RECORD_PREFIX='WPCG_RELEASE_REVIEW_V2'\n")
-            raw = (ROOT / "scripts/release_review_policy_v3.py").read_bytes().replace(
+            raw = policy_2_1_0_bytes().replace(
                 b'ROLES = ("integration_qa", "appsec")', b'ROLES = ("integration_qa",)')
             with self.assertRaisesRegex(ENTRY.Refused, "release_review_policy_contract_invalid"):
                 ENTRY._load_review_policy(raw)
@@ -411,9 +482,13 @@ class EntrypointTests(unittest.TestCase):
             else:
                 sys.modules[name] = saved
 
-    def test_profile_is_refused_when_the_review_policy_pin_does_not_match(self):
-        """Drive _load_profile with trusted-read stubs: a changed policy file is refused."""
-        policy_raw = (ROOT / "scripts/release_review_policy_v3.py").read_bytes()
+    def _profile_fixture(self):
+        """Drive _load_profile with trusted-read stubs, served from 2.1.0 artifacts.
+
+        Every served artifact matches its manifest pin, so each test below can
+        break exactly one boundary and reach it (never a different, earlier one).
+        """
+        policy_raw = policy_2_1_0_bytes()
         files = {
             ENTRY.ENTRYPOINT: (ROOT / "scripts/wpcaregrid-deploy-production-priv-2_1_0.py").read_bytes(),
             ENTRY.BACKEND: (ROOT / "scripts/deployment_backend_v2_1_0.py").read_bytes(),
@@ -447,16 +522,35 @@ class EntrypointTests(unittest.TestCase):
                     patch.object(ENTRY.sys, "argv", [str(ENTRY.ENTRYPOINT), "preflight"]):
                 return ENTRY._load_profile(["preflight"], "1000")
 
-        # Policy file missing the new pin key -> exact-schema refusal.
+        return policy_raw, enabled_policy, run
+
+    def test_profile_with_every_pin_correct_passes_both_hash_boundaries(self):
+        # Positive control: with all pins and the combined digest correct the
+        # load proceeds past BOTH hash boundaries and stops at the next, unrelated
+        # check (the unset caller identity). It proves the two negative tests
+        # below genuinely fail at the boundary they name.
+        policy_raw, enabled_policy, run = self._profile_fixture()
+        with self.assertRaisesRegex(ENTRY.Refused, "production_caller_identity_invalid"):
+            run(policy_raw, enabled_policy)
+
+    def test_profile_missing_the_review_policy_pin_key_is_refused_by_exact_schema(self):
+        policy_raw, enabled_policy, run = self._profile_fixture()
         legacy_schema = {k: v for k, v in enabled_policy.items() if k != "release_review_policy_sha256"}
         with self.assertRaisesRegex(ENTRY.Refused, "production_policy_schema_invalid"):
             run(policy_raw, legacy_schema)
-        # Review-policy bytes that differ from the pinned digest -> identity mismatch.
-        with self.assertRaisesRegex(ENTRY.Refused, "production_artifact_identity_mismatch"):
+
+    def test_review_policy_bytes_differing_from_the_pin_are_an_artifact_identity_mismatch(self):
+        # Boundary 1: a served artifact's bytes differ from its pinned digest.
+        policy_raw, enabled_policy, run = self._profile_fixture()
+        with self.assertRaisesRegex(ENTRY.Refused, "^production_artifact_identity_mismatch$"):
             run(policy_raw + b"\n# changed\n", enabled_policy)
-        # Pin matches but the combined artifact digest does not -> manifest mismatch.
+
+    def test_wrong_combined_digest_with_every_pin_correct_is_a_helper_manifest_mismatch(self):
+        # Boundary 2: every individual pin matches the served bytes, only the
+        # combined helper artifact digest is wrong.
+        policy_raw, enabled_policy, run = self._profile_fixture()
         wrong = dict(enabled_policy, helper_artifact_sha256="0" * 64)
-        with self.assertRaisesRegex(ENTRY.Refused, "production_helper_manifest_mismatch"):
+        with self.assertRaisesRegex(ENTRY.Refused, "^production_helper_manifest_mismatch$"):
             run(policy_raw, wrong)
 
 
@@ -744,7 +838,7 @@ class V3AdmissionTests(unittest.TestCase):
                                                      repository_owner=OWNER)
 
     def test_every_policy_refusal_code_is_allowlisted_and_surfaces_unchanged(self):
-        source = (ROOT / "scripts/release_review_policy_v3.py").read_text()
+        source = policy_2_1_0_bytes().decode("utf-8")
         codes = set(re.findall(r'ReviewRefused\("([a-z_]+)"\)', source))
         self.assertTrue(codes)
         self.assertTrue(codes <= set(BACKEND.RELEASE_REVIEW_REFUSAL_CODES))
