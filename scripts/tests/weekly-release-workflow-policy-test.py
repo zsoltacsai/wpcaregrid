@@ -11,6 +11,9 @@ dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
 for cron in ("0 19 * * 5", "0 18 * * 6", "0 20 * * 0", "0 8 * * 1"):
     assert f"cron: '{cron}'" in workflow, f"missing Budapest schedule {cron}"
 assert workflow.count("timezone: Europe/Budapest") == 4
+dispatch_choices = workflow.split("  workflow_dispatch:\n", 1)[1].split("\n\npermissions:", 1)[0]
+assert "          - production\n" not in dispatch_choices, \
+    "manual dispatch must not offer an unimplemented production phase"
 assert dependabot.count("day: friday") == 4
 assert dependabot.count("timezone: Europe/Budapest") == 4
 assert "applies-to: security-updates" in dependabot

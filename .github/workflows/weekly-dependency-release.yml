@@ -20,7 +20,6 @@ on:
           - intake
           - candidate
           - staging
-          - production
           - security-hotfix
           - handoff
 
