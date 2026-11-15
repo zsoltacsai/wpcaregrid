@@ -955,7 +955,7 @@ def _phase2b_expected_definer(value: object) -> bool:
     if not isinstance(value, str) or value.count("@") != 1:
         return False
     user, host = value.split("@", 1)
-    if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", user) is None
+    if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", user) is None
             or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}", host) is None):
         return False
     reserved = {"root", "mysql", "mariadb", "mariadb.sys", "sys", "system", "public",

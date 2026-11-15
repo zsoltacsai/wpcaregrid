@@ -15,11 +15,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 TX_SPEC = importlib.util.spec_from_file_location(
-    "staging_next_db_transaction_1_4_10", ROOT / "scripts" / "staging_next_db_transaction_1_4_10.py")
+    "staging_next_db_transaction_1_4_11", ROOT / "scripts" / "staging_next_db_transaction_1_4_11.py")
 TX = importlib.util.module_from_spec(TX_SPEC)
 sys.modules[TX_SPEC.name] = TX
 TX_SPEC.loader.exec_module(TX)
-from scripts import staging_next_deploy_backend_1_4_10 as BACKEND
+from scripts import staging_next_deploy_backend_1_4_11 as BACKEND
 MIGRATIONS = TX.PHASE2B_MIGRATIONS
 receipt_digest = TX._dba_receipt_hash
 

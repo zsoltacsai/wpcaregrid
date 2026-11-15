@@ -8,12 +8,12 @@
   "backend_path": "scripts/staging_next_deploy_backend_1_4_11.py",
   "backend_sha256": "566702b590b22fb7057f3e44ef536aa7a60cf0e3e8e3a3c4cce00a37ce42b84e",
   "transaction_module_path": "scripts/staging_next_db_transaction_1_4_11.py",
-  "transaction_module_sha256": "10339c5338c001eb2bc383ef322daeaa97d2026be32f25e3c4a87a2689937c8f",
+  "transaction_module_sha256": "3de0ae17f6f4df38621cd6630f0cc9e6eaa216e8e6cf94154e8e0f1b5f86c700",
   "target_binding_path": "scripts/deployment_target_binding_1_4_11.py",
   "target_binding_sha256": "e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16",
   "environment_contract_path": "scripts/deployment_environment_contract.py",
   "environment_contract_sha256": "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1",
-  "helper_artifact_sha256": "aa1ba0bf701c403875a0fd6404ef11a33d3ceadbe9ed0985082081a26bffa989",
+  "helper_artifact_sha256": "1c0bb0e3385b750175906ec9b36fb51942022c838147b9865cd073697774be19",
   "release_validation": {
     "required_independent_agent_passes": [
       "integration_qa",

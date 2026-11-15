@@ -28,7 +28,7 @@ MANIFEST_PATH = ROOT / "deploy/release-manifests/staging-next-helper-1.4.11.json
 
 class Phase2BDefinerTests(unittest.TestCase):
     def test_exact_non_reserved_identity_is_accepted(self):
-        for value in ("wpcg-phase2b@localhost", "phase2b-definer@127.0.0.1", "app-definer@db.internal"):
+        for value in ("wpcg-phase2b@localhost", "wpcg_phase2b@localhost", "phase2b-definer@127.0.0.1", "app-definer@db.internal"):
             with self.subTest(value=value):
                 self.assertTrue(TRANSACTION._phase2b_expected_definer(value))
 
