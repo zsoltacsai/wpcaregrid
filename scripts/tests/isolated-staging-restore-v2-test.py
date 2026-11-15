@@ -91,6 +91,12 @@ def test_selector_and_schema_rejections():
 
 def test_global_replication_and_external_side_effects_rejected():
     cases = (
+        (b"SET NAMES gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET NAMES utf8mb4;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET @@character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET @@SESSION.character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"INSERT INTO `synthetic` VALUES ('x'); \\C gbk\n", "MYSQL_CLIENT_COMMAND_UNSUPPORTED"),
         (b"/*!50000 SET GLOBAL log_bin_trust_function_creators=1 */;", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
         (b"SET @@GLOBAL.gtid_purged='x';", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
         (b"SET PERSIST sql_mode='';", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
@@ -211,7 +217,10 @@ def test_no_release_manifest_means_historical_only():
     assert receipt["release_bound"] is False
     assert receipt["backup_date"] == "2026-11-04"
     for name in ("complete_trigger_definition_and_definer_verified", "exact_data_integrity_verified",
-                 "protected_config_and_app_key_recovery_verified", "release_manifest_verified"):
+                 "protected_config_and_app_key_recovery_verified", "release_manifest_verified",
+                 "source_identity_matches_protected_manifest",
+                 "destination_mysql_instance_matches_protected_policy",
+                 "destination_network_isolation_attested_by_root_policy"):
         assert receipt["assertions"][name] is False
     assert "classification" not in inspect.signature(RESTORE.historical_receipt).parameters
     assert "source_config_fingerprint" not in inspect.signature(RESTORE.main).parameters
@@ -329,13 +338,13 @@ def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():
         "migrations": manifest["expected"]["migrations"], "triggers": manifest["expected"]["triggers"]}
         with (mock.patch.object(RESTORE, "_mysql_identity", return_value={
                     "version": "8.4.11", "server_uuid": manifest["mysql"]["server_uuid"],
-                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}),
+                    "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}) as mysql_identity,
               mock.patch.object(RESTORE, "mysql_query", return_value=b"0\n"),
               mock.patch.object(RESTORE, "_create_database") as create_db,
               mock.patch.object(RESTORE, "verify_definer_lifecycle", return_value={
                   "account_exists": True, "account_locked": True, "global_privileges": ["USAGE"],
                   "schema_privileges": ["TRIGGER"], "select_tables": ["migrations"],
-                  "grants_sha256": "3" * 64}),
+                  "grants_sha256": "3" * 64}) as verify_definer,
               mock.patch.object(RESTORE, "_run_mysql_import") as import_dump,
               mock.patch.object(RESTORE, "_inventory", return_value=observed),
               mock.patch.object(RESTORE, "_drop_database") as drop_db):
@@ -347,6 +356,10 @@ def test_release_bound_restore_and_cleanup_pipeline_with_synthetic_mysql():
             assert receipt["backup"]["id"] == "synthetic-backup-v1"
             create_db.assert_called_once()
             import_dump.assert_called_once()
+            assert verify_definer.call_count == 2
+            assert mysql_identity.call_count == 2
+            assert receipt["assertions"]["destination_network_isolation_attested_by_root_policy"] is True
+            assert "destination_instance_bound_and_isolated" not in receipt["assertions"]
             pending_path = receipt_path.with_suffix(".pending.json")
             assert pending_path.exists()
             cleanup = RESTORE._cleanup_restore_impl(manifest_path, policy_path, receipt_path,
@@ -457,6 +470,12 @@ def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
                 raise AssertionError(f"Expected {code}")
 
 
+def test_definer_grants_normalize_mysql_escaped_schema_underscores():
+    escaped = "GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`"
+    plain = "GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`"
+    assert RESTORE._normalized_grant(escaped) == RESTORE._normalized_grant(plain)
+
+
 def test_production_entrypoint_requires_root():
     if os.geteuid() != 0:
         try:
@@ -465,6 +484,14 @@ def test_production_entrypoint_requires_root():
             assert str(error) == "ROOT_EXECUTION_REQUIRED"
         else:
             raise AssertionError("Non-root restore entrypoint accepted")
+
+
+def test_mysql_import_pins_utf8mb4_and_initial_sql_mode():
+    policy = {"mysql": {"client": "/usr/bin/mysql", "dump_client": "/usr/bin/mysqldump",
+                        "defaults_file": "/tmp/mysql.cnf", "host": "127.0.0.1", "port": 3306}}
+    argv = RESTORE._mysql_argv(policy, database=SCHEMA)
+    assert "--default-character-set=utf8mb4" in argv
+    assert "--init-command=SET SESSION sql_mode=''" in argv
 
 
 def test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped():
@@ -587,6 +614,8 @@ def main():
         test_definer_account_must_be_locked_and_have_exact_minimal_grants,
         test_existing_target_database_is_never_overwritten,
         test_production_entrypoint_requires_root,
+        test_mysql_import_pins_utf8mb4_and_initial_sql_mode,
+        test_definer_grants_normalize_mysql_escaped_schema_underscores,
         test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,

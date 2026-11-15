@@ -267,6 +267,13 @@ def audit_sql(sql, target_schema, approved_definer=None):
     validate_mysql_client_directives(sql)
 
     tokens = bounded_tokens(sql)
+    # The importer and auditor must agree on both SQL string escaping and the
+    # mysql client command language. Charset switching can make a backslash
+    # escape parsed differently by MySQL than by this UTF-8 tokenizer; reject
+    # client commands and any SQL-side client charset change before import.
+    for token in tokens:
+        if token.kind == "SYMBOL" and token.value == "\\":
+            refuse("MYSQL_CLIENT_COMMAND_UNSUPPORTED")
     create_db = []
     use_db = []
     expected_tables = []
@@ -317,6 +324,20 @@ def audit_sql(sql, target_schema, approved_definer=None):
                 forbidden.add("GLOBAL_SETTING")
             if any(_id(item) == "sql_log_bin" for item in tokens[i + 1:statement_end]):
                 forbidden.add("REPLICATION_SESSION_SETTING")
+            set_tokens = tokens[i + 1:statement_end]
+            if any(_word(item) == "NAMES" for item in set_tokens):
+                forbidden.add("MYSQL_CHARSET_CHANGE_UNSUPPORTED")
+            for j, item in enumerate(set_tokens):
+                if (_word(item) in {"CHARACTER_SET_CLIENT", "CHARACTER_SET_CONNECTION",
+                                    "CHARACTER_SET_RESULTS", "CHARACTER_SET_DATABASE"}
+                        and not (j >= 2 and set_tokens[j - 1].kind == "SYMBOL"
+                                 and set_tokens[j - 1].value == "@"
+                                 and set_tokens[j - 2].kind == "SYMBOL"
+                                 and set_tokens[j - 2].value == "@"
+                                 and (j + 1 >= len(set_tokens)
+                                      or set_tokens[j + 1].kind != "SYMBOL"
+                                      or set_tokens[j + 1].value != "="))):
+                    forbidden.add("MYSQL_CHARSET_CHANGE_UNSUPPORTED")
         if a == "RESET" and b in {"MASTER", "REPLICA", "SLAVE", "PERSIST"}:
             forbidden.add("REPLICATION_OR_GLOBAL_STATE")
         if a == "RESET" and b == "BINARY" and c == "LOGS":
@@ -856,7 +877,9 @@ def _mysql_argv(policy, *, database=None, execute=None, dump=False, tables=()):
         argv.append(database)
         argv.extend(tables)
     else:
-        argv.extend(["--connect-timeout=5", "--batch", "--raw", "--skip-column-names"])
+        argv.extend(["--connect-timeout=5", "--batch", "--raw", "--skip-column-names",
+                     "--default-character-set=utf8mb4",
+                     "--init-command=SET SESSION sql_mode=''"])
         if database:
             argv.extend(["--database", database])
         if execute is not None:
@@ -1031,7 +1054,8 @@ def _inventory(policy, schema, manifest, plan):
 def _normalized_grant(line):
     if not isinstance(line, str) or any(ord(c) < 32 for c in line):
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
-    return " ".join(line.replace("`", "").replace("'", "").replace('"', "").split()).casefold()
+    return " ".join(line.replace("\\_", "_").replace("`", "").replace("'", "")
+                     .replace('"', "").split()).casefold()
 
 
 def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
@@ -1239,6 +1263,14 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
             policy, manifest["target_schema"], manifest["approved_definer"],
             manifest["expected"]["definer_select_tables"])
         _run_mysql_import(policy, plan["transformed_sql"])
+        post_import_definer_contract = verify_definer_lifecycle(
+            policy, manifest["target_schema"], manifest["approved_definer"],
+            manifest["expected"]["definer_select_tables"])
+        if post_import_definer_contract != definer_contract:
+            refuse("DEFINER_CONTRACT_CHANGED_DURING_IMPORT")
+        post_import_identity = _mysql_identity(policy)
+        if post_import_identity != identity:
+            refuse("DESTINATION_MYSQL_SETTINGS_CHANGED_DURING_IMPORT")
         observed = _inventory(policy, manifest["target_schema"], manifest, plan)
         completed = datetime.datetime.now(datetime.timezone.utc).isoformat()
         receipt = {
@@ -1252,13 +1284,17 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
             "observed": observed,
             "definer_lifecycle": definer_contract,
             "assertions": {
-                "archive_hash_and_integrity": True, "source_environment_host_database_bound": True,
-                "destination_instance_bound_and_isolated": True, "complete_schema_verified": True,
+                "archive_hash_and_integrity": True,
+                "source_identity_matches_protected_manifest": True,
+                "destination_mysql_instance_matches_protected_policy": True,
+                "destination_network_isolation_attested_by_root_policy": True,
+                "complete_schema_verified": True,
                 "complete_trigger_definition_and_definer_identity_verified": True,
                 "definer_account_locked_with_exact_minimal_grants_verified": True,
                 "exact_data_integrity_verified": True, "migration_ledger_verified": True,
                 "protected_config_and_app_key_recovery_verified": True,
-                "mysql_binlog_row_trust_off_verified": True, "no_global_mysql_settings_changed": True,
+                "mysql_binlog_row_trust_off_verified": True,
+                "global_mysql_settings_unchanged_during_import": True,
             },
             "cleanup": {"status": "retained_for_migration_rehearsal", "journal": str(journal_path)},
         }
@@ -1413,12 +1449,14 @@ def historical_receipt(*, backup_sha, application_sha, recovery_tool_sha, starte
         "completed_at": completed_at,
         "assertions": {
             "archive_hash_and_integrity": bool(archive_integrity_verified),
-            "source_environment_host_database_bound": False,
-            "destination_instance_bound_and_isolated": False,
+            "source_identity_matches_protected_manifest": False,
+            "destination_mysql_instance_matches_protected_policy": False,
+            "destination_network_isolation_attested_by_root_policy": False,
             "complete_schema_verified": False,
             "complete_trigger_definition_and_definer_verified": False,
             "exact_data_integrity_verified": False,
             "protected_config_and_app_key_recovery_verified": False,
+            "global_mysql_settings_unchanged_during_import": False,
             "release_manifest_verified": False,
         },
         "unverified": ["source_identity", "isolated_destination", "schema_inventory",
