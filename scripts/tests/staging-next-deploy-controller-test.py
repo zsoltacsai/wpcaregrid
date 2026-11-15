@@ -22,7 +22,7 @@ CONTROLLER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = CONTROLLER
 SPEC.loader.exec_module(CONTROLLER)
 
-from scripts import staging_next_deploy_backend_1_4_9 as BACKEND
+from scripts import staging_next_deploy_backend_1_4_10 as BACKEND
 
 
 class StagingNextControllerTests(unittest.TestCase):
