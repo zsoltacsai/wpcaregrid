@@ -11,6 +11,12 @@ if (PHP_SAPI !== 'cli-server'
     exit;
 }
 
+require_once __DIR__.'/marketing-test-router-policy.php';
+if (! wpcg_test_router_client_is_loopback($_SERVER['REMOTE_ADDR'] ?? null)) {
+    http_response_code(404);
+    exit;
+}
+
 if (! defined('WPCG_TEST_RUNTIME')) {
     define('WPCG_TEST_RUNTIME', true);
 }

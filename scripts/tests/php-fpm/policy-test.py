@@ -22,6 +22,7 @@ test_runtime_marker = (HARNESS / "enable-test-runtime.php").read_text()
 nginx = (HARNESS / "nginx.conf").read_text()
 entrypoint = (HARNESS / "entrypoint.py").read_text()
 test_router = (ROOT / "tests/e2e/fixtures/marketing-test-router.php").read_text()
+test_router_policy = (ROOT / "tests/e2e/fixtures/marketing-test-router-policy.php").read_text()
 
 require("php:8.5.12-fpm@sha256:8b4b4a764f7985137b13e4cb49dd59e967d9daa7946a731f9d06e31e748e39bb" in dockerfile,
         "FPM base must pin the reviewed PHP patch and immutable image digest.")
@@ -49,6 +50,11 @@ require("php_admin_value[auto_prepend_file] = /opt/php-fpm-test/enable-test-runt
 require("PHP_SAPI !== 'cli-server'" in test_router
         and "getenv('APP_ENV') !== 'testing'" in test_router
         and "getenv('CAREGRID_DEPLOYMENT_ENV') !== 'testing'" in test_router
+        and "wpcg_test_router_client_is_loopback($_SERVER['REMOTE_ADDR'] ?? null)" in test_router
+        and test_router.index("wpcg_test_router_client_is_loopback") < test_router.index("define('WPCG_TEST_RUNTIME', true)")
+        and "function wpcg_test_router_client_is_loopback(?string $remoteAddress): bool" in test_router_policy
+        and "ord($packed[0]) === 127" in test_router_policy
+        and "$packed === inet_pton('::1')" in test_router_policy
         and "define('WPCG_TEST_RUNTIME', true)" in test_router
         and "realpath($publicRoot.'/'.ltrim($requestPath, '/'))" in test_router
         and "str_starts_with($staticFile, $publicRoot.DIRECTORY_SEPARATOR)" in test_router
