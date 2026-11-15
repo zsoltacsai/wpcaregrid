@@ -19,8 +19,8 @@ changed by this source work.
 | `scripts/staging_next_db_transaction_1_4_10.py` | `d1a382728180526ae6a0b27f70abc5e42b512fb389eb8339b9c2c544c7567848` |
 | `scripts/deployment_target_binding_1_4_10.py` | `e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16` |
 | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| `scripts/install_staging_next_helper_1_4_10.py` (installer) | `` |
-| helper artifact digest (printed by the installer/probe) | `cc945c1acdb7d6ae5554d8674c1573ee619960d706fb94c77d635dd9abfb27b8` |
+| `scripts/install_staging_next_helper_1_4_10.py` (installer) | `f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c` |
+| helper artifact digest (printed by the installer/probe) | `f5a8e7e468af2b0950e2dfc3d5ed9f0c3b6baeb9759ba71866bc41cb4f6717b8` |
 
 ## Step 0 - read-only preflight (permitted now; no GO needed beyond the read-only authorization)
 

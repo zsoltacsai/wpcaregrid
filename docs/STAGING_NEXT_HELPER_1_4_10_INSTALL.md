@@ -25,7 +25,7 @@ not mean the helper is installed on staging; no host has been read or changed.
 | Transaction module | `scripts/staging_next_db_transaction_1_4_10.py` | `d1a382728180526ae6a0b27f70abc5e42b512fb389eb8339b9c2c544c7567848` |
 | Target binding | `scripts/deployment_target_binding_1_4_10.py` | `e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16` |
 | Environment contract | `scripts/deployment_environment_contract.py` | `f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1` |
-| Combined helper artifact | Manifest-derived | `cc945c1acdb7d6ae5554d8674c1573ee619960d706fb94c77d635dd9abfb27b8` |
+| Combined helper artifact | Manifest-derived | `f5a8e7e468af2b0950e2dfc3d5ed9f0c3b6baeb9759ba71866bc41cb4f6717b8` |
 | Root installer | `scripts/install_staging_next_helper_1_4_10.py` | `f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c` |
 
 The compatibility contract is `wpcaregrid-staging-next-deploy-v15`. Recalculate
