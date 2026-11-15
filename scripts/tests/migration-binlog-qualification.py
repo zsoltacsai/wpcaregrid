@@ -401,6 +401,18 @@ def self_test():
     assert dump_error_class('mysqldump: Got error: 2002: connection refused') == 'client_connection_failed'
     assert dump_error_class('mysqldump: other failure') == 'client_other_error'
     assert dump_error_class('') == 'no_stderr'
+    original_values = {key: os.environ.get(key) for key in
+                       ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+    try:
+        os.environ['WPCG_QUAL_MYSQL_ROOT_PASSWORD'] = 'synthetic-source-root'
+        os.environ['WPCG_QUAL_RESTORE_ROOT_PASSWORD'] = 'synthetic-restore-root'
+        assert not {'WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD'} & set(child_environment())
+    finally:
+        for key, value in original_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     assert classify('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate') == ('23000', '1062')
     assert phase2b_failure_code('RuntimeException: The Phase 2B trigger definer is not configured.') == 'DEFINER_CONFIG_MISSING'
     assert phase2b_failure_code('RuntimeException: A Phase 2B trigger has an unexpected DEFINER.') == 'DEFINER_MISMATCH'
@@ -624,6 +636,11 @@ MYSQLDUMP = shutil.which('mysqldump')
 PHP = shutil.which('php')
 
 
+def child_environment():
+    return {key: value for key, value in os.environ.items()
+            if key not in ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+
+
 def run_mysql(user, password, sql, schema=None, host=None, port=None):
     host, port = host or HOST, port or PORT
     cmd = [MYSQL, '--protocol=TCP', '--connect-timeout=5', '--host', host, '--port', port,
@@ -631,8 +648,7 @@ def run_mysql(user, password, sql, schema=None, host=None, port=None):
     if schema:
         cmd.append(schema)
     cmd += ['--execute', sql]
-    child_env = {key: value for key, value in os.environ.items()
-                 if key not in ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+    child_env = child_environment()
     r = subprocess.run(cmd, env={**child_env, 'MYSQL_PWD': password}, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
     return r.returncode, mysql_output(r.stdout), classify(r.stderr)
@@ -646,13 +662,11 @@ def admin(sql, schema=None, host=None, port=None, root_password=None):
 
 
 def artisan(user, password, schema, *args, timeout=900, phase2b_definer='', host=None, port=None):
-    env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
+    env = {**child_environment(), 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'QUEUE_CONNECTION': 'sync',
            'MAIL_MAILER': 'array', 'APP_ENV': 'testing'}
-    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
-    env.pop('WPCG_QUAL_RESTORE_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, 'artisan', *args, '--no-interaction'], cwd=ROOT, env=env,
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, timeout=timeout)
@@ -664,13 +678,11 @@ def run_up(user, password, schema, migration_file, phase2b_definer='', host=None
     code = ('require "vendor/autoload.php";$app=require "bootstrap/app.php";'
             '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
             '$m=require getenv("WPCG_QUAL_MIGRATION");$m->up();echo "OK";')
-    env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
+    env = {**child_environment(), 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'APP_ENV': 'testing',
            'WPCG_QUAL_MIGRATION': str(MIGRATIONS / migration_file)}
-    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
-    env.pop('WPCG_QUAL_RESTORE_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, '-r', code], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
     text = r.stdout + '\n' + r.stderr
@@ -697,12 +709,11 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
     if not service_ok:
         return False
     try:
-        env = {key: value for key, value in os.environ.items()
-               if key not in ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+        env = child_environment()
         env['MYSQL_PWD'] = ROOT_PW
-        command = [MYSQLDUMP, '--protocol=TCP', '--connect-timeout=5', f'--host={HOST}', f'--port={PORT}',
+        command = [MYSQLDUMP, '--protocol=TCP', f'--host={HOST}', f'--port={PORT}',
                    '--user=root', '--single-transaction', '--routines', '--triggers', '--events',
-                   '--no-create-db', '--skip-comments', '--set-gtid-purged=OFF', schema]
+                   '--skip-comments', schema]
         dump = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=120, check=False)
         dump_stderr = dump.stderr.decode('utf-8', errors='replace')
@@ -714,7 +725,7 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
                 reason = dump_error_class(dump_stderr)
             else:
                 reason = 'dump_empty'
-            version_result = subprocess.run([MYSQLDUMP, '--version'], stdin=subprocess.DEVNULL,
+            version_result = subprocess.run([MYSQLDUMP, '--version'], env=child_environment(), stdin=subprocess.DEVNULL,
                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                             timeout=10, check=False)
             version_text = (version_result.stdout + version_result.stderr).decode('utf-8', errors='replace')
@@ -725,12 +736,14 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
                                     f'stderr_bytes={len(dump.stderr)},stderr_sha256={hashlib.sha256(dump.stderr).hexdigest()},'
                                     f'client={client_version},sqlstate={dump_sqlstate},errno={dump_errno}')
         original = dump.stdout
-        expected_use = f'USE `{schema}`;'.encode()
-        if original.count(expected_use) != 1:
-            return require_contract('synthetic_backup_schema_binding', False, 'unexpected_use_directive_count')
-        # Keep the SQL entirely synthetic and bind the backup to the unique clone schema.
-        clone_use = f'USE `{restored}`;'.encode()
-        original = original.replace(expected_use, clone_use, 1)
+        if re.search(rb'(?im)^\s*(?:CREATE\s+DATABASE|USE\s+)', original):
+            return require_contract('synthetic_backup_schema_binding', False,
+                                    'database_directives_unexpected_in_single_schema_dump')
+        # mysqldump without --databases omits USE/CREATE DATABASE; prepend the
+        # unique synthetic clone schema rather than rewriting SQL from the dump.
+        original = f'USE `{restored}`;\n'.encode() + original
+        ok &= require_contract('synthetic_backup_schema_binding',
+                               original.startswith(f'USE `{restored}`;\n'.encode()))
         dump_path.write_bytes(original)
         backup_sha = hashlib.sha256(original).hexdigest()
         ok &= require_contract('synthetic_backup_created', True,
@@ -757,8 +770,7 @@ def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, s
             admin(f"CREATE USER '{account}'@'%' IDENTIFIED BY '{password}'",
                   host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
         with dump_path.open('rb') as stream:
-            restore_env = {key: value for key, value in os.environ.items()
-                           if key not in ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+            restore_env = child_environment()
             restore_env['MYSQL_PWD'] = RESTORE_ROOT_PW
             imported = subprocess.run([MYSQL, '--protocol=TCP', '--connect-timeout=5',
                                         f'--host={RESTORE_HOST}', f'--port={RESTORE_PORT}', '--user=root',
@@ -926,8 +938,7 @@ def trigger_ddl_logged(expected_names, schema, dba):
             return False, 'binlog_read_size_limit'
         files.append((columns[0], size))
 
-    env = {key: value for key, value in os.environ.items()
-           if key != 'WPCG_QUAL_MYSQL_ROOT_PASSWORD'}
+    env = child_environment()
     env['MYSQL_PWD'] = ROOT_PW
     output_parts = []
     output_bytes = 0
@@ -1035,7 +1046,8 @@ def main():
         # 0. exact migration list, derived and cross-checked three ways
         names = migration_inventory(MIGRATIONS)
         stems = [n[:-4] for n in names]
-        tracked = subprocess.run(['git', 'ls-files', '--', 'database/migrations'], cwd=ROOT, text=True,
+        tracked = subprocess.run(['git', 'ls-files', '--', 'database/migrations'], cwd=ROOT,
+                                 env=child_environment(), text=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.split()
         tracked_php = sorted(Path(t).name for t in tracked if t.endswith('.php'))
         digest = hashlib.sha256('\n'.join(names).encode()).hexdigest()

@@ -2532,7 +2532,7 @@ def main():
     phase2b_preflight = "Could not validate the effective Phase 2B trigger definer configuration before applying migrations."
     assert phase2b_preflight in controller
     assert "phase2b_definer_preflight \"${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php\"" in controller
-    assert "Rollback target predates the Phase 2B definer verifier; skipping its config preflight." in controller
+    assert "Rollback target predates the Phase 2B definer verifier; skipping its definer-key check." in controller
     assert controller.index('phase2b_definer_preflight "${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php"') < controller.index('php artisan migrate --force --no-interaction')
 
     bash = shutil.which("bash")
@@ -2561,11 +2561,11 @@ php() {
 log() { :; }
 phase2b_definer_preflight "$2"
 old_status=$?
-[[ $old_status -eq 0 && -z "$calls" ]] || exit 31
+[[ $old_status -eq 0 && "$calls" == 'clear,' ]] || exit 31
 : > "$2"
 phase2b_definer_preflight "$2"
 new_status=$?
-[[ $new_status -eq 0 && "$calls" == 'clear,bootstrap,' ]] || exit 32
+[[ $new_status -eq 0 && "$calls" == 'clear,clear,bootstrap,' ]] || exit 32
 calls=''
 PHP_FAIL_STAGE=clear phase2b_definer_preflight "$2"
 clear_status=$?

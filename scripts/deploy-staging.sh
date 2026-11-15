@@ -751,14 +751,14 @@ release_gate() {
 phase2b_definer_preflight() {
     local verifier_migration="${1:-${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php}"
 
-    # A rollback to a release predating the forward verifier has no such config
-    # key. Do not let the new preflight make that recovery path unusable.
+    # Clear inherited config on both forward and rollback deployments. A rollback
+    # to a release predating the verifier has no definer key to validate.
+    php artisan config:clear --no-interaction >/dev/null || return 1
+
     if [[ "$DEPLOYMENT_MODE" == 'rollback' && ! -f "$verifier_migration" ]]; then
-        log 'Rollback target predates the Phase 2B definer verifier; skipping its config preflight.'
+        log 'Rollback target predates the Phase 2B definer verifier; skipping its definer-key check.'
         return 0
     fi
-
-    php artisan config:clear --no-interaction >/dev/null || return 1
     php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $key = "database.connections.".config("database.default").".phase2b_trigger_definer"; $value = config($key); exit(is_string($value) && trim($value) !== "" ? 0 : 1);' \
         || return 1
 }
