@@ -1,5 +1,12 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-15 (GO-8.1 P1: production helper 2.1.0, V3 release-review successor — source only, draft)
+
+- **Base:** protected primary `7ba182229560927dd9cb20ce9db82aa302e47255` (PR #399 merge). Branch `t3/go-8-1-v3-helper-successor`; draft pull request only, not merged.
+- **What:** new production helper **2.1.0** that keeps every 2.0.0 authorization check and replaces the legacy V2 admission (two non-author GitHub `APPROVED` reviews + `WPCG_RELEASE_REVIEW_V2` records) with `verify_agent_release_reviews` (V3): Owner-authored exact PR/head `integration_qa` + `appsec` PASS records, distinct agent labels, malformed Owner records fail closed, no stale-head reuse, no GitHub review object read. Ledger is read completely (count checked before/after). Also fixes a 2.0.0 defect: its GitHub path guard rejected the exact repository resource, so the repository-owner lookup could never succeed.
+- **Immutability:** every helper 2.0.0 file (entrypoint, backend, controller, sudoers, installer, manifest, runbook) is byte-identical; the transaction and environment-contract modules are shared and unchanged. New files: `deployment_backend_v2_1_0.py`, `wpcaregrid-deploy-production-priv-2_1_0.py`, `production_deploy_controller_2_1_0.py`, `install_production_helper_2_1_0.py`, `deploy/sudoers/wpcaregrid-production-v2.1.0`, `deploy/release-manifests/production-deployment-helper-2.1.0.json`, runbook [PRODUCTION_HELPER_INSTALL_2_1_0.md](PRODUCTION_HELPER_INSTALL_2_1_0.md), test `scripts/tests/production-helper-2-1-0-test.py` (wired into CI).
+- **Not done / gates:** nothing installed on any host; no staging/production access; no database change; no merge. Still required: independent exact-head QA and AppSec agent PASS for the PR, merge and merge-SHA CI, separate Owner approval to install (the installer refuses while any 2.0.0 artifact is present), deploy-production identity/controller checkout/environment policy/recovery evidence. **Production remains HOLD / NO-GO; not release-ready.**
+
 ## Update — 2026-11-15 (GO-8.1 source integration and recovery qualification)
 
 - **Authoritative primary:** `56abfc26a44760b7272f6802a5a76760ea1adf9f`, the squash merge of PR #398. Its PR-head required checks passed before merge; exact merge-SHA CI was still running at the last verified poll and must be rechecked before claiming post-merge green.
