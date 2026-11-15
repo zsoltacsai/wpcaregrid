@@ -78,6 +78,37 @@ def test_only_ordered_standard_mysqldump_mode_footer_is_removed():
     expect_refusal(nonstandard_footer, "SQL_LEXICAL_MODE_UNSUPPORTED")
 
 
+def test_standard_mysqldump_trigger_session_wrapper_is_audited_and_removed():
+    trigger_block = b"""
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_0900_ai_ci */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'NO_AUTO_VALUE_ON_ZERO' */ ;
+/*!50003 CREATE*/ /*!50017 DEFINER=`wpcg_dba`@`localhost`*/ /*!50003 TRIGGER `synthetic_bi` BEFORE INSERT ON `synthetic` FOR EACH ROW SET NEW.`id`=COALESCE(NEW.`id`,1) */;;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+DELIMITER ;
+"""
+    dump = SAFE_DUMP.replace(
+        b"CREATE TRIGGER `synthetic_bi` BEFORE INSERT ON `synthetic` FOR EACH ROW SET NEW.`id`=COALESCE(NEW.`id`,1);;\nDELIMITER ;\n",
+        trigger_block,
+    )
+    plan = RESTORE.audit_sql(dump, SCHEMA, approved_definer="wpcg_dba@localhost")
+    transformed = plan["transformed_sql"]
+    assert b"@saved_cs_client" not in transformed
+    assert b"@saved_sql_mode" not in transformed
+    assert b"SET sql_mode              = 'NO_AUTO_VALUE_ON_ZERO'" in transformed
+    assert b"DEFINER=`wpcg_dba`@`localhost`" in transformed
+    unpaired = dump.replace(b"/*!50003 SET collation_connection  = @saved_col_connection */ ;\n", b"")
+    expect_refusal(unpaired, "MYSQLDUMP_TRIGGER_SESSION_WRAPPER_UNBALANCED")
+
+
 def test_selector_and_schema_rejections():
     expect_refusal(SAFE_DUMP.replace(b"USE `wpcaregrid`;", b"USE `other_schema`;"), "DATABASE_SELECTOR_SOURCE_MISMATCH")
     expect_refusal(SAFE_DUMP.replace(b"USE `wpcaregrid`;", b"USE `wpcaregrid`;\nUSE `other_schema`;"), "DATABASE_SELECTOR_COUNT_MISMATCH")
@@ -93,9 +124,12 @@ def test_global_replication_and_external_side_effects_rejected():
     cases = (
         (b"SET NAMES gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET NAMES utf8mb4;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET CHARACTER SET gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET CHARSET gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET @@character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET @@SESSION.character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET @@character_set_client := gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"INSERT INTO `synthetic` VALUES ('x'); \\C gbk\n", "MYSQL_CLIENT_COMMAND_UNSUPPORTED"),
         (b"/*!50000 SET GLOBAL log_bin_trust_function_creators=1 */;", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
         (b"SET @@GLOBAL.gtid_purged='x';", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
@@ -105,6 +139,8 @@ def test_global_replication_and_external_side_effects_rejected():
         (b"SET @local_value=1, @@PERSIST_ONLY.sql_mode='';", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
         (b"SET SESSION sql_mode='ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION sql_mode='NO_BACKSLASH_ESCAPES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (b"SET `sql_mode`='NO_BACKSLASH_ESCAPES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (b"SET @@session.`sql_mode`='NO_BACKSLASH_ESCAPES,ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION sql_mode:='ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION SQL_MODE /* comment */ = 'ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION sql_mode=CONCAT(@@SESSION.sql_mode,',ANSI_QUOTES');", "SQL_LEXICAL_MODE_UNSUPPORTED"),
@@ -600,6 +636,7 @@ def main():
     tests = (
         test_safe_dump_is_transformed_narrowly,
         test_only_ordered_standard_mysqldump_mode_footer_is_removed,
+        test_standard_mysqldump_trigger_session_wrapper_is_audited_and_removed,
         test_selector_and_schema_rejections,
         test_global_replication_and_external_side_effects_rejected,
         test_comments_and_quoted_data_are_not_sql_directives,

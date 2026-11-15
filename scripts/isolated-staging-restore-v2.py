@@ -238,9 +238,60 @@ def remove_safe_mysqldump_mode_restore(sql):
     return b"".join(lines)
 
 
+def remove_safe_mysqldump_trigger_session_wrappers(sql):
+    """Remove only mysqldump's paired trigger-session save/restore scaffolding.
+
+    Import runs with a pinned UTF-8 session. The trigger's stored SQL mode is
+    retained and validated separately; only the dump client's temporary
+    connection-state bookkeeping is removed.
+    """
+    lines = sql.splitlines(keepends=True)
+    wrappers = {
+        "sql_mode": re.compile(
+            rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+@saved_sql_mode\s*=\s*@@(?:SESSION\s*\.\s*)?sql_mode\s*\*/\s*;\s*\Z", re.I),
+        "character_set_client": re.compile(
+            rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+@saved_cs_client\s*=\s*@@(?:SESSION\s*\.\s*)?character_set_client\s*\*/\s*;\s*\Z", re.I),
+        "character_set_results": re.compile(
+            rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+@saved_cs_results\s*=\s*@@(?:SESSION\s*\.\s*)?character_set_results\s*\*/\s*;\s*\Z", re.I),
+        "collation_connection": re.compile(
+            rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+@saved_col_connection\s*=\s*@@(?:SESSION\s*\.\s*)?collation_connection\s*\*/\s*;\s*\Z", re.I),
+    }
+    restores = {
+        "sql_mode": re.compile(rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+sql_mode\s*=\s*@saved_sql_mode\s*\*/\s*;\s*\Z", re.I),
+        "character_set_client": re.compile(rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+character_set_client\s*=\s*@saved_cs_client\s*\*/\s*;\s*\Z", re.I),
+        "character_set_results": re.compile(rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+character_set_results\s*=\s*@saved_cs_results\s*\*/\s*;\s*\Z", re.I),
+        "collation_connection": re.compile(rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+collation_connection\s*=\s*@saved_col_connection\s*\*/\s*;\s*\Z", re.I),
+    }
+    charset_setup = re.compile(
+        rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+(?:character_set_client|character_set_results)\s*=\s*utf8mb4\s*\*/\s*;\s*\Z", re.I)
+    collation_setup = re.compile(
+        rb"\s*/\*!\s*[0-9]{5,6}\s+SET\s+collation_connection\s*=\s*utf8mb4_[A-Za-z0-9_]+\s*\*/\s*;\s*\Z", re.I)
+    counts = {name: [0, 0] for name in wrappers}
+    remove = set()
+    for index, line in enumerate(lines):
+        content = line.rstrip(b"\r\n")
+        matched = False
+        for name, pattern in wrappers.items():
+            if pattern.fullmatch(content):
+                counts[name][0] += 1
+                remove.add(index)
+                matched = True
+                break
+            if restores[name].fullmatch(content):
+                counts[name][1] += 1
+                remove.add(index)
+                matched = True
+                break
+        if not matched and (charset_setup.fullmatch(content) or collation_setup.fullmatch(content)):
+            remove.add(index)
+    if any(saved != restored for saved, restored in counts.values()):
+        refuse("MYSQLDUMP_TRIGGER_SESSION_WRAPPER_UNBALANCED")
+    return b"".join(b"" if index in remove else line for index, line in enumerate(lines))
+
+
 def validate_lexical_sql_mode(tokens):
     for i, token in enumerate(tokens):
-        if token.kind != "WORD" or token.value.upper() != "SQL_MODE" or i + 1 >= len(tokens):
+        if _id(token) != "sql_mode" or i + 1 >= len(tokens):
             continue
         if tokens[i + 1].kind == "SYMBOL" and tokens[i + 1].value == ":":
             if i + 2 < len(tokens) and tokens[i + 2].kind == "SYMBOL" and tokens[i + 2].value == "=":
@@ -264,6 +315,7 @@ def audit_sql(sql, target_schema, approved_definer=None):
     if line_breaks + (1 if sql and sql[-1] not in b"\r\n" else 0) > MAX_SQL_LINES:
         refuse("DUMP_LINE_LIMIT")
     sql = remove_safe_mysqldump_mode_restore(sql)
+    sql = remove_safe_mysqldump_trigger_session_wrappers(sql)
     validate_mysql_client_directives(sql)
 
     tokens = bounded_tokens(sql)
@@ -325,18 +377,22 @@ def audit_sql(sql, target_schema, approved_definer=None):
             if any(_id(item) == "sql_log_bin" for item in tokens[i + 1:statement_end]):
                 forbidden.add("REPLICATION_SESSION_SETTING")
             set_tokens = tokens[i + 1:statement_end]
-            if any(_word(item) == "NAMES" for item in set_tokens):
+            if b == "CHARSET" or (b == "CHARACTER" and c == "SET") or any(
+                    _id(item) == "names" for item in set_tokens):
                 forbidden.add("MYSQL_CHARSET_CHANGE_UNSUPPORTED")
             for j, item in enumerate(set_tokens):
-                if (_word(item) in {"CHARACTER_SET_CLIENT", "CHARACTER_SET_CONNECTION",
-                                    "CHARACTER_SET_RESULTS", "CHARACTER_SET_DATABASE"}
-                        and not (j >= 2 and set_tokens[j - 1].kind == "SYMBOL"
-                                 and set_tokens[j - 1].value == "@"
-                                 and set_tokens[j - 2].kind == "SYMBOL"
-                                 and set_tokens[j - 2].value == "@"
-                                 and (j + 1 >= len(set_tokens)
-                                      or set_tokens[j + 1].kind != "SYMBOL"
-                                      or set_tokens[j + 1].value != "="))):
+                is_charset_var = _id(item) in {
+                    "character_set_client", "character_set_connection",
+                    "character_set_results", "character_set_database",
+                }
+                is_system_read = (j >= 2 and set_tokens[j - 1].kind == "SYMBOL"
+                                  and set_tokens[j - 1].value == "@"
+                                  and set_tokens[j - 2].kind == "SYMBOL"
+                                  and set_tokens[j - 2].value == "@")
+                has_assignment = (j + 1 < len(set_tokens)
+                                  and set_tokens[j + 1].kind == "SYMBOL"
+                                  and set_tokens[j + 1].value in {"=", ":"})
+                if is_charset_var and (not is_system_read or has_assignment):
                     forbidden.add("MYSQL_CHARSET_CHANGE_UNSUPPORTED")
         if a == "RESET" and b in {"MASTER", "REPLICA", "SLAVE", "PERSIST"}:
             forbidden.add("REPLICATION_OR_GLOBAL_STATE")
