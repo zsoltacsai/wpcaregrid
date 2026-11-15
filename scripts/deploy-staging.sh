@@ -1130,6 +1130,13 @@ main() {
     privileged vendor-readable || fail 'PHP-FPM cannot read one or more Composer PHP files.'
     privileged file-check www-data read vendor/autoload.php || fail 'PHP-FPM cannot read the Composer autoloader.'
 
+    # The checked-out target may inherit the baseline's cached configuration.
+    # Clear it while traffic and workers are fenced, then validate Laravel's
+    # effective value loaded from the protected .env before any migration runs.
+    php artisan config:clear --no-interaction >/dev/null || fail 'Could not clear the inherited Laravel config cache before migration preflight.'
+    php -r 'require "vendor/autoload.php"; $app = require "bootstrap/app.php"; $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap(); $key = "database.connections.".config("database.default").".phase2b_trigger_definer"; $value = config($key); exit(is_string($value) && trim($value) !== "" ? 0 : 1);' \
+        || fail 'DB_PHASE2B_TRIGGER_DEFINER must be set in the effective target configuration before applying migrations.'
+
     log 'Building frontend assets.'
     umask 022
     npm ci --no-audit --no-fund
@@ -1145,8 +1152,6 @@ main() {
     fi
 
     log 'Running database migrations.'
-    /usr/bin/python3 -c 'from pathlib import Path; values=[line.partition("=")[2].strip() for line in Path(".env").read_text(encoding="utf-8").splitlines() if line.startswith("DB_PHASE2B_TRIGGER_DEFINER=")]; value=values[-1].strip(chr(34)+chr(39)) if values else ""; raise SystemExit(0 if value else 1)' \
-        || fail 'DB_PHASE2B_TRIGGER_DEFINER must be set before applying migrations.'
     migration_status="$(php artisan migrate:status --no-interaction)" || fail 'Could not inspect target migration status before running migrations.'
     if grep -q 'Pending' <<<"$migration_status"; then
         MIGRATIONS_PENDING=1
