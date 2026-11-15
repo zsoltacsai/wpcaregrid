@@ -7,8 +7,10 @@ router = (ROOT / "tests/e2e/fixtures/marketing-enforced-test-router.php").read_t
 
 required = (
     "APP_URL=http://localhost:8001 MARKETING_RELEASE_ENFORCEMENT_MODE=enforced",
-    '"$E2E_PHP_BIN" -S localhost:8001 -t public tests/e2e/fixtures/marketing-enforced-test-router.php',
-    "curl --fail --silent http://localhost:8001/en/",
+    '"$E2E_PHP_BIN" -S 127.0.0.1:8001 -t public tests/e2e/fixtures/marketing-enforced-test-router.php',
+    "curl --fail --silent --connect-timeout 2 --max-time 5",
+    "--resolve localhost:8001:127.0.0.1 http://localhost:8001/en/",
+    "NODE_OPTIONS=--dns-result-order=ipv4first",
     "E2E_BASE_URL=http://localhost:8001",
     "marketing-enforced-test-router.php",
 )
@@ -18,6 +20,10 @@ for value in required:
 
 if "define('WPCG_TEST_RUNTIME'" in router:
     raise SystemExit("Enforced acceptance router must never define WPCG_TEST_RUNTIME.")
+
+acceptance_config = (ROOT / "playwright.marketing-acceptance.config.ts").read_text()
+if "--host-resolver-rules=MAP localhost 127.0.0.1" not in acceptance_config:
+    raise SystemExit("Chromium localhost resolution must stay on allowed IPv4 loopback.")
 
 for value in (
     "PHP_SAPI !== 'cli-server'",

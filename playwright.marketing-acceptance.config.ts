@@ -27,6 +27,14 @@ export default defineConfig({
         locale: 'en-GB',
         trace: 'retain-on-failure',
         screenshot: 'only-on-failure',
+        // The synthetic sandbox allows IPv4 loopback only. Keep the public
+        // Host header as `localhost` while ensuring Chromium does not prefer
+        // the filtered ::1 address when resolving the local test server.
+        launchOptions: {
+            args: target?.hostname === 'localhost'
+                ? ['--host-resolver-rules=MAP localhost 127.0.0.1']
+                : [],
+        },
         ...devices['Desktop Chrome'],
     },
 });

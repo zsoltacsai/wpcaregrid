@@ -493,12 +493,14 @@ jobs:
           # above remains available for the broader synthetic account flows.
           # Use a DNS loopback host so the application host allowlist remains
           # enforced. The app deliberately rejects numeric IP Host headers.
+          echo "MARKETING_ACCEPTANCE_SERVER_START=127.0.0.1:8001"
           APP_URL=http://localhost:8001 MARKETING_RELEASE_ENFORCEMENT_MODE=enforced \
-            "$E2E_PHP_BIN" -S localhost:8001 -t public tests/e2e/fixtures/marketing-enforced-test-router.php > /dev/null 2>&1 &
+            "$E2E_PHP_BIN" -S 127.0.0.1:8001 -t public tests/e2e/fixtures/marketing-enforced-test-router.php > /dev/null 2>&1 &
           acceptance_server_pid=$!
           acceptance_ready=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://localhost:8001/en/ > /dev/null; then
+            if curl --fail --silent --connect-timeout 2 --max-time 5 \
+              --resolve localhost:8001:127.0.0.1 http://localhost:8001/en/ > /dev/null; then
               acceptance_ready=1
               break
             fi
@@ -513,10 +515,12 @@ jobs:
             exit 1
           fi
           echo "MARKETING_ACCEPTANCE_SERVER=PASS"
+          NODE_OPTIONS=--dns-result-order=ipv4first \
           E2E_BASE_URL=http://localhost:8001 \
           PLAYWRIGHT_OUTPUT_DIR=storage/playwright/marketing-acceptance \
             ./node_modules/.bin/playwright test -c playwright.marketing-acceptance.config.ts \
               --reporter=list
+          echo "MARKETING_ACCEPTANCE_BROWSER=PASS"
           SANDBOX_SCRIPT
           chmod 500 "$sandbox_script"
           sudo chown "$e2e_user:$e2e_group" "$sandbox_script"
