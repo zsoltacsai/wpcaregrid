@@ -73,6 +73,52 @@ _LEGACY_CORRECTION_ALLOWLIST = {
         "role": "appsec",
         "agent": "Mad-Eye Moody",
     },
+    # Exact malformed review records independently verified from the live
+    # Owner-authored #174 ledger on 2026-11-15. These entries authorize only
+    # append-only invalidation of these immutable comment bodies; they do not
+    # relax the agent identifier grammar or create review evidence.
+    6901547246: {
+        "body_sha256": "de69e4b8281ed0634ac0502643c0a658688782d1b9d14a7dbfc482c2d1d0a8e7",
+        "pr": 408,
+        "head_sha": "a3776603e8ea8135811b739dd6194a6ddbd73ac1",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr407_409",
+    },
+    6901849074: {
+        "body_sha256": "0f768bc6cafd1b3152c563660d7b5aef6cb991fa6f5992238c7d4e983fa296c6",
+        "pr": 408,
+        "head_sha": "5f0a818c0eac04f618fff3d9977cd378b2cc6dda",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr407_409",
+    },
+    6901986280: {
+        "body_sha256": "32eb1040dc582e5a06ea881caf0015d04223fba693929847cef72ae19eba1dd7",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr409_rebase",
+    },
+    6901986526: {
+        "body_sha256": "3562867db51cfbe2b204ef8c89fe5012eb0b976aa0a8ff5cfaf9b535cb69962f",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "role": "appsec",
+        "agent": "/root/appsec_pr409_rebase",
+    },
+    6902000708: {
+        "body_sha256": "b561528aafde1db923192a75fd9bbd0e00fd96852cd56e859e6e9641dfc82a02",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr409_rebase",
+    },
+    6902000894: {
+        "body_sha256": "aa38f7fa128561ae93686196ba101920325dba3e4409cbe36376a13f0e694a5e",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "role": "appsec",
+        "agent": "/root/appsec_pr409_rebase",
+    },
 }
 # One malformed Owner correction comment was published during the authorized
 # recovery attempt. Pin its exact bytes and its intended original target so it
