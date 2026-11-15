@@ -409,6 +409,32 @@ class MarketingOnlyReleaseGateTest extends TestCase
         $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
     }
 
+    public function test_container_resolved_middleware_uses_only_the_test_runtime_marker(): void
+    {
+        config([
+            'app.env' => 'testing',
+            'app.deployment_environment' => 'testing',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.enforcement_mode' => 'testing',
+            'marketing_release.test_app_environment' => 'testing',
+            'marketing_release.test_deployment_environment' => 'testing',
+        ]);
+
+        $middleware = app(MarketingOnlyReleaseGate::class);
+        $request = Request::create('/checkout', 'GET', [], [], [], [
+            'HTTP_HOST' => '127.0.0.1:8080',
+        ]);
+        $dispatched = false;
+        $response = $middleware->handle($request, function () use (&$dispatched): Response {
+            $dispatched = true;
+
+            return response('', Response::HTTP_NO_CONTENT);
+        });
+
+        $this->assertTrue($dispatched);
+        $this->assertSame(Response::HTTP_NO_CONTENT, $response->getStatusCode());
+    }
+
     public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
     {
         config([
