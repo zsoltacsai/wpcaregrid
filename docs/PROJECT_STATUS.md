@@ -1,5 +1,16 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-15 (GO-8.1 source integration and recovery qualification)
+
+- **Authoritative primary:** `56abfc26a44760b7272f6802a5a76760ea1adf9f`, the squash merge of PR #398. Its PR-head required checks passed before merge; exact merge-SHA CI was still running at the last verified poll and must be rechecked before claiming post-merge green.
+- **Phase 2B definer gate:** PR #398 adds the forward-only verifier and effective-config preflight. A later independent QA review found that the new preflight also blocked rollback to pre-verifier releases. A corrective source change is in progress; it must pass exact-head QA/AppSec and CI before its behavior is relied on.
+- **Synthetic MySQL evidence:** the qualification result remains `UNRESOLVED_SUPER_ONLY`. The app account fails with 1419 on MySQL 8.4.11 with binlogging ON and trust OFF; only the tested temporary-SUPER DBA path succeeded. This does not authorize a production privilege window.
+- **Restore evidence:** existing CI restore checks do not exercise post-Phase-2B DEFINER dumps under the strict trust-OFF contract, and the standalone isolated restore auditor rejects DEFINER clauses. A separate disposable two-server synthetic restore rehearsal is being added; no release-bound production backup or restore receipt is recorded by it.
+- **B16G314:** the host is not linked/approved in T3 and its access request remains pending. No host privilege changes or staging/production access were attempted. The local Docker socket is unavailable to the unprivileged session.
+- **Readiness:** staging and production remain **HOLD / NO-GO**. The executable next step is to complete and independently review the corrective CI/recovery change, then obtain approved B16G314 access or finish the isolated CI restore rehearsal. A real release-bound backup/restore receipt, durable definer approval, and controller/DBA-window support remain required before any migration-bearing staging deploy.
+
+Evidence and operational design: [Phase 2B DBA migration runbook](PHASE2B_DBA_MIGRATION_RUNBOOK.md); synthetic rehearsal details are emitted by the qualification workflow and are not production evidence.
+
 ## Update — 2026-11-10 (source integration: GO-5.3, recovery harness, Platform Update Intelligence)
 
 - **Authoritative primary:** `0049ddc0782eab8204acb877dc777d55d64d550d` after the six merges below, `f17e79a3c7a841c96f7c1a57c34f18d7ee8e81dc` after the P1 follow-up (#358 `737434f3`, #359 `f17e79a3`); exact merge-SHA CI (workflow `CI`) passed 38/38 jobs and 7/7 required checks for #356, #351, #355, #352, #353, #354 and #358. The merge-SHA CI of #359 (run 42883046719) was still running when this was written; its result is recorded in the Integration ledger #174, not here. Evidence: Integration ledger #174.

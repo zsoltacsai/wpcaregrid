@@ -375,9 +375,65 @@ def phase2b_failure_code(text):
     return 'NONE'
 
 
+def dump_error_class(text):
+    value = (text or '').lower()
+    if 'unknown option' in value or 'unknown variable' in value or 'unrecognized option' in value:
+        return 'client_option_unsupported'
+    if 'access denied' in value or 'privilege' in value or 'permission denied' in value:
+        return 'client_access_denied'
+    if 'unknown database' in value or 'no database selected' in value:
+        return 'client_database_selection_failed'
+    if 'couldn.t execute' in value or 'error in query' in value:
+        return 'client_query_failed'
+    if 'can.t connect' in value or 'connection refused' in value or 'server has gone away' in value:
+        return 'client_connection_failed'
+    if re.search(r'(?i)got error:\s*[0-9]+:', text or ''):
+        return 'client_mysql_errno'
+    if value.strip():
+        return 'client_other_error'
+    return 'no_stderr'
+
+
+def file_sha256_matches(path, expected):
+    try:
+        return sha256_matches(Path(path).read_bytes(), expected)
+    except OSError:
+        return False
+
+
+def sha256_matches(content, expected):
+    return hashlib.sha256(content).hexdigest() == expected
+
+
 def self_test():
     assert classify('SQLSTATE[HY000]: General error: 1419 You do not have the SUPER privilege') == ('HY000', '1419')
     assert classify('ERROR 1644 (45000) at line 1: x') == ('45000', '1644')
+    assert dump_error_class("mysqldump: unknown option '--example'") == 'client_option_unsupported'
+    assert dump_error_class('mysqldump: Got error: 2002: connection refused') == 'client_connection_failed'
+    assert dump_error_class('mysqldump: other failure') == 'client_other_error'
+    assert dump_error_class('') == 'no_stderr'
+    with tempfile.TemporaryDirectory() as tmp:
+        backup = Path(tmp) / 'backup.sql'
+        backup.write_bytes(b'synthetic backup')
+        receipt = hashlib.sha256(backup.read_bytes()).hexdigest()
+        assert file_sha256_matches(backup, receipt)
+        assert sha256_matches(backup.read_bytes(), receipt)
+        backup.write_bytes(b'corrupted backup')
+        assert not file_sha256_matches(backup, receipt)
+        assert not sha256_matches(backup.read_bytes(), receipt)
+        assert not file_sha256_matches(Path(tmp) / 'missing.sql', receipt)
+    original_values = {key: os.environ.get(key) for key in
+                       ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+    try:
+        os.environ['WPCG_QUAL_MYSQL_ROOT_PASSWORD'] = 'synthetic-source-root'
+        os.environ['WPCG_QUAL_RESTORE_ROOT_PASSWORD'] = 'synthetic-restore-root'
+        assert not {'WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD'} & set(child_environment())
+    finally:
+        for key, value in original_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     assert classify('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate') == ('23000', '1062')
     assert phase2b_failure_code('RuntimeException: The Phase 2B trigger definer is not configured.') == 'DEFINER_CONFIG_MISSING'
     assert phase2b_failure_code('RuntimeException: A Phase 2B trigger has an unexpected DEFINER.') == 'DEFINER_MISMATCH'
@@ -592,38 +648,47 @@ def self_test():
 HOST = os.environ.get('WPCG_QUAL_MYSQL_HOST', '127.0.0.1')
 PORT = os.environ.get('WPCG_QUAL_MYSQL_PORT', '3309')
 ROOT_PW = os.environ.get('WPCG_QUAL_MYSQL_ROOT_PASSWORD', '')
+RESTORE_HOST = os.environ.get('WPCG_QUAL_RESTORE_HOST', '')
+RESTORE_PORT = os.environ.get('WPCG_QUAL_RESTORE_PORT', '')
+RESTORE_ROOT_PW = os.environ.get('WPCG_QUAL_RESTORE_ROOT_PASSWORD', '')
 MYSQL = shutil.which('mysql')
 MYSQLBINLOG = shutil.which('mysqlbinlog')
+MYSQLDUMP = shutil.which('mysqldump')
 PHP = shutil.which('php')
 
 
-def run_mysql(user, password, sql, schema=None):
-    cmd = [MYSQL, '--protocol=TCP', '--connect-timeout=5', '--host', HOST, '--port', PORT,
+def child_environment():
+    return {key: value for key, value in os.environ.items()
+            if key not in ('WPCG_QUAL_MYSQL_ROOT_PASSWORD', 'WPCG_QUAL_RESTORE_ROOT_PASSWORD')}
+
+
+def run_mysql(user, password, sql, schema=None, host=None, port=None):
+    host, port = host or HOST, port or PORT
+    cmd = [MYSQL, '--protocol=TCP', '--connect-timeout=5', '--host', host, '--port', port,
            f'--user={user}', '--batch', '--skip-column-names']
     if schema:
         cmd.append(schema)
     cmd += ['--execute', sql]
-    child_env = {key: value for key, value in os.environ.items()
-                 if key != 'WPCG_QUAL_MYSQL_ROOT_PASSWORD'}
+    child_env = child_environment()
     r = subprocess.run(cmd, env={**child_env, 'MYSQL_PWD': password}, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
     return r.returncode, mysql_output(r.stdout), classify(r.stderr)
 
 
-def admin(sql, schema=None):
-    rc, out, _ = run_mysql('root', ROOT_PW, sql, schema)
+def admin(sql, schema=None, host=None, port=None, root_password=None):
+    password = ROOT_PW if root_password is None else root_password
+    rc, out, _ = run_mysql('root', password, sql, schema, host, port)
     if rc:
         raise RuntimeError('mysql_admin_operation_failed')
     return out
 
 
-def artisan(user, password, schema, *args, timeout=900, phase2b_definer=''):
-    env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': HOST, 'DB_PORT': PORT, 'DB_DATABASE': schema,
+def artisan(user, password, schema, *args, timeout=900, phase2b_definer='', host=None, port=None):
+    env = {**child_environment(), 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'QUEUE_CONNECTION': 'sync',
            'MAIL_MAILER': 'array', 'APP_ENV': 'testing'}
-    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, 'artisan', *args, '--no-interaction'], cwd=ROOT, env=env,
                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, timeout=timeout)
@@ -631,25 +696,257 @@ def artisan(user, password, schema, *args, timeout=900, phase2b_definer=''):
     return r.returncode, text, classify(text)
 
 
-def run_up(user, password, schema, migration_file, phase2b_definer=''):
+def run_up(user, password, schema, migration_file, phase2b_definer='', host=None, port=None):
     code = ('require "vendor/autoload.php";$app=require "bootstrap/app.php";'
             '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();'
             '$m=require getenv("WPCG_QUAL_MIGRATION");$m->up();echo "OK";')
-    env = {**os.environ, 'DB_CONNECTION': 'mysql', 'DB_HOST': HOST, 'DB_PORT': PORT, 'DB_DATABASE': schema,
+    env = {**child_environment(), 'DB_CONNECTION': 'mysql', 'DB_HOST': host or HOST, 'DB_PORT': port or PORT, 'DB_DATABASE': schema,
            'DB_USERNAME': user, 'DB_PASSWORD': password, 'DB_URL': '', 'APP_KEY': APP_KEY,
            'DB_PHASE2B_TRIGGER_DEFINER': phase2b_definer,
            'CACHE_STORE': 'array', 'SESSION_DRIVER': 'array', 'APP_ENV': 'testing',
            'WPCG_QUAL_MIGRATION': str(MIGRATIONS / migration_file)}
-    env.pop('WPCG_QUAL_MYSQL_ROOT_PASSWORD', None)
     r = subprocess.run([PHP, '-r', code], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
     text = r.stdout + '\n' + r.stderr
     return r.returncode, classify(text), phase2b_failure_code(text)
 
 
-def settings():
+def synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw, stems, source_rows, workdir):
+    """Dump/import synthetic schema into a second trust-OFF MySQL, then prove guards still execute."""
+    if not (RESTORE_HOST and RESTORE_PORT and RESTORE_ROOT_PW and MYSQLDUMP):
+        return require_contract('synthetic_restore_prerequisites', False,
+                                'second_mysql_service_or_mysqldump_unavailable')
+    restored = f'wpcg_restore_{secrets.token_hex(5)}'
+    dump_path = Path(workdir) / 'synthetic-restore.sql'
+    bad_path = Path(workdir) / 'synthetic-restore-corrupt.sql'
+    accounts = [app, dba, runtime]
+    passwords = {app: app_pw, dba: secrets.token_hex(16), runtime: runtime_pw}
+    ok = True
+    # A nonempty sentinel makes the restore's data-integrity checks meaningful.
+    admin("INSERT INTO deployment_transition_fences (fence_key,state,operation_id,generation,boot_id,journal_seq,"
+          "journal_head_hash,evidence_digest,created_at,updated_at,phase2b_state,phase2b_tuple_digest,"
+          "phase2b_event_sequence) VALUES ('restore_sentinel','HOLD',"
+          "'66666666-6666-4666-8666-666666666666',1,'77777777-7777-4777-8777-777777777777',1,"
+          "REPEAT('c',64),REPEAT('d',64),NOW(),NOW(),'HOLD',"
+          "'88888888-8888-4888-8888-888888888888',1)", schema)
+    sentinel_sql = ("SELECT fence_key,state,operation_id,generation,boot_id,journal_seq,journal_head_hash,"
+                    "evidence_digest,phase2b_state,phase2b_tuple_digest,phase2b_event_sequence "
+                    "FROM deployment_transition_fences WHERE fence_key='restore_sentinel'")
+    source_sentinel = admin(sentinel_sql, schema)
+    ok &= require_contract('synthetic_restore_source_sentinel_present', bool(source_sentinel))
+    source_ledger = ledger(schema)
+    source_uuid = admin('SELECT @@GLOBAL.server_uuid')
+    restore_uuid = admin('SELECT @@GLOBAL.server_uuid', host=RESTORE_HOST, port=RESTORE_PORT,
+                         root_password=RESTORE_ROOT_PW)
+    isolated_instances = bool(source_uuid and restore_uuid and source_uuid != restore_uuid)
+    ok &= require_contract('restore_uses_distinct_mysql_instance', isolated_instances)
+    if not isolated_instances:
+        return False
+    target_before = settings(RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+    service_ok = (target_before['version'] == '8.4.11' and target_before['log_bin'] == 'ON'
+                  and target_before['format'] == 'ROW' and target_before['trust'] == 'OFF')
+    ok &= require_contract('restore_service_contract_before', service_ok,
+                           f"version={target_before['version']},log_bin={target_before['log_bin']},"
+                           f"format={target_before['format']},trust={target_before['trust']}")
+    if not service_ok:
+        return False
+    try:
+        env = child_environment()
+        env['MYSQL_PWD'] = ROOT_PW
+        command = [MYSQLDUMP, '--protocol=TCP', f'--host={HOST}', f'--port={PORT}',
+                   '--user=root', '--single-transaction', '--routines', '--triggers', '--events',
+                   '--skip-comments', schema]
+        dump = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=120, check=False)
+        dump_stderr = dump.stderr.decode('utf-8', errors='replace')
+        dump_sqlstate, dump_errno = classify(dump_stderr)
+        if dump.returncode or not dump.stdout or len(dump.stdout) > 32 * 1024 * 1024:
+            if len(dump.stdout) > 32 * 1024 * 1024:
+                reason = 'dump_size_limit'
+            elif dump.returncode:
+                reason = dump_error_class(dump_stderr)
+            else:
+                reason = 'dump_empty'
+            version_result = subprocess.run([MYSQLDUMP, '--version'], env=child_environment(), stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            timeout=10, check=False)
+            version_text = (version_result.stdout + version_result.stderr).decode('utf-8', errors='replace')
+            version_match = re.search(r'(?i)\b(Ver\s+[0-9][0-9A-Za-z.+-]*)', version_text)
+            client_version = version_match.group(1).replace(' ', '') if version_match else 'unparsed'
+            return require_contract('synthetic_backup_created', False,
+                                    f'reason={reason},exit={dump.returncode},bytes={len(dump.stdout)},'
+                                    f'stderr_bytes={len(dump.stderr)},stderr_sha256={hashlib.sha256(dump.stderr).hexdigest()},'
+                                    f'client={client_version},sqlstate={dump_sqlstate},errno={dump_errno}')
+        original = dump.stdout
+        if re.search(rb'(?im)^\s*(?:CREATE\s+DATABASE|USE\s+)', original):
+            return require_contract('synthetic_backup_schema_binding', False,
+                                    'database_directives_unexpected_in_single_schema_dump')
+        # mysqldump without --databases omits USE/CREATE DATABASE; prepend the
+        # unique synthetic clone schema rather than rewriting SQL from the dump.
+        original = f'USE `{restored}`;\n'.encode() + original
+        ok &= require_contract('synthetic_backup_schema_binding',
+                               original.startswith(f'USE `{restored}`;\n'.encode()))
+        dump_path.write_bytes(original)
+        backup_sha = hashlib.sha256(original).hexdigest()
+        ok &= require_contract('synthetic_backup_created', True,
+                               f'bytes={len(original)},sha256={backup_sha}')
+        config_fingerprint = hashlib.sha256(
+            json.dumps({'driver': 'mysql', 'database': restored, 'app_key': APP_KEY,
+                        'app_user': app, 'definer': f'{dba}@%'}, sort_keys=True).encode()).hexdigest()
+        record('synthetic_restore_application_config_identity', 'OBSERVED',
+               f'driver=mysql,config_sha256={config_fingerprint}')
+        definer_tokens = len(re.findall(rb'(?i)\bDEFINER\s*=', original))
+        ok &= require_contract('synthetic_backup_contains_expected_definers',
+                               definer_tokens == len(source_rows)
+                               and all(row[5] == f'{dba}@%' for row in source_rows),
+                               f'count={definer_tokens},expected={len(source_rows)}')
+
+        # The same receipt validator used on the import path rejects a modified copy.
+        bad_path.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        corrupted_detected = not sha256_matches(bad_path.read_bytes(), backup_sha)
+        ok &= require_contract('corrupt_backup_fails_integrity_check_before_restore', corrupted_detected)
+        if not corrupted_detected:
+            return False
+
+        backup_intact = file_sha256_matches(dump_path, backup_sha)
+        ok &= require_contract('synthetic_backup_integrity_verified_before_import', backup_intact)
+        if not backup_intact:
+            return False
+        import_payload = dump_path.read_bytes()
+        backup_payload_valid = sha256_matches(import_payload, backup_sha)
+        ok &= require_contract('synthetic_backup_import_payload_matches_receipt', backup_payload_valid)
+        if not backup_payload_valid:
+            return False
+
+        admin(f'CREATE DATABASE `{restored}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
+              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        for account, password in passwords.items():
+            admin(f"CREATE USER '{account}'@'%' IDENTIFIED BY '{password}'",
+                  host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        restore_env = child_environment()
+        restore_env['MYSQL_PWD'] = RESTORE_ROOT_PW
+        imported = subprocess.run([MYSQL, '--protocol=TCP', '--connect-timeout=5',
+                                    f'--host={RESTORE_HOST}', f'--port={RESTORE_PORT}', '--user=root',
+                                    '--binary-mode', '--default-character-set=utf8mb4'],
+                                   env=restore_env, input=import_payload, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, timeout=180, check=False)
+        ok &= require_contract('synthetic_restore_imported', imported.returncode == 0,
+                               'mysql_import_succeeded' if imported.returncode == 0 else 'mysql_import_failed')
+        if imported.returncode:
+            return False
+
+        restored_rows = trigger_rows(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_trigger_inventory_matches', restored_rows == source_rows,
+                               f'count={len(restored_rows)},expected={len(source_rows)}')
+        restored_ledger = ledger(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        source_ledger_is_prefix = (len(source_ledger) < len(stems)
+                                   and source_ledger == stems[:len(source_ledger)])
+        ok &= require_contract('restored_partial_migration_ledger_matches',
+                               restored_ledger == source_ledger and source_ledger_is_prefix,
+                               f'ledger={len(restored_ledger)},source={len(source_ledger)},target={len(stems)}')
+        restored_sentinel = admin(sentinel_sql, restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_synthetic_sentinel_matches_source',
+                               restored_sentinel == source_sentinel)
+        source_counts = table_counts(schema)
+        target_counts = table_counts(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_table_row_counts_match_source', target_counts == source_counts,
+                               f'tables={len(target_counts)},source_tables={len(source_counts)}')
+        target_after = settings(RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restore_service_contract_after_trust_off_unchanged',
+                               target_after == target_before and target_after['trust'] == 'OFF',
+                               f"trust={target_after['trust']},log_bin={target_after['log_bin']}")
+
+        admin(f"GRANT {APP_GRANTS} ON `{restored}`.* TO '{app}'@'%';",
+              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        admin(f"GRANT {RUNTIME_GRANTS} ON `{restored}`.* TO '{runtime}'@'%';",
+              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        for table in ('deployment_transition_fences', 'transition_v2_requests', 'transition_history_events'):
+            admin(f"GRANT SELECT ON `{restored}`.`{table}` TO '{dba}'@'%';",
+                  host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        admin(f"GRANT TRIGGER ON `{restored}`.* TO '{dba}'@'%';",
+              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        rc, _, (_, errno) = artisan(app, passwords[app], restored, 'migrate', '--force',
+                                    phase2b_definer=f'{dba}@%', host=RESTORE_HOST, port=RESTORE_PORT)
+        ok &= require_contract('restored_target_migrations_complete',
+                               rc == 0 and ledger(restored, RESTORE_HOST, RESTORE_PORT,
+                                                  RESTORE_ROOT_PW) == stems,
+                               f'errno={errno},ledger={len(ledger(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW))},'
+                               f'expected={len(stems)}')
+        restored_rows = trigger_rows(restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        ok &= require_contract('restored_trigger_inventory_matches', restored_rows == source_rows,
+                               f'count={len(restored_rows)},expected={len(source_rows)}')
+        admin(f"ALTER USER '{dba}'@'%' ACCOUNT LOCK;",
+              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        ok &= require_contract('restored_definer_has_no_global_privilege',
+                               global_grants_clean(dba, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW))
+        ok &= require_contract('restored_app_and_runtime_have_no_global_privilege',
+                               global_grants_clean(app, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+                               and global_grants_clean(runtime, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW))
+
+        rc, _, failure = run_up(app, passwords[app], restored,
+                                '2026_11_15_000001_verify_phase2b_trigger_definers.php',
+                                f'{dba}@%', RESTORE_HOST, RESTORE_PORT)
+        ok &= require_contract('restored_schema_verifier_accepts_definer', rc == 0, f'failure={failure}')
+        rc, output, _ = artisan(app, passwords[app], restored, 'migrate', '--force',
+                                phase2b_definer=f'{dba}@%', host=RESTORE_HOST, port=RESTORE_PORT)
+        ok &= require_contract('restored_migrations_are_idempotent', rc == 0 and 'Nothing to migrate' in output,
+                               'retry_completed_without_schema_changes')
+
+        # Prove the locked, unprivileged DEFINER still executes against restored synthetic rows.
+        op, tup, digest = ('11111111-1111-4111-8111-111111111111', '33333333-3333-4333-8333-333333333333', 'a' * 64)
+        admin("INSERT INTO deployment_transition_fences (fence_key,state,operation_id,generation,boot_id,journal_seq,"
+              "journal_head_hash,evidence_digest,created_at,updated_at,phase2b_state,phase2b_tuple_digest,"
+              "phase2b_event_sequence) VALUES ('global','HOLD','11111111-1111-4111-8111-111111111111',1,"
+              "'22222222-2222-4222-8222-222222222222',1,REPEAT('a',64),REPEAT('b',64),NOW(),NOW(),'HOLD',"
+              "'33333333-3333-4333-8333-333333333333',1)", restored, RESTORE_HOST, RESTORE_PORT, RESTORE_ROOT_PW)
+        request = ("INSERT INTO transition_v2_requests (request_id, request_digest, operation, operation_id, generation,"
+                   " source_tuple_digest, target_tuple_digest, history_sequence, receipt_payload, receipt_digest,"
+                   f" committed_at, created_at, updated_at) VALUES ('55555555-5555-4555-8555-555555555555','{digest}',"
+                   f"'compare_and_set_hold','{op}',1,NULL,'{tup}',1,'{{}}','{'b' * 64}',NOW(6),NOW(6),NOW(6))")
+        rc, _, (_, errno) = run_mysql(runtime, passwords[runtime], request, restored, RESTORE_HOST, RESTORE_PORT)
+        ok &= require_contract('restored_locked_definer_accepts_runtime_insert', rc == 0, f'errno={errno}')
+        history = ("INSERT INTO transition_history_events (event_sequence,operation_id,generation,request_id,"
+                   "request_digest,event_type,source_tuple_digest,target_tuple_digest,occurred_at,created_at,updated_at) "
+                   f"VALUES (1,'{op}',1,'55555555-5555-4555-8555-555555555555','{digest}',"
+                   f"'HOLD_TUPLE_COMMITTED',NULL,'{tup}',NOW(6),NOW(6),NOW(6))")
+        rc, _, (_, errno) = run_mysql(runtime, passwords[runtime], history, restored,
+                                      RESTORE_HOST, RESTORE_PORT)
+        ok &= require_contract('restored_locked_definer_accepts_history_insert', rc == 0, f'errno={errno}')
+        rc, _, (_, errno) = run_mysql(runtime, passwords[runtime],
+                                      'UPDATE transition_v2_requests SET receipt_digest=receipt_digest', restored,
+                                      RESTORE_HOST, RESTORE_PORT)
+        ok &= require_contract('restored_runtime_guard_rejects_update', rc != 0 and errno == '1644', f'errno={errno}')
+        ok &= require_contract('restored_runtime_cannot_drop_trigger',
+                               run_mysql(runtime, passwords[runtime],
+                                         'DROP TRIGGER transition_v2_requests_immutable_insert', restored,
+                                         RESTORE_HOST, RESTORE_PORT)[0] != 0)
+        verify_count = admin(f"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='{restored}'",
+                             host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+        ok &= require_contract('restored_schema_inventory_present', int(verify_count) > 0,
+                               f'tables={verify_count}')
+        record('synthetic_restore_receipt', 'OBSERVED',
+               f'backup_sha256={backup_sha},bytes={len(original)},source=synthetic_only')
+        return bool(ok)
+    finally:
+        for sql in (f'DROP DATABASE IF EXISTS `{restored}`',
+                    *(f"DROP USER IF EXISTS '{account}'@'%'" for account in accounts)):
+            try:
+                admin(sql, host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            remaining = admin("SELECT (SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'wpcg\\_restore%'),"
+                              "(SELECT COUNT(*) FROM mysql.user WHERE user LIKE 'wpcg\\_qual%')",
+                              host=RESTORE_HOST, port=RESTORE_PORT, root_password=RESTORE_ROOT_PW)
+            require_contract('synthetic_restore_cleanup_complete', remaining == '0\t0')
+        except Exception:  # noqa: BLE001
+            record('synthetic_restore_cleanup_complete', 'FAIL', 'readback_failed')
+
+
+def settings(host=None, port=None, root_password=None):
     row = admin('SELECT VERSION(), @@GLOBAL.log_bin, @@GLOBAL.binlog_format, '
-                '@@GLOBAL.log_bin_trust_function_creators').split('\t')
+                '@@GLOBAL.log_bin_trust_function_creators', host=host, port=port,
+                root_password=root_password).split('\t')
     if len(row) != 4:
         raise RuntimeError('settings_unreadable')
     version, log_bin, fmt, trust = row
@@ -662,20 +959,34 @@ def require_contract(label, ok, detail=''):
     return bool(ok)
 
 
-def global_grants_clean(account):
-    lines = admin(f"SHOW GRANTS FOR '{account}'@'%'").splitlines()
+def global_grants_clean(account, host=None, port=None, root_password=None):
+    lines = admin(f"SHOW GRANTS FOR '{account}'@'%'", host=host, port=port,
+                  root_password=root_password).splitlines()
     return clean_global_grants(lines)
 
 
-def ledger(schema):
-    out = admin(f'SELECT migration FROM `{schema}`.`migrations` ORDER BY migration')
+def ledger(schema, host=None, port=None, root_password=None):
+    out = admin(f'SELECT migration FROM `{schema}`.`migrations` ORDER BY migration', host=host,
+                port=port, root_password=root_password)
     return out.splitlines() if out else []
 
 
-def trigger_rows(schema):
+def table_counts(schema, host=None, port=None, root_password=None):
+    names = admin(f"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='{schema}' "
+                  'AND TABLE_TYPE="BASE TABLE" ORDER BY TABLE_NAME', host=host, port=port,
+                  root_password=root_password).splitlines()
+    if not names or any(re.fullmatch(r'[A-Za-z0-9_]{1,64}', name) is None for name in names):
+        raise RuntimeError('restore_table_inventory_invalid')
+    query = ' UNION ALL '.join(f"SELECT '{name}' AS table_name, COUNT(*) AS row_count "
+                               f"FROM `{schema}`.`{name}`" for name in names) + ' ORDER BY 1'
+    rows = admin(query, host=host, port=port, root_password=root_password).splitlines()
+    return [tuple(row.split('\t')) for row in rows]
+
+
+def trigger_rows(schema, host=None, port=None, root_password=None):
     out = admin("SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, EVENT_MANIPULATION, ACTION_TIMING, ACTION_ORIENTATION, "
                 f"DEFINER, SHA2(ACTION_STATEMENT,256) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='{schema}' "
-                'ORDER BY TRIGGER_NAME')
+                'ORDER BY TRIGGER_NAME', host=host, port=port, root_password=root_password)
     return [line.split('\t') for line in out.splitlines()] if out else []
 
 
@@ -700,8 +1011,7 @@ def trigger_ddl_logged(expected_names, schema, dba):
             return False, 'binlog_read_size_limit'
         files.append((columns[0], size))
 
-    env = {key: value for key, value in os.environ.items()
-           if key != 'WPCG_QUAL_MYSQL_ROOT_PASSWORD'}
+    env = child_environment()
     env['MYSQL_PWD'] = ROOT_PW
     output_parts = []
     output_bytes = 0
@@ -791,8 +1101,8 @@ def main():
     self_test()
     if '--self-test' in sys.argv:
         return 0
-    if not (ROOT_PW and PHP and MYSQL and MYSQLBINLOG):
-        record('prerequisites', 'FAIL', 'php_mysql_client_or_root_password_missing')
+    if not (ROOT_PW and PHP and MYSQL and MYSQLBINLOG and MYSQLDUMP):
+        record('prerequisites', 'FAIL', 'php_mysql_client_or_dump_tool_or_root_password_missing')
         return 1
 
     suffix = secrets.token_hex(5)
@@ -809,7 +1119,8 @@ def main():
         # 0. exact migration list, derived and cross-checked three ways
         names = migration_inventory(MIGRATIONS)
         stems = [n[:-4] for n in names]
-        tracked = subprocess.run(['git', 'ls-files', '--', 'database/migrations'], cwd=ROOT, text=True,
+        tracked = subprocess.run(['git', 'ls-files', '--', 'database/migrations'], cwd=ROOT,
+                                 env=child_environment(), text=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.split()
         tracked_php = sorted(Path(t).name for t in tracked if t.endswith('.php'))
         digest = hashlib.sha256('\n'.join(names).encode()).hexdigest()
@@ -930,11 +1241,16 @@ def main():
             ok &= require_contract('dba_global_privilege_revoked', global_grants_clean(dba))
             ok &= require_contract('app_still_no_global_privilege', global_grants_clean(app))
 
-            # 7. application account finishes everything else
-            rc, output, (state, errno) = artisan(app, app_pw, schema, 'migrate', '--force',
-                                                 phase2b_definer=f'{dba}@%')
-            ok &= require_contract('app_completes_remaining_migrations', rc == 0,
-                                   f'sqlstate={state},errno={errno},phase2b={phase2b_failure_code(output)}')
+            # 7. Restore the interrupted migration ledger into the isolated clone.
+            if rc == 0:
+                ok &= synthetic_restore_rehearsal(schema, app, app_pw, dba, runtime, runtime_pw,
+                                                  stems, trigger_rows(schema), tmp)
+
+        # 8. application account finishes everything else
+        rc, output, (state, errno) = artisan(app, app_pw, schema, 'migrate', '--force',
+                                             phase2b_definer=f'{dba}@%')
+        ok &= require_contract('app_completes_remaining_migrations', rc == 0,
+                               f'sqlstate={state},errno={errno},phase2b={phase2b_failure_code(output)}')
 
         # 8. complete ledger == exact derived list, nothing pending
         rows = ledger(schema)
@@ -1074,6 +1390,7 @@ def main():
         except Exception:  # noqa: BLE001
             record('cleanup_complete', 'FAIL', 'readback_failed')
             ok = False
+    ok &= all(status != 'FAIL' for _, status in RESULTS)
     print(f'WPCG_QUAL|summary|harness={"PASS" if ok else "FAIL"}|migration_privilege_result={path_label}', flush=True)
     return 0 if ok else 1
 

@@ -2529,16 +2529,63 @@ def main():
     assert '"$PHP_BIN" "$COMPOSER_BIN" "$@"' in controller
     assert 'composer_binary_preflight "$COMPOSER_BIN" "$COMPOSER_SHA256" "$COMPOSER_VERSION" 0 0 "$PHP_BIN"' in controller
     assert '/usr/bin/composer' not in controller, "Composer must not fall back to the obsolete path"
-    phase2b_preflight = "DB_PHASE2B_TRIGGER_DEFINER must be set in the effective target configuration before applying migrations."
+    phase2b_preflight = "Could not validate the effective Phase 2B trigger definer configuration before applying migrations."
     assert phase2b_preflight in controller
-    assert "php artisan config:clear --no-interaction" in controller
-    assert controller.index("php artisan config:clear --no-interaction") < controller.index(phase2b_preflight)
-    assert controller.index(phase2b_preflight) < controller.index('php artisan migrate --force --no-interaction')
+    assert "phase2b_definer_preflight \"${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php\"" in controller
+    assert "Rollback target predates the Phase 2B definer verifier; skipping its definer-key check." in controller
+    assert controller.index('phase2b_definer_preflight "${APP_DIR}/database/migrations/2026_11_15_000001_verify_phase2b_trigger_definers.php"') < controller.index('php artisan migrate --force --no-interaction')
 
     bash = shutil.which("bash")
     if bash and os.name != "nt":
         with tempfile.TemporaryDirectory(prefix="composer-preflight-") as temporary:
             fixture_dir = Path(temporary)
+            verifier_migration = fixture_dir / "verify_phase2b_trigger_definers.php"
+            rollback_preflight = r'''source "$1"
+trap - EXIT INT TERM
+set +e
+DEPLOYMENT_MODE=rollback
+calls=''
+php() {
+    if [[ "$1" == 'artisan' && "$2" == 'config:clear' ]]; then
+        calls+='clear,'
+        [[ "${PHP_FAIL_STAGE:-}" != 'clear' ]]
+        return $?
+    fi
+    if [[ "$1" == '-r' ]]; then
+        calls+='bootstrap,'
+        [[ "${PHP_FAIL_STAGE:-}" != 'bootstrap' ]]
+        return $?
+    fi
+    return 88
+}
+log() { :; }
+phase2b_definer_preflight "$2"
+old_status=$?
+[[ $old_status -eq 0 && "$calls" == 'clear,' ]] || exit 31
+: > "$2"
+phase2b_definer_preflight "$2"
+new_status=$?
+[[ $new_status -eq 0 && "$calls" == 'clear,clear,bootstrap,' ]] || exit 32
+calls=''
+PHP_FAIL_STAGE=clear phase2b_definer_preflight "$2"
+clear_status=$?
+[[ $clear_status -ne 0 && "$calls" == 'clear,' ]] || exit 33
+calls=''
+PHP_FAIL_STAGE=bootstrap phase2b_definer_preflight "$2"
+config_status=$?
+[[ $config_status -ne 0 && "$calls" == 'clear,bootstrap,' ]] || exit 34
+DEPLOYMENT_MODE=forward
+calls=''
+phase2b_definer_preflight "$2"
+forward_status=$?
+[[ $forward_status -eq 0 && "$calls" == 'clear,bootstrap,' ]] || exit 35
+'''
+            preflight_result = subprocess.run(
+                [bash, "-c", rollback_preflight, "phase2b-rollback-preflight-test", str(CONTROLLER), str(verifier_migration)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+            )
+            assert preflight_result.returncode == 0, "rollback preflight behavior mismatch: " + preflight_result.stderr
+
             composer_fixture = fixture_dir / "composer"
             php_fixture = fixture_dir / "php"
             composer_fixture.write_text("#!/bin/sh\nexit 0\n", encoding="ascii")

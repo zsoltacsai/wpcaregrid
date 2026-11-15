@@ -43,6 +43,16 @@ jobs:
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-password"
           --health-interval=5s --health-timeout=5s --health-retries=30
+      restore-mysql:
+        image: mysql:8.4.11@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_ROOT_PASSWORD: ci-restore-root-password
+        ports:
+          - '127.0.0.1:3310:3306'
+        command: --server-id=276 --log-bin=mysql-bin --binlog-format=ROW --log-bin-trust-function-creators=OFF
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-restore-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,6 +76,9 @@ jobs:
           WPCG_QUAL_MYSQL_HOST: 127.0.0.1
           WPCG_QUAL_MYSQL_PORT: '3309'
           WPCG_QUAL_MYSQL_ROOT_PASSWORD: ci-root-password
+          WPCG_QUAL_RESTORE_HOST: 127.0.0.1
+          WPCG_QUAL_RESTORE_PORT: '3310'
+          WPCG_QUAL_RESTORE_ROOT_PASSWORD: ci-restore-root-password
         run: |
           set -euo pipefail
           python3 -I scripts/tests/migration-binlog-qualification.py | tee "$RUNNER_TEMP/qualification.log"
