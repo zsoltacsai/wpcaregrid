@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "profile": "staging-next",
+  "helper_version": "1.4.10",
+  "compatibility_contract": "wpcaregrid-staging-next-deploy-v15",
+  "entrypoint_path": "scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py",
+  "entrypoint_sha256": "893b77919aa87c1103ee0ecc54bd433a376e31cc85b797638618ed13e9344d65",
+  "backend_path": "scripts/staging_next_deploy_backend_1_4_10.py",
+  "backend_sha256": "0857a9d81c5d368da634bdab846accd40dd24f296057d4234706b5b4e52ca66f",
+  "transaction_module_path": "scripts/staging_next_db_transaction_1_4_10.py",
+  "transaction_module_sha256": "d1a382728180526ae6a0b27f70abc5e42b512fb389eb8339b9c2c544c7567848",
+  "target_binding_path": "scripts/deployment_target_binding_1_4_10.py",
+  "target_binding_sha256": "e985227ea1307b5d9ff5b737cf9b3586fe5ebbd7c7b194632078237a8c732e16",
+  "environment_contract_path": "scripts/deployment_environment_contract.py",
+  "environment_contract_sha256": "f22bc2ca1d570d932413f91e7c9dbddf7e2e613d56540418e5ca47dafe72caa1",
+  "helper_artifact_sha256": "f5a8e7e468af2b0950e2dfc3d5ed9f0c3b6baeb9759ba71866bc41cb4f6717b8",
+  "release_validation": {
+    "required_independent_agent_passes": [
+      "integration_qa",
+      "appsec"
+    ],
+    "review_policy": "WPCG_RELEASE_REVIEW_V3",
+    "github_approved_reviews_required": false,
+    "wpcg_release_review_v2_ledger_required": false
+  }
+}
