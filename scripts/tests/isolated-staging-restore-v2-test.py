@@ -126,10 +126,13 @@ def test_global_replication_and_external_side_effects_rejected():
         (b"SET NAMES utf8mb4;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET CHARACTER SET gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET CHARSET gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"/*!50000 SET CHARACTER SET gbk */;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET @@character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET @@SESSION.character_set_client='gbk';", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"SET @@character_set_client := gbk;", "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (b"SET CHARACTER SET gbk; INSERT INTO `synthetic` VALUES ('\\xe4\\xb8\\xad\\\\'); GRANT ALL ON *.* TO x@y; -- (');",
+         "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
         (b"INSERT INTO `synthetic` VALUES ('x'); \\C gbk\n", "MYSQL_CLIENT_COMMAND_UNSUPPORTED"),
         (b"/*!50000 SET GLOBAL log_bin_trust_function_creators=1 */;", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
         (b"SET @@GLOBAL.gtid_purged='x';", "DUMP_UNSAFE_STATEMENT_GLOBAL_SETTING"),
@@ -141,6 +144,8 @@ def test_global_replication_and_external_side_effects_rejected():
         (b"SET SESSION sql_mode='NO_BACKSLASH_ESCAPES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET `sql_mode`='NO_BACKSLASH_ESCAPES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET @@session.`sql_mode`='NO_BACKSLASH_ESCAPES,ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (b"SET `sql_mode`='NO_BACKSLASH_ESCAPES'; INSERT INTO `synthetic` VALUES ('x\\\\'); GRANT ALL ON *.* TO x@y; -- (');",
+         "DUMP_UNSAFE_STATEMENT_PRIVILEGED_OR_SERVER_OPERATION"),
         (b"SET SESSION sql_mode:='ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION SQL_MODE /* comment */ = 'ANSI_QUOTES';", "SQL_LEXICAL_MODE_UNSUPPORTED"),
         (b"SET SESSION sql_mode=CONCAT(@@SESSION.sql_mode,',ANSI_QUOTES');", "SQL_LEXICAL_MODE_UNSUPPORTED"),
@@ -486,8 +491,8 @@ def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
     policy = {"mysql": {"server_uuid": "server"}}
     definer = "restore_owner@localhost"
     expected_grants = (b"GRANT USAGE ON *.* TO `restore_owner`@`localhost`\n"
-                       b"GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`\n"
-                       b"GRANT SELECT ON `wpcg_recovery_restore_20261104_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
+                       b"GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`\n"
+                       b"GRANT SELECT ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
     with mock.patch.object(RESTORE, "mysql_query", side_effect=[b"Y\n", expected_grants]) as query:
         observed = RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
     assert observed["account_locked"] is True
@@ -506,10 +511,12 @@ def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
                 raise AssertionError(f"Expected {code}")
 
 
-def test_definer_grants_normalize_mysql_escaped_schema_underscores():
+def test_definer_grants_preserve_literal_underscore_escaping():
     escaped = "GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`"
-    plain = "GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`"
-    assert RESTORE._normalized_grant(escaped) == RESTORE._normalized_grant(plain)
+    wildcard = "GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`"
+    expected = "GRANT TRIGGER ON " + RESTORE._grant_pattern_identifier(SCHEMA) + ".* TO restore_owner@localhost"
+    assert RESTORE._normalized_grant(escaped) == RESTORE._normalized_grant(expected)
+    assert RESTORE._normalized_grant(escaped) != RESTORE._normalized_grant(wildcard)
 
 
 def test_production_entrypoint_requires_root():
@@ -652,7 +659,7 @@ def main():
         test_existing_target_database_is_never_overwritten,
         test_production_entrypoint_requires_root,
         test_mysql_import_pins_utf8mb4_and_initial_sql_mode,
-        test_definer_grants_normalize_mysql_escaped_schema_underscores,
+        test_definer_grants_preserve_literal_underscore_escaping,
         test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,

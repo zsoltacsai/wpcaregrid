@@ -1110,8 +1110,13 @@ def _inventory(policy, schema, manifest, plan):
 def _normalized_grant(line):
     if not isinstance(line, str) or any(ord(c) < 32 for c in line):
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
-    return " ".join(line.replace("\\_", "_").replace("`", "").replace("'", "")
+    return " ".join(line.replace("`", "").replace("'", "")
                      .replace('"', "").split()).casefold()
+
+
+def _grant_pattern_identifier(name):
+    """Quote literal underscores in MySQL privilege pattern identifiers."""
+    return name.replace("\\", "\\\\").replace("_", "\\_")
 
 
 def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
@@ -1132,9 +1137,11 @@ def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
         observed = {_normalized_grant(line) for line in grants_raw.decode("utf-8", "strict").splitlines() if line}
     except UnicodeError:
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    grant_schema = _grant_pattern_identifier(schema)
     expected = {_normalized_grant("GRANT USAGE ON *.* TO " + user + "@" + host),
-                _normalized_grant("GRANT TRIGGER ON " + schema + ".* TO " + user + "@" + host)}
-    expected.update(_normalized_grant("GRANT SELECT ON " + schema + "." + table + " TO " + user + "@" + host)
+                _normalized_grant("GRANT TRIGGER ON " + grant_schema + ".* TO " + user + "@" + host)}
+    expected.update(_normalized_grant("GRANT SELECT ON " + grant_schema + "." + _grant_pattern_identifier(table)
+                                      + " TO " + user + "@" + host)
                     for table in select_tables)
     if observed != expected:
         refuse("DEFINER_GRANTS_NOT_MINIMAL")
