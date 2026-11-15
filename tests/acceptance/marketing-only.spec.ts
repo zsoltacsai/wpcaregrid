@@ -57,7 +57,7 @@ test('HU and EN public pages render, link to information, and switch language', 
         const menuButton = page.locator('header button[x-ref="menuButton"]');
         if (await menuButton.isVisible()) await menuButton.click();
         const alternate = locale === 'en' ? 'hu' : 'en';
-        const languageLink = page.locator(`a[href^="/${alternate}/"]`).first();
+        const languageLink = page.locator(`a[href^="/${alternate}/"]:visible`).first();
         await expect(languageLink).toBeVisible();
         await languageLink.click();
         await expect(page.locator('html')).toHaveAttribute('lang', alternate);
@@ -89,7 +89,7 @@ test('public home and pricing pages fit desktop and mobile viewports', async ({ 
     expect(unexpectedRequests).toEqual([]);
 });
 
-test('marketing pages do not expose registration, provisioning, or paid SaaS actions', async ({ page }) => {
+test('marketing_only blocks registration, provisioning, and paid SaaS actions', async ({ page }) => {
     const unexpectedRequests = await guardOrigin(page);
     const publicPaths = ['/en/', '/hu/', '/en/pricing', '/hu/pricing'];
     const forbidden = /\/(?:register|signup|checkout|account|connector|api\/v1\/connector|subscriptions?)(?:[/?#]|$)|stripe\/webhook|provision/i;
@@ -109,12 +109,14 @@ test('marketing pages do not expose registration, provisioning, or paid SaaS act
 
     // GET-only probes cover the marketing-only route boundary without invoking
     // checkout, Stripe, pairing, API writes, or provisioning handlers.
-    for (const path of [
-        '/register', '/signup', '/checkout', '/checkout/success',
-        '/account/websites/new', '/api/v1/connector/pair',
-    ]) {
+    for (const path of ['/register', '/signup', '/checkout', '/checkout/success',
+        '/account/websites/new', '/api/v1/connector/pair']) {
         const response = await safeGet(page, path);
         expect([404, 405, 410, 419, 422]).toContain(response.status());
+    }
+    for (const path of ['/checkout', '/account', '/account/subscription', '/api/v1/connector/pair']) {
+        const response = await safeGet(page, path);
+        expect(response.status(), `${path} must be blocked by the marketing_only release gate`).toBe(404);
     }
     const webhook = await safeGet(page, '/stripe/webhook');
     expect([404, 405, 419]).toContain(webhook.status());
@@ -127,18 +129,32 @@ test('marketing pages do not expose registration, provisioning, or paid SaaS act
     expect(unexpectedRequests).toEqual([]);
 });
 
-test('HTTPS target redirects and sends baseline security headers', async ({ page }) => {
+test('HTTPS target preserves origin, upgrades HTTP, and sends security headers', async ({ page }) => {
     test.skip(!target || target.protocol !== 'https:', 'HTTPS/header acceptance applies only to an explicitly configured HTTPS target.');
     const unexpectedRequests = await guardOrigin(page);
     const root = await safeGet(page, '/');
     expect([301, 302, 307, 308]).toContain(root.status());
-    expect(root.headers().location).toMatch(/^https:\/\//i);
+    const httpsLocation = root.headers().location;
+    expect(httpsLocation).toBeTruthy();
+    expect(new URL(httpsLocation!, target!).origin).toBe(target!.origin);
+
+    const httpTarget = new URL(target!.toString());
+    httpTarget.protocol = 'http:';
+    httpTarget.port = '';
+    const httpRoot = await page.request.get(new URL('/', httpTarget).toString(), { maxRedirects: 0 });
+    expect([301, 302, 307, 308]).toContain(httpRoot.status());
+    const upgradedLocation = httpRoot.headers().location;
+    expect(upgradedLocation).toBeTruthy();
+    expect(new URL(upgradedLocation!, httpTarget).origin).toBe(target!.origin);
 
     const response = await safeGet(page, '/en/');
     expect(response.status()).toBe(200);
     const headers = response.headers();
     expect(headers['strict-transport-security']).toBeTruthy();
     expect(headers['x-content-type-options']).toBe('nosniff');
-    expect(headers['x-frame-options'] ?? headers['content-security-policy']).toBeTruthy();
+    const frameOptions = headers['x-frame-options']?.toLowerCase();
+    const frameAncestors = headers['content-security-policy']?.match(/(?:^|;)\s*frame-ancestors\s+([^;]+)/i)?.[1];
+    expect(frameOptions === 'deny' || frameOptions === 'sameorigin'
+        || (frameAncestors !== undefined && frameAncestors.trim() !== '')).toBe(true);
     expect(unexpectedRequests).toEqual([]);
 });

@@ -1,11 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Read-only acceptance checks for the public marketing surface.
+ * Read-only acceptance checks for a verified marketing_only application.
  *
  * Local CI example:
  *   E2E_BASE_URL=http://127.0.0.1:8000 npx playwright test -c playwright.marketing-acceptance.config.ts
- * Remote acceptance example:
+ * Remote acceptance example (only after independently verifying the target
+ * release is configured with the marketing_only profile):
  *   E2E_BASE_URL=https://staging.example.test npx playwright test -c playwright.marketing-acceptance.config.ts
  *
  * This suite never submits forms or calls mutating APIs. Remote HTTPS/header
