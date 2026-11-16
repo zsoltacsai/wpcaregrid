@@ -93,10 +93,10 @@ class Phase2BDefinerTests(unittest.TestCase):
         self.assertEqual(manifest["helper_artifact_sha256"], artifact)
         self.assertEqual((INSTALLER.VERSION, INSTALLER.CONTRACT, INSTALLER.ARTIFACT_SHA256),
                          (HELPER.VERSION, HELPER.CONTRACT, artifact))
-        sys.path.insert(0, str(ROOT))
-        from scripts import staging_next_deploy_controller as controller
-        self.assertEqual(controller.HELPER, HELPER.ENTRYPOINT)
-        self.assertEqual(controller.HELPER_ARTIFACT_SHA256, artifact)
+        # This suite verifies the immutable 1.4.11 artifact set. The active
+        # controller advances with the current helper and is validated by that
+        # version's own consistency test; pinning it to 1.4.11 here would make
+        # the historical test fail as soon as a successor is integrated.
 
 if __name__ == "__main__":
     unittest.main()
