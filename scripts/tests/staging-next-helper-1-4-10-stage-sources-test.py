@@ -413,6 +413,10 @@ class HardeningTests(Remote):
 
 
 class StaticTests(unittest.TestCase):
+    def test_driver_is_executable_as_documented(self):
+        driver = ROOT / "scripts" / "staging-next-helper-1-4-10-stage-sources.sh"
+        self.assertTrue(driver.stat().st_mode & stat.S_IXUSR)
+
     def test_host_program_has_no_network_process_or_deletion_surface(self):
         for forbidden in ("subprocess", "socket", "urllib", "shutil", "os.system", "os.popen", "rmtree", "chown",
                           "setuid", "sudo", "eval("):
