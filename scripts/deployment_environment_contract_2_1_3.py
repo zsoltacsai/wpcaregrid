@@ -9,7 +9,7 @@ Successor of ``deployment_environment_contract.py`` (which stays byte-identical:
 seven release manifests pin its hash). Difference: GO-13 forbids a new FPM
 identity, so production PHP-FPM keeps the shared ``www-data`` UID/GID 33 and
 isolation is instead bound to exact versioned, root-owned AppArmor/systemd
-confinement artifacts (``deploy/php-fpm-confinement/1.0.0``). Production policy
+confinement artifacts (``deploy/php-fpm-confinement/1.0.1``). Production policy
 schema 2 must echo the compiled hashes and service attachments; a root-collected
 observation is checked by ``verify_confinement_observation``.
 
@@ -19,6 +19,10 @@ files, unit properties and process labels match; kernel enforcement is shown by
 the separate staged-cutover and live-acceptance host gates in
 ``docs/PHP_FPM_CONFINEMENT_GO13.md``. Nothing here reads a host, loads a
 profile or starts a service.
+
+Helper 2.1.3 must load this module and call both ``resolve_environment`` and
+``verify_confinement_observation`` in preflight and fail closed. The contract is
+not sufficient on its own: it cannot create the evidence it checks.
 """
 
 from __future__ import annotations
@@ -37,9 +41,9 @@ class EnvironmentRefused(ValueError):
 WWW_DATA_UID = 33
 WWW_DATA_GID = 33
 CONFINEMENT_SCHEMA = 1
-CONFINEMENT_VERSION = "1.0.0"
-# SHA-256 of deploy/php-fpm-confinement/1.0.0/SHA256SUMS; pins the whole package.
-CONFINEMENT_SUMS_SHA256 = "ce300b9688b585933f841a063f8c00a02469d6c0cefb48eac5812406e59e98fd"
+CONFINEMENT_VERSION = "1.0.1"
+# SHA-256 of deploy/php-fpm-confinement/1.0.1/SHA256SUMS; pins the whole package.
+CONFINEMENT_SUMS_SHA256 = "7d4f1cc98296d75589722b5e864debd57f76feb6c00587bfc654a394152bc137"
 _APPARMOR = "/etc/apparmor.d"
 _SYSTEMD = "/etc/systemd/system"
 _P_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-production"
@@ -51,18 +55,18 @@ _N_DROPIN = f"{_SYSTEMD}/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf"
 _L_DROPIN = f"{_SYSTEMD}/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf"
 _P_MASTER = "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf"
 _P_POOL = "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf"
-# Exact installed path -> SHA-256 of the committed 1.0.0 artifact. A unit test
+# Exact installed path -> SHA-256 of the committed 1.0.1 artifact. A unit test
 # recomputes these from the repository and fails on drift.
 CONFINEMENT_FILE_SHA256: Mapping[str, str] = MappingProxyType({
-    _P_PROFILE: "68a1c02ec70784eacabc0b0d7f36616ed209b998e5c57567c88f195fac4570ee",
-    _N_PROFILE: "028744907b0e037c19b99a0c311ae2d39c9765355621d9ba385cbf6ef4f4b06f",
-    _L_PROFILE: "bc3925e4c320b36c027870c80a74a2ad9e29ea0589181b86334dcfb817f61838",
-    _COMMON: "29aedb2ba419403dc409357d2731f47b4c21f361b5ca3a100b187b22bd40dd0a",
-    _P_UNIT: "a1435ce09a03c718d577b080d91e82b1d3bf4aa6c8a906e073c6363b49adacf3",
-    _N_DROPIN: "25bc9961de4256403877c52e048a816f81d7f3ba9659f7e2aa5933bfa6336c0d",
-    _L_DROPIN: "d0eb37d9fbe16d997bf8cdc703d44641ea1f1ae42add0d67db558bd8f1fcb800",
-    _P_MASTER: "18bd4016af915bf62ad0e3edb79bd7f96a77ccd35a6d0c9340763e61ef7d399c",
-    _P_POOL: "1d35aab6e8e8ce3a8ea2d064094d7c1b95c2eea55ee37ea3460fe2075cb021bb",
+    _P_PROFILE: "28411d7d3aa861b0961999b89132a53b403960e6b5c90dfa3fa15676a846427f",
+    _N_PROFILE: "a0fd100add8c3c98b71af33feb20c739f2eea5df5f2976d90960a6d9403bda08",
+    _L_PROFILE: "747eecff50e9c36b6926313cfa58ee70ff1a866c2e5405dfa0bfbb781145118b",
+    _COMMON: "7314a492aedd66a9e0afe7fabb83701dda272f4700d9d124fb7352344eeea586",
+    _P_UNIT: "3c93e13946f97e48f0c0aa5e5c0fd4b15c46bffd9da2c8e9f47e6ce01b735b0d",
+    _N_DROPIN: "a088f9387396ce914ea39d6279cdf0e31a101434073b859434066c957aec4211",
+    _L_DROPIN: "be70ceb043fe8468bea21684e96a7b8e423f02ae79dc9b14cee5af219132de77",
+    _P_MASTER: "96839f3888df89d9d14724226f292b6d2c634d35057903120251c2756427ecf5",
+    _P_POOL: "103a9502bbe9b19422708cba3c5d9a71cdc51147b70a7788734607e794e4b09e",
 })
 
 
@@ -305,7 +309,7 @@ def _production_config(data: object) -> EnvironmentContract:
         raise EnvironmentRefused("production_restore_instance_not_isolated")
 
     if data["php_version"] != "8.4":
-        # The 1.0.0 confinement artifacts bind PHP 8.4 executable, socket and unit names.
+        # The 1.0.1 confinement artifacts bind PHP 8.4 executable, socket and unit names.
         raise EnvironmentRefused("production_php_version_invalid")
     if data["mysql_version"] != "8.4":
         raise EnvironmentRefused("production_mysql_version_invalid")
@@ -407,7 +411,12 @@ def production_required_fields() -> frozenset[str]:
 _OBSERVED_FILE_KEYS = frozenset({"sha256", "uid", "gid", "mode", "type", "nlink"})
 _OBSERVED_SERVICE_KEYS = frozenset({"unit", "active", "apparmor_profile_property", "loaded_profile_mode",
                                     "process_labels"})
-_OBSERVATION_KEYS = frozenset({"schema", "files", "services"})
+_OBSERVATION_KEYS = frozenset({"schema", "files", "services", "same_uid_peers"})
+_PEER_KEYS = frozenset({"pid", "comm", "label", "unit"})
+# Same-UID (www-data) processes allowed to stay unconfined. Empty on purpose: nginx workers, Supervisor CLI
+# workers and the scheduler share the UID and can read the other environment's group-readable secrets.
+# Accepting any of them is an Owner decision made in a reviewed contract revision, never a default.
+ACCEPTED_UNCONFINED_SAME_UID_COMM: frozenset = frozenset()
 
 
 def _strict_int(value: object) -> bool:
@@ -421,6 +430,8 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     command supplied by a caller):
 
     * ``schema`` = 1
+    * ``same_uid_peers``: ``{complete: bool, processes: [{pid, comm, label, unit}]}`` -- every process
+      whose real/effective UID is www-data, from a root scan that could read all of them
     * ``files``: ``{installed_path: {sha256, uid, gid, mode, type, nlink}}``
     * ``services``: ``{role: {unit, active, apparmor_profile_property,
       loaded_profile_mode, process_labels}}`` where ``apparmor_profile_property`` is the unit's
@@ -484,3 +495,30 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
                 raise EnvironmentRefused("confinement_process_not_confined")
         elif entry["process_labels"]:
             raise EnvironmentRefused("confinement_observation_invalid")
+    _verify_same_uid_peers(confinement, observation["same_uid_peers"], services)
+
+
+def _verify_same_uid_peers(confinement: PhpFpmConfinement, peers: object, services: Mapping) -> None:
+    """All same-UID peers must be enforce-attached; an unconfined peer can read the other environment's secrets."""
+    if not isinstance(peers, Mapping) or set(peers) != {"complete", "processes"} \
+            or not isinstance(peers["processes"], (list, tuple)):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if peers["complete"] is not True:
+        raise EnvironmentRefused("confinement_peer_inventory_incomplete")
+    enforced = {f"{b.apparmor_profile} (enforce)": role for role, b in CONFINEMENT_SERVICES.items()}
+    seen_roles: set = set()
+    for proc in peers["processes"]:
+        if not isinstance(proc, Mapping) or set(proc) != _PEER_KEYS or type(proc["pid"]) is not int \
+                or not all(isinstance(proc[k], str) for k in ("comm", "label", "unit")):
+            raise EnvironmentRefused("confinement_observation_invalid")
+        role = enforced.get(proc["label"])
+        if role is None:
+            if proc["comm"] in ACCEPTED_UNCONFINED_SAME_UID_COMM:
+                continue
+            raise EnvironmentRefused("confinement_same_uid_peer_unconfined")
+        if proc["unit"] != CONFINEMENT_SERVICES[role].unit:
+            raise EnvironmentRefused("confinement_peer_label_outside_unit")
+        seen_roles.add(role)
+    for role in confinement.roles:
+        if services[role]["active"] and role not in seen_roles:
+            raise EnvironmentRefused("confinement_peer_inventory_incomplete")

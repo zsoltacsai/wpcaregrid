@@ -1,4 +1,4 @@
-# wpcaregrid-php-fpm-confinement 1.0.0 -- existing shared PHP 8.4 FPM pool (php8.4-fpm.service)
+# wpcaregrid-php-fpm-confinement 1.0.1 -- existing shared PHP 8.4 FPM pool (php8.4-fpm.service)
 # Install as /etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy. Selected only by the
 # AppArmorProfile= drop-in for php8.4-fpm.service; no attachment path.
 # DENY-OVERLAY, NOT AN ALLOWLIST. This pool serves legacy staging and sibling

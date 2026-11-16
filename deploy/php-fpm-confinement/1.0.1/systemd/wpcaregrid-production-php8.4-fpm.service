@@ -1,4 +1,4 @@
-# wpcaregrid-php-fpm-confinement 1.0.0 -- NEW dedicated production FPM unit.
+# wpcaregrid-php-fpm-confinement 1.0.1 -- NEW dedicated production FPM unit.
 # Install as /etc/systemd/system/wpcaregrid-production-php8.4-fpm.service. The name,
 # socket and pool follow the production profile contract in
 # scripts/deployment_environment_contract.py. Source artifact: not installed.

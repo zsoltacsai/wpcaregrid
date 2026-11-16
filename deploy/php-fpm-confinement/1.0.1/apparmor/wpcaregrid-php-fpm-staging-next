@@ -1,4 +1,4 @@
-# wpcaregrid-php-fpm-confinement 1.0.0 -- existing staging-next PHP-FPM (php8.5-fpm.service)
+# wpcaregrid-php-fpm-confinement 1.0.1 -- existing staging-next PHP-FPM (php8.5-fpm.service)
 # Install as /etc/apparmor.d/wpcaregrid-php-fpm-staging-next. Selected only by the
 # AppArmorProfile= drop-in for php8.5-fpm.service; no attachment path.
 # Allowlist profile. The master runs as root and drops to www-data, the same UID

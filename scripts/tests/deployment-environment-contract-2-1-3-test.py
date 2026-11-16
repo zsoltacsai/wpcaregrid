@@ -33,7 +33,7 @@ def load(name: str, relative: str):
 
 CONTRACT = load("deployment_environment_contract_2_1_3", "scripts/deployment_environment_contract_2_1_3.py")
 OLD = load("deployment_environment_contract_legacy_pin", "scripts/deployment_environment_contract.py")
-PACKAGE = ROOT / "deploy" / "php-fpm-confinement" / "1.0.0"
+PACKAGE = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1"
 INSTALLED_TO_ARTIFACT = {
     "/etc/apparmor.d/wpcaregrid-php-fpm-production": "apparmor/wpcaregrid-php-fpm-production",
     "/etc/apparmor.d/wpcaregrid-php-fpm-staging-next": "apparmor/wpcaregrid-php-fpm-staging-next",
@@ -53,7 +53,7 @@ INSTALLED_TO_ARTIFACT = {
 def confinement_policy():
     return {
         "schema": 1,
-        "package_version": "1.0.0",
+        "package_version": "1.0.1",
         "package_sha256sums_sha256": CONTRACT.CONFINEMENT_SUMS_SHA256,
         "files": dict(CONTRACT.CONFINEMENT_FILE_SHA256),
         "services": {
@@ -105,7 +105,11 @@ def observation(roles=("production", "staging-next", "staging-legacy")):
         services[role] = {"unit": b.unit, "active": True, "apparmor_profile_property": b.apparmor_profile,
                           "loaded_profile_mode": "enforce",
                           "process_labels": [f"{b.apparmor_profile} (enforce)"] * 3}
-    return {"schema": 1, "files": files, "services": services}
+    peers = [{"pid": 1000 + i, "comm": "php-fpm", "unit": CONTRACT.CONFINEMENT_SERVICES[role].unit,
+              "label": f"{CONTRACT.CONFINEMENT_SERVICES[role].apparmor_profile} (enforce)"}
+             for i, role in enumerate(roles)]
+    return {"schema": 1, "files": files, "services": services,
+            "same_uid_peers": {"complete": True, "processes": peers}}
 
 
 def production():
@@ -174,7 +178,7 @@ class SourcePolicy(unittest.TestCase):
 
     def test_package_and_service_binding_mismatches_refuse(self):
         self.reject_confinement("production_confinement_package_mismatch",
-                                lambda p: p.__setitem__("package_version", "1.0.1"))
+                                lambda p: p.__setitem__("package_version", "1.0.0"))
         self.reject_confinement("production_confinement_package_mismatch",
                                 lambda p: p.__setitem__("package_sha256sums_sha256", "c" * 64))
         for role in CONTRACT.CONFINEMENT_SERVICES:
@@ -284,7 +288,7 @@ class SourcePolicy(unittest.TestCase):
 
     def test_malformed_observation_and_unbound_contract_fail_closed(self):
         contract = production()
-        for bad in (None, [], {}, {"schema": 2, "files": {}, "services": {}},
+        for bad in (None, [], {}, {"schema": 2, "files": {}, "services": {}, "same_uid_peers": {}},
                     {**observation(), "extra": 1}, {"schema": 1, "files": [], "services": {}}):
             self.refuse(contract, bad, "confinement_observation_invalid")
         data = observation()
@@ -302,6 +306,64 @@ class SourcePolicy(unittest.TestCase):
         data = observation(("staging-next", "staging-legacy"))
         CONTRACT.verify_confinement_observation(CONTRACT.resolve_environment("staging-next"), data)
         self.refuse(production(), data, "confinement_service_unobserved")
+
+    # --- GO-13 invariant: every same-UID peer is enforce-attached, inventory complete ---
+    def test_unconfined_same_uid_peer_is_refused_even_if_all_services_are_attached(self):
+        for contract in (CONTRACT.resolve_environment("staging-next"), production()):
+            for comm in ("php-fpm8.5", "nginx", "php", "supervisord"):
+                data = observation()
+                data["same_uid_peers"]["processes"].append(
+                    {"pid": 4242, "comm": comm, "label": "unconfined", "unit": "supervisor.service"})
+                self.refuse(contract, data, "confinement_same_uid_peer_unconfined")
+        data = observation()
+        data["same_uid_peers"]["processes"].append(
+            {"pid": 4242, "comm": "php-fpm8.5", "label": "wpcaregrid-php-fpm-staging-next (complain)",
+             "unit": "php8.5-fpm.service"})
+        self.refuse(production(), data, "confinement_same_uid_peer_unconfined")
+
+    def test_accepted_unconfined_set_is_empty_by_default(self):
+        self.assertEqual(CONTRACT.ACCEPTED_UNCONFINED_SAME_UID_COMM, frozenset())
+
+    def test_incomplete_or_inconsistent_peer_inventory_is_refused(self):
+        data = observation()
+        data["same_uid_peers"]["complete"] = False
+        self.refuse(production(), data, "confinement_peer_inventory_incomplete")
+        data = observation()
+        data["same_uid_peers"]["complete"] = 1
+        self.refuse(production(), data, "confinement_peer_inventory_incomplete")
+        data = observation()
+        data["same_uid_peers"]["processes"] = [p for p in data["same_uid_peers"]["processes"]
+                                               if "legacy" not in p["label"]]
+        self.refuse(production(), data, "confinement_peer_inventory_incomplete")
+        data = observation()
+        data["same_uid_peers"]["processes"][0]["unit"] = "php8.4-fpm.service"
+        self.refuse(production(), data, "confinement_peer_label_outside_unit")
+        data = observation()
+        del data["same_uid_peers"]
+        self.refuse(production(), data, "confinement_observation_invalid")
+        data = observation()
+        data["same_uid_peers"]["extra"] = 1
+        self.refuse(production(), data, "confinement_observation_invalid")
+        data = observation()
+        data["same_uid_peers"]["processes"][0]["pid"] = "1"
+        self.refuse(production(), data, "confinement_observation_invalid")
+
+    def test_inactive_service_needs_no_peer_process(self):
+        data = observation()
+        data["services"]["production"].update(active=False, process_labels=[])
+        data["same_uid_peers"]["processes"] = [p for p in data["same_uid_peers"]["processes"]
+                                               if p["unit"] != "wpcaregrid-production-php8.4-fpm.service"]
+        CONTRACT.verify_confinement_observation(production(), data)
+
+    def test_contract_check_alone_is_documented_as_insufficient(self):
+        doc = ast.get_docstring(ast.parse((ROOT / "scripts/deployment_environment_contract_2_1_3.py").read_text()))
+        self.assertIn("separate staged-cutover and live-acceptance host gates", doc)
+        runbook = (ROOT / "docs/PHP_FPM_CONFINEMENT_GO13.md").read_text()
+        self.assertIn("is not sufficient on its own", runbook)
+
+    def test_acceptance_verifier_and_contract_share_the_same_empty_accepted_set(self):
+        verifier = load("wpcg_verify_acceptance_for_contract", "deploy/php-fpm-confinement/1.0.1/acceptance/verify-acceptance.py")
+        self.assertEqual(verifier.ACCEPTED_UNCONFINED_SAME_UID_COMM, CONTRACT.ACCEPTED_UNCONFINED_SAME_UID_COMM)
 
     # --- supersession and honesty ---
     def test_predecessor_is_unchanged_and_still_refuses_shared_identity(self):

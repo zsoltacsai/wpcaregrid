@@ -1,4 +1,4 @@
-# wpcaregrid-php-fpm-confinement 1.0.0 -- production PHP-FPM (PHP 8.4)
+# wpcaregrid-php-fpm-confinement 1.0.1 -- production PHP-FPM (PHP 8.4)
 # Install as /etc/apparmor.d/wpcaregrid-php-fpm-production. Selected only by
 # AppArmorProfile= in wpcaregrid-production-php8.4-fpm.service; no attachment path.
 # Allowlist profile: everything not listed is denied. The pool shares the
