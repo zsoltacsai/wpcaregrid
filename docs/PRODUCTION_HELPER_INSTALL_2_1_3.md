@@ -63,10 +63,13 @@ and approved. While it is unset:
 The pin is a single `ConfinementPin(package_version, sha256sums_sha256, file_sha256)` over the
 fixed sixteen-path installed file set (`CONFINEMENT_FILES`). Paths, units and profile names
 follow the Workstream B package structure (branch `t3/go-13-php-fpm-confinement`: the 1.0.1
-`binding.json` at `5472123`, plus the Owner-approved immutable **1.0.2** successor adding
-`/etc/apparmor.d/wpcaregrid-php-cli-production-deploy`); **no B hash is pinned**. The pin is set
-only after B's 1.0.2 package is final and independently reviewed: bind the exact package and file
-hashes and re-pin the helper atomically (environment hash → artifact digest → controller →
+`binding.json` at `5472123`, plus the Owner-approved deploy-CLI profile
+`/etc/apparmor.d/wpcaregrid-php-cli-production-deploy` first introduced in 1.0.2); **no B hash is
+pinned**. Candidates 1.0.2 (TCP egress) and 1.0.3 (acceptance-tool gaps that could misstate live
+security evidence) are **not** bound and are not claimed reviewed. The pin is set only after B's
+immutable **1.0.4** is final with independent exact-head review: first confirm the exact package,
+16-file, 7-role (no cron, `jobs-legacy-scheduler`) and socket mapping, then bind the exact package
+and file hashes and re-pin the helper atomically (environment hash → artifact digest → controller →
 installer → manifest → this runbook) in one change; the 2.1.3 test fails until every pin matches.
 
 When the pin is set, a schema-2 production policy must echo it in `php_fpm_confinement`
@@ -163,7 +166,7 @@ its enforce label), `confinement_www_data_scheduled_job_present`,
 recorded state only; kernel enforcement remains the separate live acceptance gate in the
 Workstream B runbook.
 
-**Production deploy CLI (Owner-approved; B implements the profile in package 1.0.2).** The helper
+**Production deploy CLI (Owner-approved; profile introduced in B's 1.0.2, to be bound from final 1.0.4).** The helper
 runs application PHP only as these exact argv (`_deploy_cli_commands`), each through
 `runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy --`:
 
