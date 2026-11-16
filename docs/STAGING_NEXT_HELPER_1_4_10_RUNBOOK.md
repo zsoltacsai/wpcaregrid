@@ -1,16 +1,14 @@
 # staging-next helper 1.4.10 - operator readiness status
 
-**Status: HOLD. This runbook is not an executable staging or installation procedure.**
-The `staging-149-*` preflight and source-staging tools are pinned to the historical
-1.4.9 helper and must not be used for 1.4.10. No 1.4.10-specific host preflight
-or source-staging utility has been implemented or reviewed. Do not copy files to
-the staging host or run the 1.4.10 installer by following this document.
+**Status: HOST HOLD.** Version-specific 1.4.10 source-staging tooling is now in
+the source tree, but this does not establish that the staging host passes its
+identity preflight or authorize installation/deployment. The `staging-149-*`
+tools are pinned to 1.4.9 and must not be used for 1.4.10.
 
-The hashes below identify the current source candidate only. They are not a
-host observation, install authorization, deployment authorization, or proof that
-the staging layout matches the helper contract. A future executable procedure
-must use versioned 1.4.10 preflight and source-staging tooling, be independently
-reviewed, and receive its required Owner GO. Nothing here has been run on a host.
+The hashes below identify the 1.4.10 source artifacts. They are not a host
+observation, install authorization, deployment authorization, or proof that the
+staging layout matches the helper contract. Nothing in this change has been run
+on a host.
 
 ## GO-8.3 source candidate pins (recalculate from the final tree)
 
@@ -24,31 +22,84 @@ reviewed, and receive its required Owner GO. Nothing here has been run on a host
 | `scripts/install_staging_next_helper_1_4_10.py` (installer) | `f58c9c556ae8b52a793cd818c023253c9c20a69dd8b2dd612181ad8c8fefbe3c` |
 | helper artifact digest (printed by the installer/probe) | `f5a8e7e468af2b0950e2dfc3d5ed9f0c3b6baeb9759ba71866bc41cb4f6717b8` |
 
+## Exact-source staging
+
+[`scripts/staging-next-helper-1-4-10-stage-sources.sh`](../scripts/staging-next-helper-1-4-10-stage-sources.sh)
+exports the six pinned files from exact primary commit
+`8ff594bd7ca4e8e6963923c49b605bfcdc24d7ab`, checks their SHA-256 values locally,
+and sends a framed payload over the existing `caregrid-staging` SSH alias. SSH
+host-key checking is required. The remote program refuses root and accepts only
+the `deploy` login. It writes only the versioned source directory and installer
+under `/home/deploy/.private`, using create-only publication and independent
+read-back. The driver refuses any SSH alias except `caregrid-staging`, verifies
+its own tracked bytes against its current Git commit, and requires
+`EXPECTED_TOOL_COMMIT` to equal the checked-out full commit SHA. The operator
+must take that value from the reviewed merge SHA recorded in issue #174; never
+use a worktree commit or an arbitrary revision. Run the transfer only after
+this tool is merged into protected primary. It does not invoke the root
+installer or change the application, database, helpers, sudoers, services, or
+`/var/lib` state.
+
+Run first in a repository clone containing the pinned commit:
+
+```sh
+EXPECTED_TOOL_COMMIT=<reviewed-protected-primary-merge-sha> \
+  MODE=check scripts/staging-next-helper-1-4-10-stage-sources.sh
+```
+
+Only after exact-source review and the source-transfer target identity checks
+pass, the separately authorized source transfer is:
+
+```sh
+EXPECTED_TOOL_COMMIT=<reviewed-protected-primary-merge-sha> \
+  MODE=stage scripts/staging-next-helper-1-4-10-stage-sources.sh
+```
+
+If staging is interrupted or a post-write check fails, the tool does not
+delete by pathname. It reports `ROLLBACK=HOLD;NO_AUTOMATIC_DELETE` and leaves
+the inert, versioned objects for inspection. Do not retry or remove them until
+an operator has reviewed their exact owner, mode, inode and hashes and follows
+a separately approved cleanup step.
+
+The remote precondition checks only the existing staging application directory,
+root-owned profile directory, and deploy user's source-staging destination. It
+does not check or create `/var/lib/wpcaregrid-deploy`; source transfer is
+separate from runtime layout provisioning. The Owner-reported absence of
+`/var/lib/wpcaregrid-deploy` therefore remains a **root installation STOP**,
+not a reason to recreate or populate that path during source transfer.
+
 ## Host operations: HOLD
 
 ### Preflight
 
-**Not available for 1.4.10.** `scripts/staging-149-preflight.py` is historical
-and does not verify the complete 1.4.10 install contract. Do not use it to infer
-1.4.10 readiness. No host facts are claimed by this runbook.
+The source-staging script performs only read-only checks of the existing app,
+profile, and source-staging identities. It is not the helper's runtime preflight.
+Do not use `scripts/staging-149-preflight.py` to infer 1.4.10 readiness.
 
 ### Source staging
 
-**Not available for 1.4.10.** The historical `staging-149-stage-sources.sh`
-and `staging-149-stage-on-host.py` are pinned to the 1.4.9 source artifacts.
-They are explicitly prohibited for this candidate. There is currently no
-reviewed, exact-SHA 1.4.10 staging path. Therefore there is no command to run
-for source staging; do not substitute the old scripts or manually improvise a
-transfer procedure.
+If the exact-source staging precondition returns anything other than
+`STAGING_1410_STAGE=CHECK_PASS` or `STAGING_1410_STAGE=PASS`, stop. Do not
+substitute the historical 1.4.9 tools or manually transfer files.
 
 ### Installation and verification
 
 **HOLD.** The root installer procedure in
 `docs/STAGING_NEXT_HELPER_1_4_10_INSTALL.md` assumes its installer and five
-pinned source files have already been safely staged. Because the 1.4.10 staging
-step is unavailable, do not run that procedure. This runbook's rollback section
-records intended recovery boundaries only; it does not establish an installation
-or authorize host changes.
+pinned source files have already been safely staged. Do not run that procedure
+unless the 1.4.10 source-staging step returned `STAGING_1410_STAGE=PASS` and a
+separate root-authorized runtime-layout acceptance also passed.
+
+Important limitation: the installer's `verify-install` probe confirms the
+installed helper's profile/caller and artifact identity; it does not validate
+that `/var/lib/wpcaregrid-deploy/staging-next` and its release/state roots
+exist. Its deployment `preflight` does inspect those roots but may reconcile an
+interrupted release or create gates/receipts, so it is not an installation
+probe. Therefore installation must remain HOLD until a separate reviewed,
+root-authorized, read-only environment-layout check proves every required path
+exists with the contract's owner/mode and the existing application/data
+relationship is preserved. Never create missing roots ad hoc to make the helper
+pass. Source-staging PASS does not satisfy this check or authorize installation.
 
 ## Rollback and STOP
 
