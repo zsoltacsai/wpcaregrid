@@ -483,7 +483,7 @@ def resolve_environment(name: str, *, production_config: Mapping[str, object] | 
 _OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "production_jobs_fence", "files", "services",
                                "www_data_scheduled_jobs", "helper", "same_uid_peers"})
 _SCHEDULED_JOB_KEYS = frozenset({"complete", "crontab_present", "system_cron_entries", "at_jobs"})
-_HELPER_KEYS = frozenset({"pid", "cgroup", "deploy_cli_profile_mode", "deploy_cli_cmdline_sha256"})
+_HELPER_KEYS = frozenset({"pid", "starttime", "cgroup", "deploy_cli_profile_mode", "deploy_cli_cmdline_sha256"})
 _FENCE_KEYS = frozenset({"units", "supervisor", "markers"})
 _FENCE_UNIT_KEYS = frozenset({"load_state", "active_state", "unit_file_state"})
 _FENCE_SUPERVISOR_KEYS = frozenset({"config_complete", "runtime_available", "programs"})
@@ -625,6 +625,7 @@ def _verify_no_www_data_scheduled_jobs(jobs: object) -> None:
 def _verify_helper(helper: object) -> Mapping:
     """The root helper console that may own transient production deploy-CLI peers."""
     if not isinstance(helper, Mapping) or set(helper) != _HELPER_KEYS or not _pid(helper["pid"]) \
+            or type(helper["starttime"]) is not int or helper["starttime"] < 0 \
             or not isinstance(helper["cgroup"], str) or not isinstance(helper["deploy_cli_profile_mode"], str) \
             or not isinstance(helper["deploy_cli_cmdline_sha256"], (list, tuple)) \
             or not 1 <= len(helper["deploy_cli_cmdline_sha256"]) <= 8 \
@@ -672,10 +673,14 @@ def _classify_peer(peer: Mapping, helper: Mapping) -> str:
         # Transient application PHP started by this root helper console, nowhere else.
         if unit or peer["cgroup"] != helper["cgroup"]:
             raise EnvironmentRefused("confinement_deploy_cli_outside_helper_session")
-        if exe != DEPLOY_CLI_EXECUTABLE:
+        if exe != DEPLOY_CLI_EXECUTABLE or peer["argv0"] != DEPLOY_CLI_EXECUTABLE:
             raise EnvironmentRefused("confinement_peer_executable_unexpected")
-        if any(v != WWW_DATA_UID for v in peer["uids"]) or any(v != WWW_DATA_GID for v in peer["gids"]):
+        if any(v != WWW_DATA_UID for v in peer["uids"]) or any(v != WWW_DATA_GID for v in peer["gids"]) \
+                or any(v != WWW_DATA_GID for v in peer["groups"]):
             raise EnvironmentRefused("confinement_deploy_cli_identity_invalid")
+        if peer["starttime"] < helper["starttime"]:
+            # Only children of this helper run: nothing left over from an earlier run.
+            raise EnvironmentRefused("confinement_deploy_cli_stale")
         if peer["cmdline_sha256"] not in helper["deploy_cli_cmdline_sha256"]:
             raise EnvironmentRefused("confinement_deploy_cli_command_unexpected")
         _forbidden_descriptor(peer, production_side=True)
@@ -792,7 +797,7 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
          "services": {role: {unit, load_state, active_state, main_pid, main_label,
                              apparmor_profile_property, loaded_profile_mode}},
          "www_data_scheduled_jobs": {complete, crontab_present, system_cron_entries, at_jobs},
-         "helper": {pid, cgroup, deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex]},
+         "helper": {pid, starttime, cgroup, deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex]},
          "same_uid_peers": {complete, incomplete_reasons,
                             processes: [{pid, starttime, uids, gids, groups, ppid, state, comm, exe, argv0,
                                          cmdline_sha256, cgroup, unit, label, fds}]}}
@@ -805,8 +810,9 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     allowed for that class and no descriptor into the other environment's
     private trees. There is no unconfined class. The production deploy-CLI
     class (``wpcaregrid-php-cli-production-deploy``) is only ``/usr/bin/php8.4``
-    as 33/33, running one of the helper's exact command lines inside the helper's
-    own root console session cgroup, never a service unit. No www-data crontab,
+    (exe and argv0) as 33/33 with no other supplementary group, started after the
+    current helper process, running one of the helper's exact command lines inside
+    the helper's own root console session cgroup, never a service unit. No www-data crontab,
     system cron line or at job may exist. Unknown, unconfined, complain-mode,
     mislabelled or incomplete evidence refuses.
 

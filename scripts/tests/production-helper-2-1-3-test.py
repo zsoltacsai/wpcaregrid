@@ -182,7 +182,7 @@ def observation(pin=PIN):
             "files": files, "services": services,
             "www_data_scheduled_jobs": {"complete": True, "crontab_present": False, "system_cron_entries": 0,
                                         "at_jobs": 0},
-            "helper": {"pid": 4000, "cgroup": HELPER_CGROUP, "deploy_cli_profile_mode": "enforce",
+            "helper": {"pid": 4000, "starttime": 50, "cgroup": HELPER_CGROUP, "deploy_cli_profile_mode": "enforce",
                        "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256()},
             "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes}}
 
@@ -529,6 +529,17 @@ class ContractTests(unittest.TestCase):
             CONTRACT.resolve_environment("production", production_config=production_config(
                 php_fpm_confinement=policy))
 
+    def test_acceptance_probe_profiles_are_never_a_class(self):
+        for item in (peer(8301, unit="run-u42.service", label="wpcaregrid-php-fpm-production-probe (enforce)",
+                          exe="/usr/bin/python3.12"),
+                     peer(8302, unit="php8.5-fpm.service", label="wpcaregrid-php-fpm-staging-next-probe (enforce)",
+                          exe="/usr/sbin/php-fpm8.5"),
+                     peer(8303, unit="", label="wpcaregrid-php-cli-production-deploy-probe (enforce)",
+                          exe="/usr/bin/php8.4")):
+            with self.subTest(label=item["label"]):
+                self.assertIn(self._refusal(lambda d, item=item: with_peer(d, item)),
+                              {"confinement_same_uid_peer_unknown", "confinement_peer_label_outside_unit"})
+
     def test_legacy_scheduler_is_the_seventh_attached_role(self):
         binding = CONTRACT.CONFINEMENT_SERVICES["jobs-legacy-scheduler"]
         self.assertEqual((binding.unit, binding.apparmor_profile, binding.attachment_path), (
@@ -565,6 +576,9 @@ class ContractTests(unittest.TestCase):
             (deploy_cli_peer(8204, argv=("/usr/bin/php8.4", "artisan", "tinker")),
              "confinement_deploy_cli_command_unexpected"),
             (deploy_cli_peer(8205, uids=[33, 33, 0, 33]), "confinement_deploy_cli_identity_invalid"),
+            (deploy_cli_peer(8208, groups=[33, 1001]), "confinement_deploy_cli_identity_invalid"),
+            (deploy_cli_peer(8209, argv0="php"), "confinement_peer_executable_unexpected"),
+            (deploy_cli_peer(8210, starttime=10), "confinement_deploy_cli_stale"),
             (deploy_cli_peer(8206, fds=["/var/lib/wpcaregrid-deploy/staging-next/shared/.env"]),
              "confinement_peer_foreign_descriptor"),
             (deploy_cli_peer(8207, label="wpcaregrid-php-cli-production-deploy (complain)"),
@@ -802,6 +816,112 @@ class BackendProfileTests(unittest.TestCase):
 # Backend: untrusted transfer input (no-follow, race, copy into root inbox)
 # ==========================================================================
 
+class BootstrapCacheTests(unittest.TestCase):
+    """www-data writes the candidate bootstrap/cache; root must never follow what it planted."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.release = self.tmp / "releases" / ("a" * 40)
+        self.cache = self.release / "bootstrap" / "cache"
+        self.cache.mkdir(parents=True)
+        (self.cache / ".gitignore").write_text("*\n!.gitignore\n")
+        (self.cache / ".gitignore").chmod(0o644)
+        self.cache.chmod(0o755)
+        self.victim = self.tmp / "victim"
+        self.victim.write_text("root-owned target\n")
+        self.victim.chmod(0o600)
+        uid = os.getuid()
+        self.profile = SimpleNamespace(build_application_bootstrap=True, test_only=True, expected_owner_uid=uid,
+                                       php_fpm_uid=uid, php_fpm_gid=os.getgid())
+        self.owned = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def run_bootstrap(self, plant=None):
+        def fake_php(profile, argv, **kwargs):
+            for name in ("packages.php", "services.php") if "package:discover" in argv else ("config.php",):
+                target = self.cache / name
+                if not target.exists():
+                    target.write_text("<?php return [];\n")
+            if plant is not None and "config:cache" in argv:
+                plant()
+            return b""
+
+        def record(fd, uid, gid):
+            self.owned.append((os.readlink(f"/proc/self/fd/{fd}"), uid, gid))
+
+        real_lstat = BACKEND._lstat
+
+        def lstat_model_root_group(path, reason):
+            info = real_lstat(path, reason)
+            if Path(path).name == ".gitignore":  # non-root test: model the root-group checked-out file
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid, st_gid=0, st_nlink=info.st_nlink)
+            return info
+
+        with patch.object(BACKEND, "_run_as_php_fpm", side_effect=fake_php), \
+                patch.object(BACKEND, "_lstat", side_effect=lstat_model_root_group), \
+                patch.object(BACKEND.os, "fchown", side_effect=record), \
+                patch.object(BACKEND.os, "chown"), \
+                patch.object(BACKEND, "_verify_generated_bootstrap_caches"):
+            BACKEND._prepare_application_bootstrap(self.profile, self.release)
+
+    def test_exact_generated_files_are_re_owned_by_descriptor_and_sealed(self):
+        self.run_bootstrap()
+        names = sorted(Path(path).name for path, _uid, _gid in self.owned)
+        self.assertEqual(names, ["cache", "cache", "config.php", "packages.php", "services.php"])
+        self.assertEqual(stat.S_IMODE(os.stat(self.cache).st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(os.stat(self.cache / "config.php").st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE(os.stat(self.cache / "packages.php").st_mode), 0o644)
+
+    def assert_refused_and_victim_untouched(self, plant, code):
+        with self.assertRaisesRegex(BACKEND.DeployRefused, code):
+            self.run_bootstrap(plant)
+        self.assertEqual(self.victim.read_text(), "root-owned target\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.victim).st_mode), 0o600)
+        self.assertNotIn(str(self.victim), [path for path, _uid, _gid in self.owned])
+        self.assertEqual(stat.S_IMODE(os.lstat(self.cache).st_mode), 0o700, "left sealed")
+
+    def test_symlink_planted_as_a_generated_file_is_never_followed(self):
+        def plant():
+            (self.cache / "config.php").unlink()
+            (self.cache / "config.php").symlink_to(self.victim)
+        self.assert_refused_and_victim_untouched(plant, "bootstrap_cache_unexpected_entry")
+
+    def test_extra_entry_hard_link_or_directory_is_refused(self):
+        self.assert_refused_and_victim_untouched(
+            lambda: (self.cache / "routes-v7.php").write_text("x"), "bootstrap_cache_unexpected_entry")
+        self.setUp()
+        self.assert_refused_and_victim_untouched(
+            lambda: os.link(self.cache / "services.php", self.tmp / "keep"), "bootstrap_cache_unexpected_entry")
+        self.setUp()
+        self.assert_refused_and_victim_untouched(
+            lambda: (self.cache / "events.php").mkdir(), "bootstrap_cache_unexpected_entry")
+
+    def test_swap_to_symlink_after_entry_check_is_refused_by_o_nofollow(self):
+        real = BACKEND._verify_cache_entries
+
+        def swap_after_check(profile, cache, *, required):
+            real(profile, cache, required=required)
+            (cache / "packages.php").unlink()
+            (cache / "packages.php").symlink_to(self.victim)
+
+        with patch.object(BACKEND, "_verify_cache_entries", side_effect=swap_after_check):
+            self.assert_refused_and_victim_untouched(None, "bootstrap_package_cache_metadata_invalid")
+
+    def test_activation_re_verifies_the_sealed_cache_first(self):
+        source = (ROOT / "scripts/deployment_backend_v2_1_3.py").read_text()
+        body = source[source.index("def deploy_release("):]
+        self.assertLess(body.index("_verify_generated_bootstrap_caches(profile, final)\n        activated = True"),
+                        body.index("_atomic_symlink(final, profile.application_link"))
+        for name in ("_prepare_application_bootstrap", "_prepare_package_discovery_cache"):
+            block = source[source.index(f"def {name}("):]
+            block = block[:block.index("\ndef ", 1)]
+            self.assertNotIn("os.chown(generated", block)
+            self.assertNotIn("os.chown(config_cache", block)
+            self.assertIn("_seal_cache_directory(profile, cache, mode=0o700)", block)
+
+
 class TransferInputTests(unittest.TestCase):
     APP = "a" * 40
 
@@ -991,7 +1111,7 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.process(1, uid=0, unit="", label="unconfined", exe="/usr/lib/systemd/systemd", comm="systemd")
         self.helper_pid = os.getpid()
         self.process(self.helper_pid, uid=0, unit="", label="unconfined", exe="/usr/bin/python3.12",
-                     comm="wpcaregrid-depl", cgroup=HELPER_CGROUP)
+                     comm="wpcaregrid-depl", cgroup=HELPER_CGROUP, starttime=1)
         self.profiles = self.tmp / "profiles"
         self.profiles.write_text("".join(f"{b.apparmor_profile} (enforce)\n"
                                          for b in CONTRACT.CONFINEMENT_SERVICES.values())
@@ -1104,8 +1224,8 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.assertEqual(data["services"]["production"]["main_label"], "wpcaregrid-php-fpm-production (enforce)")
         self.assertEqual(data["www_data_scheduled_jobs"], {"complete": True, "crontab_present": False,
                                                            "system_cron_entries": 0, "at_jobs": 0})
-        self.assertEqual((data["helper"]["pid"], data["helper"]["cgroup"], data["helper"]["deploy_cli_profile_mode"]),
-                         (self.helper_pid, HELPER_CGROUP, "enforce"))
+        self.assertEqual((data["helper"]["pid"], data["helper"]["starttime"], data["helper"]["cgroup"],
+                          data["helper"]["deploy_cli_profile_mode"]), (self.helper_pid, 1, HELPER_CGROUP, "enforce"))
         self.verify(data)
 
     def test_collected_production_jobs_fence(self):

@@ -2825,13 +2825,82 @@ def _stop_after_database_mutation(profile: StagingProfile, *, phase_b,
                             previous_sha, artifact_sha256)
 
 
+_CACHE_ENTRIES = frozenset({".gitignore", "config.php", "packages.php", "services.php"})
+
+
+def _cache_directory_fd(cache: Path) -> int:
+    try:
+        fd = os.open(cache, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        raise DeployRefused("bootstrap_cache_unavailable") from None
+    return fd
+
+
+def _seal_cache_directory(profile: StagingProfile, cache: Path, *, mode: int) -> None:
+    """Make the cache directory root-owned through a no-follow descriptor; 0700 forbids further changes."""
+    fd = _cache_directory_fd(cache)
+    try:
+        _require(stat.S_ISDIR(os.fstat(fd).st_mode), "bootstrap_cache_metadata_invalid")
+        os.fchmod(fd, 0o700)  # first: no www-data write or traversal from here on
+        os.fchown(fd, profile.expected_owner_uid, 0)
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+    except DeployRefused:
+        raise
+    except OSError:
+        raise DeployRefused("bootstrap_cache_publish_failed") from None
+    finally:
+        os.close(fd)
+
+
+def _verify_cache_entries(profile: StagingProfile, cache: Path, *, required: frozenset) -> None:
+    """Exactly the expected regular, single-link entries; never a symlink, device or extra file."""
+    try:
+        entries = set(os.listdir(cache))
+    except OSError:
+        raise DeployRefused("bootstrap_cache_unavailable") from None
+    _require(required <= entries <= _CACHE_ENTRIES, "bootstrap_cache_unexpected_entry")
+    for name in entries:
+        info = _lstat(cache / name, "bootstrap_cache_unexpected_entry")
+        _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "bootstrap_cache_unexpected_entry")
+    gitignore = _lstat(cache / ".gitignore", "bootstrap_cache_unexpected_entry")
+    _require(gitignore.st_uid == profile.expected_owner_uid and gitignore.st_gid == 0
+             and stat.S_IMODE(gitignore.st_mode) == 0o644, "release_bootstrap_cache_metadata_invalid")
+
+
+def _seal_generated_cache_file(path: Path, *, generated_uids: set, owner_uid: int, owner_gid: int,
+                               mode: int, reason: str) -> None:
+    """Re-own one generated file through an O_NOFOLLOW descriptor (never a path-following chown)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+                     | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        raise DeployRefused(reason) from None
+    try:
+        info = os.fstat(fd)
+        _require(stat.S_ISREG(info.st_mode) and info.st_uid in generated_uids and info.st_nlink == 1
+                 and info.st_size > 0, reason)
+        os.fchown(fd, owner_uid, owner_gid)
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+    except DeployRefused:
+        raise
+    except OSError:
+        raise DeployRefused(reason) from None
+    finally:
+        os.close(fd)
+
+
 def _verify_generated_bootstrap_caches(profile: StagingProfile, release_path: Path) -> None:
     if not profile.build_application_bootstrap:
         return
     cache = release_path / "bootstrap/cache"
     cache_info = _lstat(cache, "bootstrap_cache_unavailable")
     _require(stat.S_ISDIR(cache_info.st_mode) and cache_info.st_uid == profile.expected_owner_uid
-             and stat.S_IMODE(cache_info.st_mode) == 0o755, "bootstrap_cache_metadata_invalid")
+             and cache_info.st_gid == 0 and stat.S_IMODE(cache_info.st_mode) == 0o755,
+             "bootstrap_cache_metadata_invalid")
+    _verify_cache_entries(profile, cache, required=_CACHE_ENTRIES)
     for name in ("packages.php", "services.php"):
         info = _lstat(cache / name, "bootstrap_package_cache_missing")
         _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.expected_owner_uid
@@ -2853,27 +2922,21 @@ def _prepare_package_discovery_cache(profile: StagingProfile, release_path: Path
     _require(stat.S_ISDIR(cache_info.st_mode) and cache_info.st_uid == profile.expected_owner_uid
              and stat.S_IMODE(cache_info.st_mode) == 0o755, "bootstrap_cache_metadata_invalid")
     try:
-        os.chown(cache, profile.php_fpm_uid, profile.php_fpm_gid)
+        os.chown(cache, profile.php_fpm_uid, profile.php_fpm_gid, follow_symlinks=False)
         os.chmod(cache, 0o2750)
         _run_as_php_fpm(profile, [php, "artisan", "package:discover", "--ansi", "--no-interaction"],
                         cwd=release_path, timeout=60, maximum=8192)
-        for name in ("packages.php", "services.php"):
-            generated = cache / name
-            info = _lstat(generated, "bootstrap_package_cache_missing")
-            _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.php_fpm_uid
-                     and info.st_size > 0, "bootstrap_package_cache_metadata_invalid")
-            os.chown(generated, profile.expected_owner_uid, 0)
-            os.chmod(generated, 0o644)
-    except DeployRefused:
-        raise
     except OSError:
         raise DeployRefused("bootstrap_package_cache_publish_failed") from None
     finally:
-        try:
-            os.chown(cache, profile.expected_owner_uid, 0)
-            os.chmod(cache, 0o755)
-        except OSError:
-            raise DeployRefused("bootstrap_package_cache_publish_failed") from None
+        # Seal before inspecting anything www-data could have written.
+        _seal_cache_directory(profile, cache, mode=0o700)
+    _verify_cache_entries(profile, cache, required=frozenset({".gitignore", "packages.php", "services.php"}))
+    for name in ("packages.php", "services.php"):
+        _seal_generated_cache_file(cache / name, generated_uids={profile.php_fpm_uid},
+                                   owner_uid=profile.expected_owner_uid, owner_gid=0, mode=0o644,
+                                   reason="bootstrap_package_cache_metadata_invalid")
+    _seal_cache_directory(profile, cache, mode=0o755)
     for name in ("packages.php", "services.php"):
         info = _lstat(cache / name, "bootstrap_package_cache_missing")
         _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.expected_owner_uid
@@ -2890,41 +2953,27 @@ def _prepare_application_bootstrap(profile: StagingProfile, release_path: Path) 
     _require(stat.S_ISDIR(cache_info.st_mode) and cache_info.st_uid == profile.expected_owner_uid
              and stat.S_IMODE(cache_info.st_mode) == 0o755, "bootstrap_cache_metadata_invalid")
     try:
-        os.chown(cache, profile.php_fpm_uid, profile.php_fpm_gid)
+        os.chown(cache, profile.php_fpm_uid, profile.php_fpm_gid, follow_symlinks=False)
         os.chmod(cache, 0o2750)
     except OSError:
         raise DeployRefused("bootstrap_cache_publish_failed") from None
-    _run_as_php_fpm(profile, [php, "artisan", "package:discover", "--ansi", "--no-interaction"],
-                    cwd=release_path, timeout=60, maximum=8192)
-    _run_as_php_fpm(profile, [php, "artisan", "config:cache", "--no-interaction"],
-                    cwd=release_path, timeout=60, maximum=8192)
-    for name in ("packages.php", "services.php"):
-        generated = release_path / "bootstrap/cache" / name
-        generated_info = _lstat(generated, "bootstrap_package_cache_missing")
-        _require(stat.S_ISREG(generated_info.st_mode)
-                 and generated_info.st_uid in {profile.php_fpm_uid, profile.expected_owner_uid}
-                 and generated_info.st_size > 0, "bootstrap_package_cache_metadata_invalid")
-        try:
-            os.chown(generated, profile.expected_owner_uid, 0)
-            os.chmod(generated, 0o644)
-        except OSError:
-            raise DeployRefused("bootstrap_package_cache_publish_failed") from None
-    config_cache = release_path / "bootstrap/cache/config.php"
-    info = _lstat(config_cache, "bootstrap_config_cache_missing")
-    _require(stat.S_ISREG(info.st_mode) and info.st_uid == profile.php_fpm_uid and info.st_size > 0,
-             "bootstrap_config_cache_metadata_invalid")
     try:
-        os.chown(config_cache, profile.expected_owner_uid, profile.php_fpm_gid)
-        os.chmod(config_cache, 0o640)
-        os.chown(cache, profile.expected_owner_uid, 0)
-        os.chmod(cache, 0o755)
-        fd = os.open(config_cache, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except OSError:
-        raise DeployRefused("bootstrap_config_cache_publish_failed") from None
+        _run_as_php_fpm(profile, [php, "artisan", "package:discover", "--ansi", "--no-interaction"],
+                        cwd=release_path, timeout=60, maximum=8192)
+        _run_as_php_fpm(profile, [php, "artisan", "config:cache", "--no-interaction"],
+                        cwd=release_path, timeout=60, maximum=8192)
+    finally:
+        # Seal before inspecting anything www-data could have written (symlinks, extra files).
+        _seal_cache_directory(profile, cache, mode=0o700)
+    _verify_cache_entries(profile, cache, required=_CACHE_ENTRIES)
+    for name in ("packages.php", "services.php"):
+        _seal_generated_cache_file(cache / name, generated_uids={profile.php_fpm_uid, profile.expected_owner_uid},
+                                   owner_uid=profile.expected_owner_uid, owner_gid=0, mode=0o644,
+                                   reason="bootstrap_package_cache_metadata_invalid")
+    _seal_generated_cache_file(cache / "config.php", generated_uids={profile.php_fpm_uid},
+                               owner_uid=profile.expected_owner_uid, owner_gid=profile.php_fpm_gid, mode=0o640,
+                               reason="bootstrap_config_cache_metadata_invalid")
+    _seal_cache_directory(profile, cache, mode=0o755)
     _verify_generated_bootstrap_caches(profile, release_path)
 
 
@@ -3416,7 +3465,11 @@ def _observe_helper(loaded: Mapping[str, str]) -> Mapping[str, object]:
     unified = [line[3:] for line in text.splitlines() if line.startswith("0::")]
     _require(len(unified) == 1, "confinement_helper_cgroup_unavailable")
     module = _ENVIRONMENT_MODULE
-    return {"pid": pid, "cgroup": unified[0],
+    try:
+        _state, _ppid, starttime = _proc_stat(pid)
+    except (OSError, _PeerUnreadable):
+        raise DeployRefused("confinement_helper_cgroup_unavailable") from None
+    return {"pid": pid, "starttime": starttime, "cgroup": unified[0],
             "deploy_cli_profile_mode": loaded.get(module.DEPLOY_CLI_PROFILE, "unloaded"),
             "deploy_cli_cmdline_sha256": deploy_cli_cmdline_sha256()}
 
@@ -4036,6 +4089,9 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         # fail while fsyncing its parent directory. Treat the operation as
         # potentially activated before entering it so every such failure
         # attempts and verifies restoration of the previous release.
+        # The candidate cache was www-data-writable while PHP ran: re-verify its exact
+        # sealed state (owner, mode, entry set, no symlinks) immediately before switching.
+        _verify_generated_bootstrap_caches(profile, final)
         activated = True
         _atomic_symlink(final, profile.application_link, expected_owner_uid=profile.expected_owner_uid)
         active = Path(os.readlink(profile.application_link))
