@@ -1,5 +1,12 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-16 (GO-13 Workstream B: PHP-FPM confinement for the shared `www-data` UID — source only)
+
+- **Base:** `fa13359d8277cd3448bc43c471d3ec53e31cdc34`. Source only: nothing installed or loaded, no host, service, Nginx, helper or credential change; no PR, merge or push.
+- **What:** versioned artifacts under `deploy/php-fpm-confinement/1.0.0/` (AppArmor allowlist profiles for the production pool and `php8.5-fpm.service`, a deny-overlay for the shared `php8.4-fpm.service`, a new dedicated production unit, drop-ins, production-only FPM config, `SHA256SUMS`, live acceptance probe and matrix). Runbook with install, staged cutover and rollback: [PHP_FPM_CONFINEMENT_GO13.md](PHP_FPM_CONFINEMENT_GO13.md). Test: `scripts/tests/php-fpm-confinement-test.py` (CI step added after the G1 profile compile step; real `apparmor_parser` required there).
+- **Not proven by source tests:** kernel enforcement (ptrace/signal/unix/file mediation), external abstractions, inherited-descriptor behavior, mount-namespace behavior, real FPM/helper compatibility. Live acceptance in the runbook is required before any claim.
+- **Blocker to surface:** the production environment contract requires a dedicated `php_fpm_uid`/`php_fpm_gid` distinct from staging-next (`production_unix_identity_not_isolated`); this workstream keeps `www-data` per the no-new-UID constraint, so an Owner decision or reviewed contract revision is needed before a production profile can be enabled.
+
 ## Update — 2026-11-15 (GO-8.1 P1: production helper 2.1.1, corrected-policy successor of 2.1.0 — source only)
 
 - **Base:** PR #410 head `744b55225af5f7b063c9817ffd2aef25b6b9d6de`. Source only: nothing installed, no host/database/credential access, no merge, no push.

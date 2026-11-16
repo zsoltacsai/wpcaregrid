@@ -1,0 +1,839 @@
+{
+  "profiles": {
+    "wpcaregrid-php-fpm-production": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-vendor-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-code-write",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-env-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-vendor-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "own-code-exec",
+          "live": false,
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "own-storage-exec",
+          "live": false,
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/x"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "staging-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-release-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env-read",
+          "path": "/var/www/wpcaregrid/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-storage-read",
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "legacy-scheduler-lock",
+          "path": "/var/lib/wpcaregrid/scheduler.lock"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-shell",
+          "path": "/usr/bin/dash"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-python",
+          "path": "/usr/bin/python3"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php-cli",
+          "path": "/usr/bin/php8.4"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-incoming",
+          "path": "/var/lib/wpcaregrid-deploy/production/incoming/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-inbox",
+          "path": "/var/lib/wpcaregrid-deploy/production/inbox/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-state",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-receipts",
+          "path": "/var/lib/wpcaregrid-deploy/production/receipts/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-database-backups",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-profile",
+          "path": "/etc/wpcaregrid-deploy/profiles/production-v2.1.2.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-credentials",
+          "path": "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-home",
+          "path": "/home/deploy/.private/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-backups",
+          "path": "/home/deploy/private-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "root-ssh",
+          "path": "/root/.ssh/id_ed25519"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "shadow",
+          "path": "/etc/shadow"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "mysql-datadir",
+          "path": "/var/lib/mysql/"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "mysql-socket",
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-environ",
+          "path": "/proc/1/environ"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-cmdline",
+          "path": "/proc/1/cmdline"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-mem",
+          "path": "/proc/1/mem"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-fd",
+          "path": "/proc/1/fd/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-root",
+          "path": "/proc/1/root"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sysrq",
+          "path": "/proc/sysrq-trigger"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sys-write",
+          "path": "/proc/sys/vm/drop_caches"
+        }
+      ],
+      "environment": "production",
+      "file": "apparmor/wpcaregrid-php-fpm-production",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/www/wpcaregrid-production/current": "/var/www/wpcaregrid-production/releases/rel1",
+          "/var/www/wpcaregrid-production/releases/rel1/.env": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+          "/var/www/wpcaregrid-production/releases/rel1/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/rel1/vendor": "/var/lib/wpcaregrid-deploy/production/shared/vendor"
+        }
+      },
+      "other_sockets": [
+        "/run/php/php8.5-fpm.sock",
+        "/run/php/php8.4-fpm.sock",
+        "/run/php/php-fpm.sock"
+      ],
+      "own_socket": "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "own-socket",
+          "path": "/run/php/wpcaregrid-production-php8.4-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "staging-next-socket",
+          "path": "/run/php/php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "legacy-socket",
+          "path": "/run/php/php8.4-fpm.sock"
+        }
+      ],
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+        "/var/www/wpcaregrid-staging-new/.env",
+        "/var/www/wpcaregrid/.env",
+        "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+      ]
+    },
+    "wpcaregrid-php-fpm-staging-legacy": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-code-read",
+          "path": "/var/www/wpcaregrid/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "sibling-vhost-read",
+          "path": "/var/www/sibling-vhost-example/index.php"
+        },
+        {
+          "access": "x",
+          "expect": "allow",
+          "id": "existing-exec-php-cli",
+          "path": "/usr/bin/php8.4"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "production-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-log-read",
+          "path": "/var/log/wpcaregrid-production/php-fpm.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-own-incoming",
+          "path": "/var/lib/wpcaregrid-deploy/production/incoming/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-own-inbox",
+          "path": "/var/lib/wpcaregrid-deploy/production/inbox/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-own-state",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-own-receipts",
+          "path": "/var/lib/wpcaregrid-deploy/production/receipts/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-own-database-backups",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-own-incoming",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/incoming/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-own-inbox",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/inbox/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-own-state",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/state/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-own-receipts",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/receipts/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-next-own-database-backups",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-profile",
+          "path": "/etc/wpcaregrid-deploy/profiles/production-v2.1.2.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-credentials",
+          "path": "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-home",
+          "path": "/home/deploy/.private/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-backups",
+          "path": "/home/deploy/private-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "root-ssh",
+          "path": "/root/.ssh/id_ed25519"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "shadow",
+          "path": "/etc/shadow"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "mysql-datadir",
+          "path": "/var/lib/mysql/"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "mysql-socket",
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-environ",
+          "path": "/proc/1/environ"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-cmdline",
+          "path": "/proc/1/cmdline"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-mem",
+          "path": "/proc/1/mem"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-fd",
+          "path": "/proc/1/fd/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-root",
+          "path": "/proc/1/root"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sysrq",
+          "path": "/proc/sysrq-trigger"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sys-write",
+          "path": "/proc/sys/vm/drop_caches"
+        }
+      ],
+      "environment": "staging-legacy",
+      "file": "apparmor/wpcaregrid-php-fpm-staging-legacy",
+      "kind": "deny-overlay",
+      "layout": {
+        "symlinks": {}
+      },
+      "other_sockets": [
+        "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+        "/run/php/php8.5-fpm.sock"
+      ],
+      "own_socket": "/run/php/php8.4-fpm.sock",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "own-socket",
+          "path": "/run/php/php8.4-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "production-socket",
+          "path": "/run/php/wpcaregrid-production-php8.4-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "staging-next-socket",
+          "path": "/run/php/php8.5-fpm.sock"
+        }
+      ],
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+      ]
+    },
+    "wpcaregrid-php-fpm-staging-next": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-via-release-link",
+          "path": "/var/www/wpcaregrid-staging-new/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-vendor-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/framework/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-via-release-link",
+          "path": "/var/www/wpcaregrid-staging-new/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-code-write",
+          "path": "/var/www/wpcaregrid-staging-new/artisan"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-env-write",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-vendor-write",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/vendor/autoload.php"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "own-code-exec",
+          "live": false,
+          "path": "/var/www/wpcaregrid-staging-new/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "production-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-log-read",
+          "path": "/var/log/wpcaregrid-production/php-fpm.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env-read",
+          "path": "/var/www/wpcaregrid/.env"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "legacy-scheduler-lock",
+          "path": "/var/lib/wpcaregrid/scheduler.lock"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-python",
+          "path": "/usr/bin/python3"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php-cli",
+          "path": "/usr/bin/php8.5"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-incoming",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/incoming/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-inbox",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/inbox/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-state",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/state/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-receipts",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/receipts/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-database-backups",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-profile",
+          "path": "/etc/wpcaregrid-deploy/profiles/production-v2.1.2.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-credentials",
+          "path": "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-home",
+          "path": "/home/deploy/.private/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-backups",
+          "path": "/home/deploy/private-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "root-ssh",
+          "path": "/root/.ssh/id_ed25519"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "shadow",
+          "path": "/etc/shadow"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "mysql-datadir",
+          "path": "/var/lib/mysql/"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "mysql-socket",
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-environ",
+          "path": "/proc/1/environ"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-cmdline",
+          "path": "/proc/1/cmdline"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-mem",
+          "path": "/proc/1/mem"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-fd",
+          "path": "/proc/1/fd/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-root",
+          "path": "/proc/1/root"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sysrq",
+          "path": "/proc/sysrq-trigger"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sys-write",
+          "path": "/proc/sys/vm/drop_caches"
+        }
+      ],
+      "environment": "staging-next",
+      "file": "apparmor/wpcaregrid-php-fpm-staging-next",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/.env": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/storage": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage",
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/vendor": "/var/lib/wpcaregrid-deploy/staging-next/shared/vendor",
+          "/var/www/wpcaregrid-staging-new": "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1"
+        }
+      },
+      "other_sockets": [
+        "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+        "/run/php/php8.4-fpm.sock",
+        "/run/php/php-fpm.sock"
+      ],
+      "own_socket": "/run/php/php8.5-fpm.sock",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "own-socket",
+          "path": "/run/php/php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "production-socket",
+          "path": "/run/php/wpcaregrid-production-php8.4-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "legacy-socket",
+          "path": "/run/php/php8.4-fpm.sock"
+        }
+      ],
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
+        "/var/www/wpcaregrid-production/current/.env",
+        "/var/www/wpcaregrid/.env",
+        "/etc/wpcaregrid-deploy/staging-next-basic-auth.json"
+      ]
+    }
+  },
+  "schema": 1,
+  "version": "1.0.0"
+}
