@@ -46,7 +46,7 @@ class EnvironmentRefused(ValueError):
 CONTRACT_VERSION = "2.1.3"
 POLICY_SCHEMA = 2
 CONFINEMENT_SCHEMA = 2
-OBSERVATION_SCHEMA = 2
+OBSERVATION_SCHEMA = 3
 PRIVILEGED_INVOCATION = "root-console-direct"
 TRANSFER_USER = "deploy"
 WWW_DATA_UID = 33
@@ -55,22 +55,31 @@ WWW_DATA_GID = 33
 # the production transfer identity.
 STAGING_NEXT_DEPLOY_UID = 996
 
+# Installed paths, units and profile names follow the Workstream B package
+# structure (branch t3/go-13-php-fpm-confinement @97b8a4b, package 1.0.1). Only
+# structure is compiled here; no B hash is pinned until B's package is approved.
 _APPARMOR = "/etc/apparmor.d"
 _SYSTEMD = "/etc/systemd/system"
 _P_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-production"
 _N_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-staging-next"
 _L_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-staging-legacy"
 _COMMON = f"{_APPARMOR}/abstractions/wpcaregrid-php-fpm-common"
+_X_PROFILE = f"{_APPARMOR}/wpcaregrid-nginx"
+_J_PROFILE = f"{_APPARMOR}/wpcaregrid-php-cli-staging"
 _P_UNIT = f"{_SYSTEMD}/wpcaregrid-production-php8.4-fpm.service"
 _N_DROPIN = f"{_SYSTEMD}/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf"
 _L_DROPIN = f"{_SYSTEMD}/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf"
+_X_DROPIN = f"{_SYSTEMD}/nginx.service.d/90-wpcaregrid-confinement.conf"
+_SUP_DROPIN = f"{_SYSTEMD}/supervisor.service.d/90-wpcaregrid-confinement.conf"
+_SCH_DROPIN = f"{_SYSTEMD}/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf"
 _P_MASTER = "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf"
 _P_POOL = "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf"
 
 # Exact installed path set of the confinement package. The hashes are part of
 # the pin below; the set itself is fixed by this contract version.
 CONFINEMENT_FILES: tuple[str, ...] = (
-    _P_PROFILE, _N_PROFILE, _L_PROFILE, _COMMON, _P_UNIT, _N_DROPIN, _L_DROPIN, _P_MASTER, _P_POOL,
+    _P_PROFILE, _N_PROFILE, _L_PROFILE, _COMMON, _P_UNIT, _N_DROPIN, _L_DROPIN, _P_MASTER,
+    _X_PROFILE, _J_PROFILE, _X_DROPIN, _SUP_DROPIN, _SCH_DROPIN, _P_POOL,
 )
 
 
@@ -108,10 +117,50 @@ CONFINEMENT_SERVICES: Mapping[str, ServiceBinding] = MappingProxyType({
     "staging-legacy": ServiceBinding(
         "staging-legacy", "php8.4-fpm.service", "wpcaregrid-php-fpm-staging-legacy",
         _L_PROFILE, _L_DROPIN, (_L_PROFILE, _COMMON, _L_DROPIN)),
+    # Edge and job peers on the same www-data UID (B: nginx has its own deny set).
+    "nginx": ServiceBinding(
+        "nginx", "nginx.service", "wpcaregrid-nginx", _X_PROFILE, _X_DROPIN, (_X_PROFILE, _X_DROPIN)),
+    "jobs-supervisor": ServiceBinding(
+        "jobs-supervisor", "supervisor.service", "wpcaregrid-php-cli-staging",
+        _J_PROFILE, _SUP_DROPIN, (_J_PROFILE, _COMMON, _SUP_DROPIN)),
+    "jobs-scheduler": ServiceBinding(
+        "jobs-scheduler", "wpcaregrid-staging-next-scheduler.service", "wpcaregrid-php-cli-staging",
+        _J_PROFILE, _SCH_DROPIN, (_J_PROFILE, _COMMON, _SCH_DROPIN)),
 })
-# Every pool runs as the same www-data UID, so production is only isolated when
-# all three are attached and enforced, not merely the production pool.
-REQUIRED_ROLES: tuple[str, ...] = ("production", "staging-next", "staging-legacy")
+# Every www-data process shares one UID, so production is isolated only when
+# every service role is attached and enforced, not merely the production pool.
+REQUIRED_ROLES: tuple[str, ...] = (
+    "production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler")
+# Long-running roles that must be active with at least one www-data worker.
+SERVING_ROLES: tuple[str, ...] = ("production", "staging-next", "staging-legacy", "nginx")
+# Job roles may be idle (oneshot scheduler, stopped programs) but stay attached and enforced.
+JOB_ROLES: tuple[str, ...] = ("jobs-supervisor", "jobs-scheduler")
+JOBS_PROFILE = "wpcaregrid-php-cli-staging"
+# Legacy www-data cron (B): the crontab must equal the policy pin, the root-owned
+# wrapper is attached to the job profile by exact path, and the cron/sh shim is
+# the only unconfined www-data class.
+CRON_UNIT = "cron.service"
+CRON_WRAPPER_PATH = "/usr/local/bin/wpcaregrid-scheduler"
+WWW_DATA_CRONTAB_PATH = "/var/spool/cron/crontabs/www-data"
+CRON_SHIM_COMM = frozenset({"cron", "CRON", "dash", "sh"})
+CRON_SHIM_EXECUTABLES = frozenset({"/usr/sbin/cron", "/usr/bin/dash"})
+_JOB_EXECUTABLES = frozenset({"/usr/bin/php8.4", "/usr/bin/php8.5", "/usr/bin/dash", "/usr/bin/bash",
+                              "/usr/bin/flock", "/usr/bin/logger"})
+# Exact executables each www-data class may run (from the exec rules of B's profiles).
+CLASS_EXECUTABLES: Mapping[str, frozenset] = MappingProxyType({
+    "production": frozenset({"/usr/sbin/php-fpm8.4", "/usr/bin/kill"}),
+    "staging-next": frozenset({"/usr/sbin/php-fpm8.5", "/usr/bin/kill", "/usr/bin/dash",
+                               "/usr/lib/php/php-fpm-socket-helper"}),
+    "staging-legacy": frozenset({"/usr/sbin/php-fpm8.4"}),
+    "nginx": frozenset({"/usr/sbin/nginx"}),
+    "jobs-supervisor": _JOB_EXECUTABLES,
+    "jobs-scheduler": _JOB_EXECUTABLES,
+    "jobs-cron": _JOB_EXECUTABLES,
+})
+# Descriptor targets a peer of each side may never hold (other environment's secrets/state).
+_PRODUCTION_PRIVATE = ("/var/lib/wpcaregrid-deploy/production/",)
+_STAGING_PRIVATE = ("/var/lib/wpcaregrid-deploy/staging-next/", "/var/www/wpcaregrid-staging-new/",
+                    "/var/www/wpcaregrid/")
 
 
 @dataclass(frozen=True)
@@ -121,6 +170,8 @@ class PhpFpmConfinement:
     sha256sums_sha256: str
     file_sha256: Mapping[str, str]
     roles: tuple[str, ...]
+    # SHA-256 of the exact approved www-data crontab, or None for "no www-data crontab".
+    www_data_crontab_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -189,7 +240,8 @@ _ENVIRONMENT_FIELDS = (
     "privileged_invocation", "php_fpm_confinement",
 )
 _PRODUCTION_KEYS = frozenset({"schema", "profile", "enabled", *_ENVIRONMENT_FIELDS})
-_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "files", "services"})
+_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "files", "services",
+                               "www_data_crontab_sha256"})
 _SERVICE_KEYS = frozenset({"unit", "apparmor_profile", "profile_path", "attachment_path"})
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
@@ -276,8 +328,11 @@ def _confinement_config(data: object) -> PhpFpmConfinement:
                 "unit": binding.unit, "apparmor_profile": binding.apparmor_profile,
                 "profile_path": binding.profile_path, "attachment_path": binding.attachment_path}:
             raise EnvironmentRefused("production_confinement_service_binding_invalid")
+    crontab = data["www_data_crontab_sha256"]
+    if crontab is not None and not _sha(crontab):
+        raise EnvironmentRefused("production_confinement_cron_pin_invalid")
     return PhpFpmConfinement(pin.package_version, pin.sha256sums_sha256,
-                             MappingProxyType(dict(pin.file_sha256)), REQUIRED_ROLES)
+                             MappingProxyType(dict(pin.file_sha256)), REQUIRED_ROLES, crontab)
 
 
 def _production_config(data: object) -> EnvironmentContract:
@@ -416,60 +471,36 @@ def resolve_environment(name: str, *, production_config: Mapping[str, object] | 
 
 
 # --------------------------------------------------------------------------
-# Schema-2 observation (collected as root by the helper backend).
+# Schema-3 observation (collected as root by the helper backend).
 # --------------------------------------------------------------------------
 
-_OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "files", "services", "unbound_fpm_processes"})
+_OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "files", "services", "www_data_cron",
+                               "same_uid_peers"})
 _OBSERVED_FILE_KEYS = frozenset({"sha256", "uid", "gid", "mode", "type", "nlink", "parents_trusted"})
-_OBSERVED_SERVICE_KEYS = frozenset({"unit", "load_state", "active_state", "main_pid",
-                                    "apparmor_profile_property", "loaded_profile_mode", "processes"})
-_OBSERVED_PROCESS_KEYS = frozenset({"pid", "role", "label"})
-_UNBOUND_KEYS = frozenset({"pid", "label"})
+_OBSERVED_SERVICE_KEYS = frozenset({"unit", "load_state", "active_state", "main_pid", "main_label",
+                                    "apparmor_profile_property", "loaded_profile_mode"})
+_CRON_KEYS = frozenset({"crontab_sha256", "cron_d_entries", "wrapper", "profile_mode"})
+_WRAPPER_KEYS = frozenset({"uid", "gid", "mode", "type", "nlink"})
+_PEERS_KEYS = frozenset({"complete", "incomplete_reasons", "processes"})
+_PEER_KEYS = frozenset({"pid", "starttime", "uids", "gids", "groups", "ppid", "state", "comm", "exe", "argv0",
+                        "cmdline_sha256", "cgroup", "unit", "label", "fds"})
+_REASON = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_ACTIVE_SERVICE_STATES = frozenset({"active"})
+_JOB_SERVICE_STATES = frozenset({"active", "inactive", "activating", "deactivating"})
 
 
 def _pid(value: object) -> bool:
     return type(value) is int and 1 < value < 2**22 + 1
 
 
-def verify_confinement_observation(contract: EnvironmentContract, observation: object) -> None:
-    """Refuse unless a root-collected schema-2 observation matches the binding exactly.
+def _enforce(profile: str) -> str:
+    return f"{profile} (enforce)"
 
-    ``observation``::
 
-        {"schema": 2, "apparmor_enabled": bool,
-         "files": {installed_path: {sha256, uid, gid, mode, type, nlink, parents_trusted}},
-         "services": {role: {unit, load_state, active_state, main_pid,
-                             apparmor_profile_property, loaded_profile_mode,
-                             processes: [{pid, role: "master"|"worker"|"other", label}]}},
-         "unbound_fpm_processes": [{pid, label}]}
-
-    Missing, extra or malformed evidence refuses. Every role's service must be
-    loaded, active, attached (exact ``AppArmorProfile=``, no ``-`` fail-open
-    prefix) to its profile, the profile must be loaded in enforce mode, and the
-    master plus every worker must carry ``<profile> (enforce)``. Any PHP-FPM
-    process outside the bound services refuses. Passing means only that the
-    recorded state matches; kernel enforcement is a separate live gate.
-    """
-    pin = confinement_pin()
-    confinement = getattr(contract, "php_fpm_confinement", None)
-    if (getattr(contract, "name", None) != "production" or not isinstance(confinement, PhpFpmConfinement)
-            or confinement.package_version != pin.package_version
-            or confinement.sha256sums_sha256 != pin.sha256sums_sha256
-            or dict(confinement.file_sha256) != dict(pin.file_sha256)
-            or tuple(confinement.roles) != REQUIRED_ROLES):
-        raise EnvironmentRefused("confinement_not_bound")
-    if not isinstance(observation, Mapping) or set(observation) != _OBSERVATION_KEYS \
-            or type(observation["schema"]) is not int or observation["schema"] != OBSERVATION_SCHEMA \
-            or not isinstance(observation["files"], Mapping) or not isinstance(observation["services"], Mapping) \
-            or not isinstance(observation["unbound_fpm_processes"], (list, tuple)) \
-            or type(observation["apparmor_enabled"]) is not bool:
+def _verify_files(pin: ConfinementPin, files: object) -> None:
+    if not isinstance(files, Mapping):
         raise EnvironmentRefused("confinement_observation_invalid")
-    if observation["apparmor_enabled"] is not True:
-        raise EnvironmentRefused("confinement_apparmor_disabled")
-
-    files = observation["files"]
-    missing_files = set(CONFINEMENT_FILES) - set(files)
-    if missing_files:
+    if set(CONFINEMENT_FILES) - set(files):
         raise EnvironmentRefused("confinement_file_missing")
     if set(files) != set(CONFINEMENT_FILES):
         raise EnvironmentRefused("confinement_observation_extra_file")
@@ -490,23 +521,26 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
         if not _sha(observed["sha256"]) or observed["sha256"] != pin.file_sha256[path]:
             raise EnvironmentRefused("confinement_file_hash_mismatch")
 
-    services = observation["services"]
+
+def _verify_services(services: object) -> None:
+    if not isinstance(services, Mapping):
+        raise EnvironmentRefused("confinement_observation_invalid")
     if set(REQUIRED_ROLES) - set(services):
         raise EnvironmentRefused("confinement_service_unobserved")
     if set(services) != set(REQUIRED_ROLES):
         raise EnvironmentRefused("confinement_observation_extra_service")
-    seen_pids: set[int] = set()
     for role in REQUIRED_ROLES:
         binding = CONFINEMENT_SERVICES[role]
         entry = services[role]
         if not isinstance(entry, Mapping) or set(entry) != _OBSERVED_SERVICE_KEYS \
                 or not all(isinstance(entry[key], str) for key in (
-                    "unit", "load_state", "active_state", "apparmor_profile_property", "loaded_profile_mode")) \
-                or type(entry["main_pid"]) is not int or not isinstance(entry["processes"], (list, tuple)):
+                    "unit", "load_state", "active_state", "apparmor_profile_property", "loaded_profile_mode",
+                    "main_label")) or type(entry["main_pid"]) is not int:
             raise EnvironmentRefused("confinement_observation_invalid")
         if entry["unit"] != binding.unit:
             raise EnvironmentRefused("confinement_service_unit_mismatch")
-        if entry["load_state"] != "loaded" or entry["active_state"] != "active" or not _pid(entry["main_pid"]):
+        allowed = _ACTIVE_SERVICE_STATES if role in SERVING_ROLES else _JOB_SERVICE_STATES
+        if entry["load_state"] != "loaded" or entry["active_state"] not in allowed:
             raise EnvironmentRefused("confinement_service_not_active")
         attachment = entry["apparmor_profile_property"]
         if attachment == "":
@@ -517,34 +551,155 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
             raise EnvironmentRefused("confinement_service_profile_mismatch")
         if entry["loaded_profile_mode"] != "enforce":
             raise EnvironmentRefused("confinement_profile_not_enforced")
-        masters = workers = 0
-        expected_label = f"{binding.apparmor_profile} (enforce)"
-        for process in entry["processes"]:
-            if not isinstance(process, Mapping) or set(process) != _OBSERVED_PROCESS_KEYS \
-                    or not _pid(process["pid"]) or not isinstance(process["label"], str) \
-                    or process["role"] not in {"master", "worker", "other"}:
-                raise EnvironmentRefused("confinement_observation_invalid")
-            if process["pid"] in seen_pids:
-                raise EnvironmentRefused("confinement_observation_invalid")
-            seen_pids.add(process["pid"])
-            if process["role"] == "other":
-                raise EnvironmentRefused("confinement_service_foreign_process")
-            if process["role"] == "master":
-                if process["pid"] != entry["main_pid"]:
-                    raise EnvironmentRefused("confinement_observation_invalid")
-                masters += 1
-            else:
-                workers += 1
-            if process["label"] != expected_label:
-                raise EnvironmentRefused("confinement_process_not_confined")
-        if masters != 1:
-            raise EnvironmentRefused("confinement_master_label_missing")
-        if workers < 1:
-            raise EnvironmentRefused("confinement_worker_labels_missing")
-
-    for process in observation["unbound_fpm_processes"]:
-        if not isinstance(process, Mapping) or set(process) != _UNBOUND_KEYS or not _pid(process["pid"]) \
-                or not isinstance(process["label"], str):
+        if entry["active_state"] == "active":
+            # The (often root) master/main process is attached too, not only its www-data workers.
+            if not _pid(entry["main_pid"]):
+                raise EnvironmentRefused("confinement_service_not_active")
+            if entry["main_label"] != _enforce(binding.apparmor_profile):
+                raise EnvironmentRefused("confinement_master_not_confined")
+        elif entry["main_label"] != "":
+            # Not active: no main label is read; its www-data processes are still in the peer inventory.
             raise EnvironmentRefused("confinement_observation_invalid")
-    if observation["unbound_fpm_processes"]:
-        raise EnvironmentRefused("confinement_unbound_fpm_process")
+
+
+def _verify_cron(confinement: PhpFpmConfinement, cron: object) -> bool:
+    """The legacy www-data crontab may exist only as the exact pinned one with an attached wrapper."""
+    if not isinstance(cron, Mapping) or set(cron) != _CRON_KEYS or type(cron["cron_d_entries"]) is not int \
+            or not isinstance(cron["profile_mode"], str) \
+            or (cron["crontab_sha256"] is not None and not _sha(cron["crontab_sha256"])):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if cron["cron_d_entries"] != 0:
+        raise EnvironmentRefused("confinement_cron_unpinned")  # system crontab jobs as www-data are never pinned
+    if cron["crontab_sha256"] is None:
+        return False
+    if confinement.www_data_crontab_sha256 is None or cron["crontab_sha256"] != confinement.www_data_crontab_sha256:
+        raise EnvironmentRefused("confinement_cron_unpinned")
+    wrapper = cron["wrapper"]
+    if not isinstance(wrapper, Mapping) or set(wrapper) != _WRAPPER_KEYS \
+            or not all(type(wrapper[k]) is int for k in ("uid", "gid", "mode", "nlink")):
+        raise EnvironmentRefused("confinement_cron_wrapper_unsafe")
+    if wrapper["type"] != "regular" or wrapper["uid"] != 0 or wrapper["gid"] != 0 \
+            or wrapper["mode"] & 0o022 or wrapper["nlink"] != 1:
+        raise EnvironmentRefused("confinement_cron_wrapper_unsafe")
+    if cron["profile_mode"] != "enforce":
+        raise EnvironmentRefused("confinement_cron_wrapper_unconfined")
+    return True
+
+
+def _peer_valid(peer: object) -> bool:
+    return (isinstance(peer, Mapping) and set(peer) == _PEER_KEYS and _pid(peer["pid"])
+            and type(peer["starttime"]) is int and peer["starttime"] >= 0
+            and type(peer["ppid"]) is int and peer["ppid"] >= 0
+            and isinstance(peer["uids"], (list, tuple)) and len(peer["uids"]) == 4
+            and isinstance(peer["gids"], (list, tuple)) and len(peer["gids"]) == 4
+            and isinstance(peer["groups"], (list, tuple))
+            and all(type(v) is int and v >= 0 for v in (*peer["uids"], *peer["gids"], *peer["groups"]))
+            and all(isinstance(peer[k], str) for k in ("state", "comm", "exe", "argv0", "cgroup", "unit", "label"))
+            and _sha(peer["cmdline_sha256"])
+            and isinstance(peer["fds"], (list, tuple)) and all(isinstance(fd, str) for fd in peer["fds"]))
+
+
+def _classify_peer(peer: Mapping, cron_pinned: bool) -> str:
+    """Map one www-data process to exactly one permitted class or refuse."""
+    unit, label, exe = peer["unit"], peer["label"], peer["exe"]
+    if unit and peer["cgroup"] != f"/system.slice/{unit}":
+        raise EnvironmentRefused("confinement_peer_cgroup_unexpected")
+    if label == "unconfined":
+        if unit == CRON_UNIT and peer["comm"] in CRON_SHIM_COMM and exe in CRON_SHIM_EXECUTABLES:
+            if not cron_pinned:
+                raise EnvironmentRefused("confinement_cron_unpinned")
+            return "cron-shim"
+        raise EnvironmentRefused("confinement_same_uid_peer_unconfined")
+    if not label.endswith(" (enforce)"):
+        raise EnvironmentRefused("confinement_process_not_confined")  # complain, kill, unknown modes
+    candidates = [role for role in REQUIRED_ROLES if CONFINEMENT_SERVICES[role].unit == unit]
+    if unit == CRON_UNIT and label == _enforce(JOBS_PROFILE):
+        if not cron_pinned:
+            raise EnvironmentRefused("confinement_cron_unpinned")
+        candidates = ["jobs-cron"]
+    elif not candidates:
+        if any(label == _enforce(b.apparmor_profile) for b in CONFINEMENT_SERVICES.values()):
+            raise EnvironmentRefused("confinement_peer_label_outside_unit")
+        raise EnvironmentRefused("confinement_same_uid_peer_unknown")
+    role = candidates[0]
+    expected_label = _enforce(JOBS_PROFILE if role == "jobs-cron" else CONFINEMENT_SERVICES[role].apparmor_profile)
+    if label != expected_label:
+        raise EnvironmentRefused("confinement_peer_label_outside_unit")
+    if exe not in CLASS_EXECUTABLES[role]:
+        raise EnvironmentRefused("confinement_peer_executable_unexpected")
+    forbidden = _STAGING_PRIVATE if role == "production" else _PRODUCTION_PRIVATE
+    for target in peer["fds"]:
+        path = target.removesuffix(" (deleted)")
+        if path.startswith(forbidden) or path + "/" in forbidden:
+            raise EnvironmentRefused("confinement_peer_foreign_descriptor")
+    return role
+
+
+def _verify_peers(peers: object, services: Mapping, cron_pinned: bool) -> None:
+    if not isinstance(peers, Mapping) or set(peers) != _PEERS_KEYS or type(peers["complete"]) is not bool \
+            or not isinstance(peers["processes"], (list, tuple)) \
+            or not isinstance(peers["incomplete_reasons"], (list, tuple)) \
+            or any(not isinstance(r, str) or _REASON.fullmatch(r) is None for r in peers["incomplete_reasons"]):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if peers["complete"] is not True or peers["incomplete_reasons"]:
+        raise EnvironmentRefused("confinement_peer_inventory_incomplete")
+    seen: set[int] = set()
+    roles_seen: set[str] = set()
+    for peer in peers["processes"]:
+        if not _peer_valid(peer) or peer["pid"] in seen:
+            raise EnvironmentRefused("confinement_observation_invalid")
+        seen.add(peer["pid"])
+        if WWW_DATA_UID not in peer["uids"] and WWW_DATA_GID not in peer["gids"] \
+                and WWW_DATA_GID not in peer["groups"]:
+            raise EnvironmentRefused("confinement_observation_invalid")  # collector must list only www-data peers
+        roles_seen.add(_classify_peer(peer, cron_pinned))
+    for role in SERVING_ROLES:
+        if role not in roles_seen:
+            raise EnvironmentRefused("confinement_worker_labels_missing")
+        if services[role]["main_pid"] in seen:
+            raise EnvironmentRefused("confinement_observation_invalid")  # masters are root, never www-data
+
+
+def verify_confinement_observation(contract: EnvironmentContract, observation: object) -> None:
+    """Refuse unless a root-collected schema-3 observation matches the binding exactly.
+
+    ``observation``::
+
+        {"schema": 3, "apparmor_enabled": bool,
+         "files": {installed_path: {sha256, uid, gid, mode, type, nlink, parents_trusted}},
+         "services": {role: {unit, load_state, active_state, main_pid, main_label,
+                             apparmor_profile_property, loaded_profile_mode}},
+         "www_data_cron": {crontab_sha256, cron_d_entries, wrapper, profile_mode},
+         "same_uid_peers": {complete, incomplete_reasons,
+                            processes: [{pid, starttime, uids, gids, groups, ppid, state, comm, exe, argv0,
+                                         cmdline_sha256, cgroup, unit, label, fds}]}}
+
+    ``same_uid_peers`` lists every live process whose real, effective, saved or
+    filesystem UID or GID, or any supplementary group, is www-data, independent
+    of its command name. Each
+    must map to exactly one class: its systemd unit (from the kernel cgroup),
+    the exact ``<profile> (enforce)`` label bound to that unit, an executable
+    allowed for that class and no descriptor into the other environment's
+    private trees. The only unconfined class is the pinned cron shim. Unknown,
+    unconfined, complain-mode, mislabelled or incomplete evidence refuses.
+    Passing means the recorded state matches; kernel enforcement is a separate
+    live gate.
+    """
+    pin = confinement_pin()
+    confinement = getattr(contract, "php_fpm_confinement", None)
+    if (getattr(contract, "name", None) != "production" or not isinstance(confinement, PhpFpmConfinement)
+            or confinement.package_version != pin.package_version
+            or confinement.sha256sums_sha256 != pin.sha256sums_sha256
+            or dict(confinement.file_sha256) != dict(pin.file_sha256)
+            or tuple(confinement.roles) != REQUIRED_ROLES):
+        raise EnvironmentRefused("confinement_not_bound")
+    if not isinstance(observation, Mapping) or set(observation) != _OBSERVATION_KEYS \
+            or type(observation["schema"]) is not int or observation["schema"] != OBSERVATION_SCHEMA \
+            or type(observation["apparmor_enabled"]) is not bool:
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if observation["apparmor_enabled"] is not True:
+        raise EnvironmentRefused("confinement_apparmor_disabled")
+    _verify_files(pin, observation["files"])
+    _verify_services(observation["services"])
+    cron_pinned = _verify_cron(confinement, observation["www_data_cron"])
+    _verify_peers(observation["same_uid_peers"], observation["services"], cron_pinned)

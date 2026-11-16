@@ -17,7 +17,7 @@ unchanged. GO-13 changes only the production privilege and isolation model:
   private inbox. Nothing deploy-owned is executed as root.
 * PHP-FPM: production keeps the shared ``www-data`` 33/33 identity only with
   the exact confinement binding of ``deployment_environment_contract_2_1_3``
-  and a passing root-collected schema-2 observation before preflight, stage
+  and a passing root-collected schema-3 observation before preflight, stage
   and deploy. Application PHP launched by this helper runs as ``www-data``
   under the production AppArmor profile (``aa-exec``).
 
@@ -94,7 +94,7 @@ if _REVIEW_POLICY_MODULE is None:
 ReviewRefused = _REVIEW_POLICY_MODULE.ReviewRefused
 verify_agent_release_reviews = _REVIEW_POLICY_MODULE.verify_agent_release_reviews
 
-# The 2.1.3 environment contract owns the confinement pin and the schema-2
+# The 2.1.3 environment contract owns the confinement pin and the schema-3
 # observation check. The entrypoint registers the exact hash-verified bytes
 # under this name before loading the backend; the file fallback exists only
 # for unprivileged synthetic tests.
@@ -123,6 +123,10 @@ CONFINEMENT_CGROUP_ROOT = Path("/sys/fs/cgroup")
 CONFINEMENT_APPARMOR_PROFILES = Path("/sys/kernel/security/apparmor/profiles")
 CONFINEMENT_APPARMOR_ENABLED = Path("/sys/module/apparmor/parameters/enabled")
 MAX_CONFINEMENT_FILE_BYTES = 1_000_000
+CONFINEMENT_CRONTAB = Path("/var/spool/cron/crontabs/www-data")
+CONFINEMENT_SYSTEM_CRONTAB = Path("/etc/crontab")
+CONFINEMENT_CRON_D = Path("/etc/cron.d")
+CONFINEMENT_CRON_WRAPPER = Path("/usr/local/bin/wpcaregrid-scheduler")
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-2.0.0.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
@@ -3109,7 +3113,7 @@ def _observe_confinement_file(path: Path) -> Mapping[str, object] | None:
 
 def _systemd_properties(unit: str) -> Mapping[str, str]:
     raw = _run_fixed(["/bin/systemctl", "show", "--no-pager",
-                      "--property=Id,LoadState,ActiveState,MainPID,ControlGroup,AppArmorProfile", "--", unit],
+                      "--property=Id,LoadState,ActiveState,MainPID,AppArmorProfile", "--", unit],
                      timeout=10, maximum=8192)
     try:
         lines = raw.decode("utf-8").splitlines()
@@ -3123,54 +3127,238 @@ def _systemd_properties(unit: str) -> Mapping[str, str]:
         key, value = line.split("=", 1)
         _require(key not in properties, "confinement_service_properties_invalid")
         properties[key] = value
-    _require(set(properties) == {"Id", "LoadState", "ActiveState", "MainPID", "ControlGroup", "AppArmorProfile"}
+    _require(set(properties) == {"Id", "LoadState", "ActiveState", "MainPID", "AppArmorProfile"}
              and properties["Id"] == unit, "confinement_service_properties_invalid")
     return properties
 
 
-def _process_label(pid: int) -> str:
-    base = CONFINEMENT_PROC_ROOT / str(pid) / "attr"
-    for candidate in (base / "apparmor" / "current", base / "current"):
+class _PeerGone(Exception):
+    """The PID was proven absent from /proc: the process exited during the scan."""
+
+
+class _PeerUnreadable(Exception):
+    """A live PID could not be read or parsed; carries a fixed reason code."""
+
+
+_PEER_UNIT_RE = re.compile(r"/system\.slice/([A-Za-z0-9@._:-]+\.service)")
+_STAT_RE = re.compile(rb"\A([0-9]+) \((.{0,64})\) ([A-Za-z]) (.*)\Z", re.S)
+
+
+def _read_proc_bytes(path: Path, *, maximum: int) -> bytes:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+    try:
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum:
+                raise _PeerUnreadable("peer_record_too_large")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _proc_stat(pid: int) -> tuple[str, int, int]:
+    """Return (state, ppid, starttime) from /proc/<pid>/stat."""
+    raw = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "stat", maximum=4096)
+    match = _STAT_RE.fullmatch(raw.rstrip(b"\n"))
+    if match is None or int(match.group(1)) != pid:
+        raise _PeerUnreadable("peer_stat_unparsable")
+    # Field 3 is state; the remainder starts at field 4 (ppid); starttime is field 22.
+    rest = match.group(4).split()
+    if len(rest) < 19 or not rest[0].isdigit() or not rest[18].isdigit():
+        raise _PeerUnreadable("peer_stat_unparsable")
+    return match.group(3).decode("ascii"), int(rest[0]), int(rest[18])
+
+
+def _settle_failure(pid: int, starttime: int | None, reason: str) -> None:
+    """Raise _PeerGone only when /proc/<pid> is really gone; a live or reused PID never is."""
+    try:
+        os.lstat(CONFINEMENT_PROC_ROOT / str(pid))
+    except FileNotFoundError:
+        raise _PeerGone() from None
+    except OSError:
+        raise _PeerUnreadable("peer_unreadable") from None
+    if starttime is not None:
         try:
-            os.lstat(candidate)
+            _state, _ppid, current = _proc_stat(pid)
         except FileNotFoundError:
-            continue
-        except OSError:
-            break
-        return _read_host_text(candidate, maximum=4096, reason="confinement_process_label_unavailable").strip("\x00\n")
-    raise DeployRefused("confinement_process_label_unavailable")
+            raise _PeerGone() from None
+        except (OSError, _PeerUnreadable):
+            raise _PeerUnreadable(reason) from None
+        if current != starttime:
+            raise _PeerUnreadable("peer_pid_reused")
+    raise _PeerUnreadable(reason)
 
 
-def _process_parent(pid: int) -> int:
-    status = _read_host_text(CONFINEMENT_PROC_ROOT / str(pid) / "status", maximum=65536,
-                             reason="confinement_process_status_unavailable")
+def _id_line(status: str, key: str) -> list[int]:
     for line in status.splitlines():
-        if line.startswith("PPid:"):
-            value = line.split(":", 1)[1].strip()
-            _require(value.isdigit(), "confinement_process_status_unavailable")
-            return int(value)
-    raise DeployRefused("confinement_process_status_unavailable")
+        if line.startswith(f"{key}:"):
+            values = line.split(":", 1)[1].split()
+            if len(values) != 4 or not all(value.isdigit() for value in values):
+                raise _PeerUnreadable("peer_status_unparsable")
+            return [int(value) for value in values]
+    raise _PeerUnreadable("peer_status_unparsable")
 
 
-def _cgroup_processes(control_group: str) -> list[int]:
-    _require(re.fullmatch(r"/system\.slice/[A-Za-z0-9@._:-]+\.service", control_group) is not None,
-             "confinement_service_cgroup_invalid")
-    raw = _read_host_text(CONFINEMENT_CGROUP_ROOT / control_group.lstrip("/") / "cgroup.procs",
-                          maximum=1_000_000, reason="confinement_service_cgroup_unavailable")
-    pids = []
-    for line in raw.splitlines():
-        _require(line.isdigit(), "confinement_service_cgroup_invalid")
-        pids.append(int(line))
-    return pids
+def _groups_line(status: str) -> list[int]:
+    for line in status.splitlines():
+        if line.startswith("Groups:"):
+            values = line.split(":", 1)[1].split()
+            if not all(value.isdigit() for value in values):
+                raise _PeerUnreadable("peer_status_unparsable")
+            return [int(value) for value in values]
+    raise _PeerUnreadable("peer_status_unparsable")
+
+
+def _peer_label(pid: int) -> str:
+    base = CONFINEMENT_PROC_ROOT / str(pid) / "attr"
+    try:
+        raw = _read_proc_bytes(base / "apparmor" / "current", maximum=4096)
+    except FileNotFoundError:
+        if not os.path.lexists(CONFINEMENT_PROC_ROOT / str(pid)):
+            raise
+        raw = _read_proc_bytes(base / "current", maximum=4096)
+    return raw.decode("utf-8").strip("\x00\n ")
+
+
+def _inventory_pid(pid: int) -> Mapping[str, object] | None:
+    """Read one PID. None: not a www-data process (or a zombie). Raises _PeerGone/_PeerUnreadable."""
+    starttime = None
+    try:
+        state, ppid, starttime = _proc_stat(pid)
+        status = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "status", maximum=65536).decode("utf-8")
+        uids, gids = _id_line(status, "Uid"), _id_line(status, "Gid")
+        groups = _groups_line(status)
+        if 33 not in uids and 33 not in gids and 33 not in groups:
+            return None
+        if state in {"Z", "X"}:
+            return None  # exited; holds no files and runs no code
+        base = CONFINEMENT_PROC_ROOT / str(pid)
+        comm = _read_proc_bytes(base / "comm", maximum=256).decode("utf-8", "replace").rstrip("\n")
+        cmdline = _read_proc_bytes(base / "cmdline", maximum=1_000_000)
+        exe = os.readlink(base / "exe")
+        cgroup_text = _read_proc_bytes(base / "cgroup", maximum=65536).decode("utf-8")
+        unified = [line[3:] for line in cgroup_text.splitlines() if line.startswith("0::")]
+        if len(unified) != 1:
+            raise _PeerUnreadable("peer_cgroup_unparsable")
+        unit_match = _PEER_UNIT_RE.fullmatch(unified[0])
+        label = _peer_label(pid)
+        fds = []
+        names = os.listdir(base / "fd")
+        if len(names) > 4096:
+            raise _PeerUnreadable("peer_descriptor_table_too_large")
+        for name in names:
+            try:
+                fds.append(os.readlink(base / "fd" / name))
+            except FileNotFoundError:
+                if not os.path.lexists(base):
+                    raise
+                continue  # that descriptor was closed meanwhile; the process is still checked below
+        _end_state, _end_ppid, end_starttime = _proc_stat(pid)
+    except _PeerUnreadable as error:
+        _settle_failure(pid, starttime, str(error))
+        raise AssertionError("unreachable")  # pragma: no cover
+    except (OSError, UnicodeError, ValueError):
+        _settle_failure(pid, starttime, "peer_unreadable")
+        raise AssertionError("unreachable")  # pragma: no cover
+    if end_starttime != starttime:
+        raise _PeerUnreadable("peer_pid_reused")
+    argv = cmdline.split(b"\x00")
+    return {"pid": pid, "starttime": starttime, "uids": uids, "gids": gids, "groups": groups, "ppid": ppid, "state": state,
+            "comm": comm, "exe": exe, "argv0": argv[0].decode("utf-8", "replace")[:256] if argv else "",
+            "cmdline_sha256": hashlib.sha256(cmdline).hexdigest(), "cgroup": unified[0],
+            "unit": unit_match.group(1) if unit_match else "", "label": label, "fds": sorted(fds)}
+
+
+def _inventory_same_uid_peers() -> Mapping[str, object]:
+    """Every live process with www-data as a UID, GID or supplementary group, independent of its name."""
+    processes: dict[int, Mapping[str, object]] = {}
+    examined: set[int] = set()
+    reasons: list[str] = []
+    for _pass in range(3):
+        try:
+            listing = {int(entry) for entry in os.listdir(CONFINEMENT_PROC_ROOT) if entry.isdigit()}
+        except OSError:
+            raise DeployRefused("confinement_process_table_unavailable") from None
+        pending = sorted(listing - examined)
+        if not pending:
+            break
+        for pid in pending:
+            examined.add(pid)
+            try:
+                record = _inventory_pid(pid)
+            except _PeerGone:
+                continue
+            except _PeerUnreadable as error:
+                reasons.append(str(error))
+                continue
+            if record is not None:
+                processes[pid] = record
+    else:
+        reasons.append("peer_set_unstable")
+    return {"complete": not reasons, "incomplete_reasons": sorted(set(reasons)),
+            "processes": [processes[pid] for pid in sorted(processes)]}
+
+
+def _cron_entries_for_www_data(text: str) -> int:
+    count = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or re.match(r"[A-Za-z_][A-Za-z0-9_]*\s*=", line):
+            continue
+        fields = line.split()
+        user = fields[1] if fields[0].startswith("@") and len(fields) > 2 else fields[5] if len(fields) > 6 else None
+        if user is None or user in {"www-data", "33"}:
+            count += 1  # unparseable lines are counted, so they can never be pinned
+    return count
+
+
+def _observe_www_data_cron(loaded: Mapping[str, str]) -> Mapping[str, object]:
+    module = _ENVIRONMENT_MODULE
+    try:
+        raw = _read_proc_bytes(CONFINEMENT_CRONTAB, maximum=1_000_000)
+        crontab = hashlib.sha256(raw).hexdigest()
+    except FileNotFoundError:
+        crontab = None
+    except (OSError, _PeerUnreadable):
+        raise DeployRefused("confinement_cron_state_unavailable") from None
+    entries = 0
+    try:
+        sources = [CONFINEMENT_SYSTEM_CRONTAB] + sorted(
+            CONFINEMENT_CRON_D / name for name in os.listdir(CONFINEMENT_CRON_D))
+        for source in sources:
+            try:
+                entries += _cron_entries_for_www_data(
+                    _read_proc_bytes(source, maximum=1_000_000).decode("utf-8"))
+            except FileNotFoundError:
+                if source != CONFINEMENT_SYSTEM_CRONTAB:
+                    raise
+    except (OSError, UnicodeError, _PeerUnreadable):
+        raise DeployRefused("confinement_cron_state_unavailable") from None
+    try:
+        info = os.lstat(CONFINEMENT_CRON_WRAPPER)
+        wrapper = {"uid": info.st_uid, "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode),
+                   "type": "regular" if stat.S_ISREG(info.st_mode) else "other", "nlink": info.st_nlink}
+    except FileNotFoundError:
+        wrapper = None
+    except OSError:
+        raise DeployRefused("confinement_cron_state_unavailable") from None
+    return {"crontab_sha256": crontab, "cron_d_entries": entries, "wrapper": wrapper,
+            "profile_mode": loaded.get(module.JOBS_PROFILE, "unloaded")}
 
 
 def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
-    """Collect, as root, the schema-2 evidence verified by the 2.1.3 contract.
+    """Collect, as root, the schema-3 evidence verified by the 2.1.3 contract.
 
-    Reads only fixed host interfaces: the compiled confinement file paths, the
-    fixed ``systemctl show`` properties of the three bound units, their cgroup
-    process lists, ``/proc/<pid>/attr`` labels and the loaded AppArmor profile
-    list. It never loads a profile or changes a unit.
+    Reads only fixed host interfaces: the compiled confinement file paths, fixed
+    ``systemctl show`` properties of the bound units, every ``/proc/<pid>``
+    whose UID or GID is www-data, the loaded AppArmor profile list and the
+    www-data cron state. It never loads a profile or changes a unit.
     """
     module = _ENVIRONMENT_MODULE
     module.confinement_pin()
@@ -3188,48 +3376,24 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
         if observed is not None:
             files[raw_path] = observed
     services = {}
-    bound_pids: set[int] = set()
     for role in module.REQUIRED_ROLES:
         binding = module.CONFINEMENT_SERVICES[role]
         properties = _systemd_properties(binding.unit)
-        main_pid = int(properties["MainPID"]) if properties["MainPID"].isdigit() else 0
-        processes = []
-        if properties["ActiveState"] == "active" and properties["ControlGroup"]:
-            for pid in _cgroup_processes(properties["ControlGroup"]):
-                bound_pids.add(pid)
-                if pid == main_pid:
-                    process_role = "master"
-                else:
-                    process_role = "worker" if _process_parent(pid) == main_pid else "other"
-                processes.append({"pid": pid, "role": process_role, "label": _process_label(pid)})
+        main_pid = int(properties["MainPID"]) if properties["MainPID"].isdigit() else -1
+        main_label = ""
+        if properties["ActiveState"] == "active" and main_pid > 0:
+            try:
+                main_label = _peer_label(main_pid)
+            except (OSError, UnicodeError):
+                raise DeployRefused("confinement_master_label_unavailable") from None
         services[role] = {
             "unit": properties["Id"], "load_state": properties["LoadState"],
-            "active_state": properties["ActiveState"], "main_pid": main_pid,
+            "active_state": properties["ActiveState"], "main_pid": main_pid, "main_label": main_label,
             "apparmor_profile_property": properties["AppArmorProfile"],
             "loaded_profile_mode": loaded.get(binding.apparmor_profile, "unloaded"),
-            "processes": processes,
         }
-    unbound = []
-    try:
-        entries = sorted(int(entry) for entry in os.listdir(CONFINEMENT_PROC_ROOT) if entry.isdigit())
-    except OSError:
-        raise DeployRefused("confinement_process_table_unavailable") from None
-    for pid in entries:
-        if pid in bound_pids:
-            continue
-        try:
-            comm = _read_host_text(CONFINEMENT_PROC_ROOT / str(pid) / "comm", maximum=64,
-                                   reason="confinement_process_vanished").strip()
-        except DeployRefused:
-            continue  # exited during the scan
-        if comm.startswith("php-fpm"):
-            try:
-                label = _process_label(pid)
-            except DeployRefused:
-                label = "unavailable"
-            unbound.append({"pid": pid, "label": label})
-    return {"schema": 2, "apparmor_enabled": enabled, "files": files, "services": services,
-            "unbound_fpm_processes": unbound}
+    return {"schema": 3, "apparmor_enabled": enabled, "files": files, "services": services,
+            "www_data_cron": _observe_www_data_cron(loaded), "same_uid_peers": _inventory_same_uid_peers()}
 
 
 def _verify_php_fpm_confinement(profile: StagingProfile) -> None:
