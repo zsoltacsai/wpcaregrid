@@ -2830,7 +2830,7 @@ class DeployCliProfile(unittest.TestCase):
         checks = {c["id"]: c for c in json.loads(MATRIX_TEXT)["profiles"][self.NAME]["network_checks"]}
         self.assertEqual({k: v["expect"] for k, v in checks.items()}, {**{i: "deny" for i in (
             "inet-stream-create", "inet-stream-bind", "inet-stream-connect-loopback", "inet6-stream-create", "inet6-stream-connect-loopback",
-            "inet-dgram-create", "inet6-dgram-create", "unix-dgram-create", "netlink-raw-create", "unix-stream-bind")}, "unix-stream-create": "allow"})
+            "inet-dgram-create", "inet6-dgram-create", "unix-dgram-create", "unix-seqpacket-create", "netlink-raw-create", "unix-stream-bind")}, "unix-stream-create": "allow"})
         self.assertEqual((checks["inet-stream-connect-loopback"]["action"], checks["inet6-stream-connect-loopback"]["action"]), ("connect", "connect"))
         self.assertTrue(checks["inet6-stream-connect-loopback"]["optional"])  # a host without ::1 reports UNPROVEN, never PASS
         self.assertNotIn("optional", checks["inet-stream-connect-loopback"])
@@ -2901,7 +2901,7 @@ class DeployNetworkVerdict(unittest.TestCase):
         verdict = self.run_with()
         self.assertEqual(verdict.failures, [])
         net = [p for p in verdict.passes if p.startswith("PASS net:")]
-        self.assertEqual(len(net), 11)
+        self.assertEqual(len(net), 12)
         self.assertTrue([p for p in verdict.passes if p.startswith("PASS socket:mysql-production")])
         for needed in ("net:inet-stream-connect-loopback", "net:inet6-stream-connect-loopback"):
             self.assertTrue([p for p in net if needed in p], needed)
@@ -3069,7 +3069,11 @@ class PackageImmutability(unittest.TestCase):
         checked = 0
         for version, (tree, commit) in self.FROZEN.items():
             if git_out("cat-file", "-t", commit) != "commit":
+                if os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY") == "1":
+                    self.fail(f"history required but the pinned commit {commit[:7]} for {version} is missing")
                 continue  # shallow clone: the pinned tree id above is the reference
+            ancestor = subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"], capture_output=True)
+            self.assertEqual(ancestor.returncode, 0, f"pinned commit {commit[:7]} for {version} is not an ancestor of HEAD")
             self.assertEqual(git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), tree, version)
             self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"),
                              git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), f"{version} changed after {commit[:7]}")
@@ -3207,7 +3211,13 @@ class AbstractSocketDenial(unittest.TestCase):
         self.assertIn("audit deny unix (bind, listen, accept) addr=@**,", common)
         for name in PROFILES:
             rules = load_profile(ARTIFACTS, name, [])[0]
-            self.assertEqual(len([r for r in rules if r.kind == "unix" and r.deny and r.audit]), 2, name)
+            self.assertEqual(len([r for r in rules if r.kind == "unix" and r.deny and r.audit and "@" in r.body]), 2, name)
+            explicit = {r.raw for r in rules if r.kind == "unix" and r.deny and r.audit and "@" not in r.body}
+            # The deploy CLI also states its unix denies as unix rules, in case the parser does not turn the
+            # `network unix <type>` form into them.
+            expected = {"audit deny unix type=dgram,", "audit deny unix type=seqpacket,",
+                        "audit deny unix (bind, listen, accept) type=stream,"} if name == "wpcaregrid-php-cli-production-deploy" else set()
+            self.assertEqual(explicit, expected, name)
             self.assertFalse([r for r in rules if r.kind == "unix" and not r.deny and "addr" in r.body], name)
 
 

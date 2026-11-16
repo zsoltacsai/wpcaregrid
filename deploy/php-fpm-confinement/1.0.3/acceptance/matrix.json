@@ -907,6 +907,13 @@
         {
           "action": "create",
           "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-seqpacket-create",
+          "type": "SOCK_SEQPACKET"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
           "family": "AF_NETLINK",
           "id": "netlink-raw-create",
           "type": "SOCK_RAW"
