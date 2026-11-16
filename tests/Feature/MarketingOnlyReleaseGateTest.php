@@ -363,7 +363,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
     }
 
-    public function test_test_exemption_requires_all_three_exact_server_side_values(): void
+    public function test_test_exemption_requires_test_runtime_identity_and_all_three_exact_server_side_values(): void
     {
         $cases = [
             ['testing', 'testing', 'testing', true],
@@ -391,6 +391,48 @@ class MarketingOnlyReleaseGateTest extends TestCase
                 $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
             }
         }
+    }
+
+    public function test_testing_configuration_alone_does_not_disable_the_gate_outside_test_runtime(): void
+    {
+        config([
+            'app.env' => 'testing',
+            'app.deployment_environment' => 'testing',
+            'marketing_release.enforcement_mode' => 'testing',
+            'marketing_release.test_app_environment' => 'testing',
+            'marketing_release.test_deployment_environment' => 'testing',
+        ]);
+
+        [$response, $dispatched] = $this->runGate('/checkout', testRuntime: false);
+
+        $this->assertFalse($dispatched);
+        $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode());
+    }
+
+    public function test_container_resolved_middleware_uses_only_the_test_runtime_marker(): void
+    {
+        config([
+            'app.env' => 'testing',
+            'app.deployment_environment' => 'testing',
+            'marketing_release.profile' => 'marketing_only',
+            'marketing_release.enforcement_mode' => 'testing',
+            'marketing_release.test_app_environment' => 'testing',
+            'marketing_release.test_deployment_environment' => 'testing',
+        ]);
+
+        $middleware = app(MarketingOnlyReleaseGate::class);
+        $request = Request::create('/checkout', 'GET', [], [], [], [
+            'HTTP_HOST' => '127.0.0.1:8080',
+        ]);
+        $dispatched = false;
+        $response = $middleware->handle($request, function () use (&$dispatched): Response {
+            $dispatched = true;
+
+            return response('', Response::HTTP_NO_CONTENT);
+        });
+
+        $this->assertTrue($dispatched);
+        $this->assertSame(Response::HTTP_NO_CONTENT, $response->getStatusCode());
     }
 
     public function test_request_controlled_values_cannot_activate_the_test_exemption(): void
@@ -619,6 +661,7 @@ class MarketingOnlyReleaseGateTest extends TestCase
         mixed $profile = 'marketing_only',
         bool $setProfile = true,
         bool $https = true,
+        ?bool $testRuntime = null,
     ): array {
         if ($setProfile) {
             config(['marketing_release.profile' => $profile]);
@@ -639,11 +682,14 @@ class MarketingOnlyReleaseGateTest extends TestCase
         }
 
         $dispatched = false;
-        $response = (new MarketingOnlyReleaseGate)->handle($request, function () use (&$dispatched): Response {
-            $dispatched = true;
+        $response = (new MarketingOnlyReleaseGate($testRuntime))->handle(
+            $request,
+            function () use (&$dispatched): Response {
+                $dispatched = true;
 
-            return response('', Response::HTTP_NO_CONTENT);
-        });
+                return response('', Response::HTTP_NO_CONTENT);
+            },
+        );
 
         return [$response, $dispatched];
     }
