@@ -512,9 +512,14 @@ class DriverEndToEnd(unittest.TestCase):
         entries = "\n".join(f'  "{n} {d}"' for n, d in (PINS if pins is None else pins).items())
         text = text[:block_start] + "PINS=(\n" + entries + "\n)\n" + text[block_end:]
         self.driver.write_text(text, encoding="utf-8")
+        fixture_git_env = {**os.environ, "GIT_AUTHOR_NAME": "Stage test fixture",
+                           "GIT_AUTHOR_EMAIL": "stage-test@example.invalid",
+                           "GIT_COMMITTER_NAME": "Stage test fixture",
+                           "GIT_COMMITTER_EMAIL": "stage-test@example.invalid"}
         subprocess.run(["git", "-C", str(self.repo), "add", "scripts/staging-next-helper-1-4-10-stage-sources.sh"],
-                       check=True)
-        subprocess.run(["git", "-C", str(self.repo), "commit", "--amend", "-q", "--no-edit"], check=True)
+                       check=True, env=fixture_git_env)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "--amend", "-q", "--no-edit"],
+                       check=True, env=fixture_git_env)
 
     def run_driver(self, mode="stage", target="caregrid-staging", fail=None, cwd=None, tool_commit=None):
         env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "SSH_TARGET": target,
