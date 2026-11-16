@@ -106,7 +106,7 @@ class StagingNextPathContractTests(unittest.TestCase):
     def test_unreceipted_bootstrap_baseline_returns_actionable_hold(self):
         profile = BACKEND.PRODUCTION_PROFILE
         link_info = fake_stat(stat.S_IFLNK | 0o777, uid=BACKEND.APPLICATION_LINK_UID)
-        with patch.object(BACKEND.os, "lstat", return_value=link_info), \
+        with patch.object(BACKEND, "_lstat", return_value=link_info), \
              patch.object(BACKEND.os, "readlink", return_value=str(profile.application_root)), \
              self.assertRaises(BACKEND.DeployRefused) as error:
             BACKEND._current_release(profile)
