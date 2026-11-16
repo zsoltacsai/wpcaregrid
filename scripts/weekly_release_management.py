@@ -22,6 +22,14 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if __package__:
+    from . import release_admission_v3 as _release_admission
+else:
+    # ``python -I`` and direct script execution do not put the repository root
+    # on the import path. Load the shared correction validator from this
+    # protected source directory rather than maintaining a third parser.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import release_admission_v3 as _release_admission
 REPOSITORY = "zsoltacsai/wpcaregrid"
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -221,8 +229,14 @@ def merged_pr_subject(pr_data: Any, ledger_data: Any, candidate_sha: str) -> dic
     if len(matches) != 1:
         raise PolicyError("merged_pr_subject_ambiguous")
     subject = matches[0]
+    comments = _pages(ledger_data)
+    try:
+        invalidated_artifacts = _release_admission._authorized_artifact_corrections(
+            comments, owner="zsoltacsai")
+    except _release_admission.AdmissionRefused as exc:
+        raise PolicyError(str(exc)) from None
     artifacts: dict[str, set[tuple[str, str]]] = {"integration_qa": set(), "appsec": set()}
-    for comment in _pages(ledger_data):
+    for comment in comments:
         body = comment.get("body")
         user = comment.get("user")
         if (not isinstance(body, str) or not body.startswith("WPCG_RELEASE_REVIEW_ARTIFACT_V3")
@@ -231,6 +245,12 @@ def merged_pr_subject(pr_data: Any, ledger_data: Any, candidate_sha: str) -> dic
             continue
         parsed = REVIEW_ARTIFACT_RE.fullmatch(body)
         if not parsed:
+            # Only the admission module's exact six-record correction policy
+            # can invalidate a malformed historical artifact. It never
+            # becomes PASS evidence; fresh exact-subject artifacts are still
+            # required below.
+            if comment.get("id") in invalidated_artifacts:
+                continue
             raise PolicyError("review_artifact_invalid")
         role, pr_text, head_sha, base_sha, agent, digest, encoded = parsed.groups()
         if int(pr_text) != subject["pr_number"] or head_sha != subject["head_sha"]:

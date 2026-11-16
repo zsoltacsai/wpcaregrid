@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -166,6 +168,41 @@ class WeeklyReleaseManagementTest(unittest.TestCase):
                 "base": {"ref": weekly.PRIMARY_BRANCH, "sha": base}, "head": {"sha": head}}]
         with self.assertRaisesRegex(weekly.PolicyError, "review_artifact_subject_missing_or_ambiguous"):
             weekly.merged_pr_subject(prs, [], sha)
+
+    def test_review_subject_uses_shared_exact_corrections_and_requires_fresh_artifacts(self):
+        merge, head, base = "a" * 40, "b" * 40, "c" * 40
+        prs = [{"number": 57, "merge_commit_sha": merge, "merged_at": "now",
+                "base": {"ref": weekly.PRIMARY_BRANCH, "sha": base},
+                "head": {"sha": head}}]
+        fresh = []
+        for comment_id, role, agent in ((1, "integration_qa", "hermione-qa"),
+                                        (2, "appsec", "moody-appsec")):
+            body = ("WPCG_RELEASE_REVIEW_ARTIFACT_V3\n" f"role={role}\npr=57\nhead_sha={head}\n"
+                    f"base_sha={base}\nagent={agent}\nreport_sha256={'d' * 64}\nreport_base64=eA==\n")
+            fresh.append({"id": comment_id, "body": body, "created_at": "2026-11-16T12:00:00Z",
+                          "author_association": "OWNER", "user": {"login": "zsoltacsai"}})
+
+        fixture_path = ROOT / "scripts/tests/fixtures/v3-artifact-ledger-historical.json"
+        historical = json.loads(fixture_path.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(weekly.PolicyError, "review_artifact_invalid"):
+            weekly.merged_pr_subject(prs, historical + fresh, merge)
+
+        corrections = []
+        for index, target in enumerate(historical):
+            body_digest = hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
+            correction_body = weekly._release_admission.render_artifact_correction(
+                target_comment_id=target["id"], target_body_sha256=body_digest,
+                target_pr=int(target["body"].split("pr=", 1)[1].splitlines()[0]),
+                target_head_sha=target["body"].split("head_sha=", 1)[1].splitlines()[0],
+                target_base_sha=target["body"].split("base_sha=", 1)[1].splitlines()[0],
+                target_role=target["body"].split("role=", 1)[1].splitlines()[0])
+            corrections.append({"id": 9_900_000_000 + index, "body": correction_body,
+                                "created_at": "2026-11-16T13:00:00Z",
+                                "author_association": "OWNER", "user": {"login": "zsoltacsai"}})
+        self.assertEqual(weekly.merged_pr_subject(prs, historical + corrections + fresh, merge),
+                         {"pr_number": 57, "head_sha": head, "base_sha": base})
+        with self.assertRaisesRegex(weekly.PolicyError, "review_artifact_invalid"):
+            weekly.merged_pr_subject(prs, historical + corrections[:-1] + fresh, merge)
 
     def test_recovery_receipt_refuses_untrusted_parent_metadata(self):
         with self.assertRaises(weekly.PolicyError):
