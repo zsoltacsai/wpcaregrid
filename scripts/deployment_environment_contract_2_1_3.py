@@ -43,7 +43,7 @@ WWW_DATA_GID = 33
 CONFINEMENT_SCHEMA = 1
 CONFINEMENT_VERSION = "1.0.1"
 # SHA-256 of deploy/php-fpm-confinement/1.0.1/SHA256SUMS; pins the whole package.
-CONFINEMENT_SUMS_SHA256 = "7d4f1cc98296d75589722b5e864debd57f76feb6c00587bfc654a394152bc137"
+CONFINEMENT_SUMS_SHA256 = "b3be595c1eaf0e60479ceb89d7baa9048a4e6cc748fb47d4ab147fca9fd85b31"
 _APPARMOR = "/etc/apparmor.d"
 _SYSTEMD = "/etc/systemd/system"
 _P_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-production"
@@ -53,19 +53,29 @@ _COMMON = f"{_APPARMOR}/abstractions/wpcaregrid-php-fpm-common"
 _P_UNIT = f"{_SYSTEMD}/wpcaregrid-production-php8.4-fpm.service"
 _N_DROPIN = f"{_SYSTEMD}/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf"
 _L_DROPIN = f"{_SYSTEMD}/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf"
+_X_PROFILE = f"{_APPARMOR}/wpcaregrid-nginx"
+_J_PROFILE = f"{_APPARMOR}/wpcaregrid-php-cli-staging"
+_X_DROPIN = f"{_SYSTEMD}/nginx.service.d/90-wpcaregrid-confinement.conf"
+_SUP_DROPIN = f"{_SYSTEMD}/supervisor.service.d/90-wpcaregrid-confinement.conf"
+_SCH_DROPIN = f"{_SYSTEMD}/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf"
 _P_MASTER = "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf"
 _P_POOL = "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf"
 # Exact installed path -> SHA-256 of the committed 1.0.1 artifact. A unit test
 # recomputes these from the repository and fails on drift.
 CONFINEMENT_FILE_SHA256: Mapping[str, str] = MappingProxyType({
-    _P_PROFILE: "28411d7d3aa861b0961999b89132a53b403960e6b5c90dfa3fa15676a846427f",
-    _N_PROFILE: "a0fd100add8c3c98b71af33feb20c739f2eea5df5f2976d90960a6d9403bda08",
-    _L_PROFILE: "747eecff50e9c36b6926313cfa58ee70ff1a866c2e5405dfa0bfbb781145118b",
-    _COMMON: "7314a492aedd66a9e0afe7fabb83701dda272f4700d9d124fb7352344eeea586",
+    _P_PROFILE: "93e1770d168c8b5ef53e748a10eb24ae769203c754b301fa0984abe9aec51fda",
+    _N_PROFILE: "fda058d74f3fe6f9001b9fbda30518f0fa59403c05e6f9af3d8044d5794117f2",
+    _L_PROFILE: "8e15f76671a069d6cf57d973147c0c40b8ff88b75e0d0e18d5db50c70eb67365",
+    _COMMON: "4adfb28bf8af91807324007d6ec603f17252dd4f252a9b5806ed3f84af883110",
     _P_UNIT: "3c93e13946f97e48f0c0aa5e5c0fd4b15c46bffd9da2c8e9f47e6ce01b735b0d",
     _N_DROPIN: "a088f9387396ce914ea39d6279cdf0e31a101434073b859434066c957aec4211",
     _L_DROPIN: "be70ceb043fe8468bea21684e96a7b8e423f02ae79dc9b14cee5af219132de77",
     _P_MASTER: "96839f3888df89d9d14724226f292b6d2c634d35057903120251c2756427ecf5",
+    _X_PROFILE: "b0650df823282e3d550465b48b3059934e0018d63d2e831ce5dbc30490f7afad",
+    _J_PROFILE: "28ed538b62d8d0c240fc3cb7e24c15003a0a4635c6c88559c754f2638054aaa3",
+    _X_DROPIN: "a17df342a4a96f63915a63d1ed87b20008c9723998e6a9114544cdff990c0cda",
+    _SUP_DROPIN: "154e58e890a3b0f54b2459ed45a3ba23a57475abcf0187ec378683e83a65072b",
+    _SCH_DROPIN: "ab4c83093cf79cf93d35ce86f307099a8742617fc5be5d6703a216e4150ec342",
     _P_POOL: "103a9502bbe9b19422708cba3c5d9a71cdc51147b70a7788734607e794e4b09e",
 })
 
@@ -91,7 +101,27 @@ CONFINEMENT_SERVICES: Mapping[str, ServiceBinding] = MappingProxyType({
     "staging-legacy": ServiceBinding(
         "staging-legacy", "php8.4-fpm.service", "wpcaregrid-php-fpm-staging-legacy",
         _L_PROFILE, _L_DROPIN, (_L_PROFILE, _COMMON, _L_DROPIN)),
+    # Edge and job peers on the same www-data UID. nginx has its own deny set (it must read TLS keys),
+    # so it does not use the shared abstraction.
+    "nginx": ServiceBinding(
+        "nginx", "nginx.service", "wpcaregrid-nginx", _X_PROFILE, _X_DROPIN, (_X_PROFILE, _X_DROPIN)),
+    "jobs-supervisor": ServiceBinding(
+        "jobs-supervisor", "supervisor.service", "wpcaregrid-php-cli-staging",
+        _J_PROFILE, _SUP_DROPIN, (_J_PROFILE, _COMMON, _SUP_DROPIN)),
+    "jobs-scheduler": ServiceBinding(
+        "jobs-scheduler", "wpcaregrid-staging-next-scheduler.service", "wpcaregrid-php-cli-staging",
+        _J_PROFILE, _SCH_DROPIN, (_J_PROFILE, _COMMON, _SCH_DROPIN)),
 })
+# The legacy www-data cron entry is not a unit property: the root-owned wrapper is attached by exact path
+# to the same job profile, and the cron/sh shim around it is a pinned, unconfined permitted class.
+CRON_UNIT = "cron.service"
+CRON_WRAPPER_PATH = "/usr/local/bin/wpcaregrid-scheduler"
+CRON_SHIM_COMM = frozenset({"cron", "CRON", "dash", "sh"})
+JOBS_PROFILE = "wpcaregrid-php-cli-staging"
+ALL_ROLES = ("production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler")
+# Staging preflight does not require the (not yet existing) production unit to be observed.
+STAGING_ROLES = ("staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler")
+
 
 
 @dataclass(frozen=True)
@@ -100,6 +130,8 @@ class PhpFpmConfinement:
     package_version: str
     package_sha256sums_sha256: str
     roles: tuple[str, ...]
+    # SHA-256 of the exact www-data crontab the root policy approves, or None for "no www-data crontab".
+    www_data_crontab_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -167,8 +199,7 @@ STAGING_NEXT = EnvironmentContract(
     worker_fence_marker="/var/lib/wpcaregrid-deploy/staging-next/state/workers-disabled",
     scheduler_fence_marker="/var/lib/wpcaregrid-deploy/staging-next/state/scheduler-paused",
     # An unattached staging FPM service is not isolated from production (same UID).
-    php_fpm_confinement=PhpFpmConfinement(CONFINEMENT_VERSION, CONFINEMENT_SUMS_SHA256,
-                                          ("staging-next", "staging-legacy")),
+    php_fpm_confinement=PhpFpmConfinement(CONFINEMENT_VERSION, CONFINEMENT_SUMS_SHA256, STAGING_ROLES, None),
 )
 
 # Production is a separate compiled identity with no guessed host or database
@@ -201,7 +232,8 @@ _PRODUCTION_KEYS = frozenset({
     "scheduler_unit", "maintenance_marker", "worker_fence_marker", "scheduler_fence_marker",
     "php_fpm_confinement",
 })
-_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "files", "services"})
+_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "files", "services",
+                               "www_data_crontab_sha256"})
 _SERVICE_KEYS = frozenset({"unit", "apparmor_profile", "profile_path", "attachment_path"})
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}\Z")
@@ -386,8 +418,10 @@ def _confinement_config(data: object) -> PhpFpmConfinement:
                 "unit": binding.unit, "apparmor_profile": binding.apparmor_profile,
                 "profile_path": binding.profile_path, "attachment_path": binding.attachment_path}:
             raise EnvironmentRefused("production_confinement_service_binding_invalid")
-    return PhpFpmConfinement(CONFINEMENT_VERSION, CONFINEMENT_SUMS_SHA256,
-                             ("production", "staging-next", "staging-legacy"))
+    pin = data["www_data_crontab_sha256"]
+    if pin is not None and not _sha(pin):
+        raise EnvironmentRefused("production_confinement_cron_pin_invalid")
+    return PhpFpmConfinement(CONFINEMENT_VERSION, CONFINEMENT_SUMS_SHA256, ALL_ROLES, pin)
 
 
 def resolve_environment(name: str, *, production_config: Mapping[str, object] | None = None) -> EnvironmentContract:
@@ -411,11 +445,13 @@ def production_required_fields() -> frozenset[str]:
 _OBSERVED_FILE_KEYS = frozenset({"sha256", "uid", "gid", "mode", "type", "nlink"})
 _OBSERVED_SERVICE_KEYS = frozenset({"unit", "active", "apparmor_profile_property", "loaded_profile_mode",
                                     "process_labels"})
-_OBSERVATION_KEYS = frozenset({"schema", "files", "services", "same_uid_peers"})
+_OBSERVATION_KEYS = frozenset({"schema", "files", "services", "same_uid_peers", "fenced", "www_data_cron"})
+_FENCED_KEYS = frozenset({"units", "supervisor_programs", "markers"})
+_CRON_KEYS = frozenset({"crontab_sha256", "cron_d_entries", "wrapper", "profile_mode"})
 _PEER_KEYS = frozenset({"pid", "comm", "label", "unit"})
-# Same-UID (www-data) processes allowed to stay unconfined. Empty on purpose: nginx workers, Supervisor CLI
-# workers and the scheduler share the UID and can read the other environment's group-readable secrets.
-# Accepting any of them is an Owner decision made in a reviewed contract revision, never a default.
+# Same-UID (www-data) processes allowed to stay unconfined BEYOND the explicit classes below. Empty on
+# purpose. The explicit classes are: the three FPM pools, nginx, and the job tree (each enforce-attached to
+# its profile and bound to its unit) plus the pinned cron shim. Every other uid-33 process blocks.
 ACCEPTED_UNCONFINED_SAME_UID_COMM: frozenset = frozenset()
 
 
@@ -432,6 +468,11 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     * ``schema`` = 1
     * ``same_uid_peers``: ``{complete: bool, processes: [{pid, comm, label, unit}]}`` -- every process
       whose real/effective UID is www-data, from a root scan that could read all of them
+    * ``fenced``: ``{units: {unit: {load_state, active_state}}, supervisor_programs: [{name, state,
+      autostart}], markers: {worker_fence_marker: bool, scheduler_fence_marker: bool}}`` -- the exact state
+      of production's queue/scheduler jobs, which a marketing-only production does not need
+    * ``www_data_cron``: ``{crontab_sha256: hex|None, cron_d_entries: int, wrapper: {uid, gid, mode, type,
+      nlink}|None, profile_mode}`` -- the legacy www-data cron entry and its attached wrapper
     * ``files``: ``{installed_path: {sha256, uid, gid, mode, type, nlink}}``
     * ``services``: ``{role: {unit, active, apparmor_profile_property,
       loaded_profile_mode, process_labels}}`` where ``apparmor_profile_property`` is the unit's
@@ -450,6 +491,11 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
             or not isinstance(observation["files"], Mapping) or not isinstance(observation["services"], Mapping):
         raise EnvironmentRefused("confinement_observation_invalid")
     files, services = observation["files"], observation["services"]
+    if contract.name == "production":
+        _verify_production_jobs_fenced(contract, observation["fenced"])
+    elif not isinstance(observation["fenced"], Mapping) or set(observation["fenced"]) != _FENCED_KEYS:
+        raise EnvironmentRefused("confinement_observation_invalid")
+    cron_pinned = _verify_cron(confinement, observation["www_data_cron"])
     for role in confinement.roles:
         binding = CONFINEMENT_SERVICES[role]
         entry = services.get(role)
@@ -495,28 +541,93 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
                 raise EnvironmentRefused("confinement_process_not_confined")
         elif entry["process_labels"]:
             raise EnvironmentRefused("confinement_observation_invalid")
-    _verify_same_uid_peers(confinement, observation["same_uid_peers"], services)
+    _verify_same_uid_peers(confinement, observation["same_uid_peers"], services, cron_pinned)
 
 
-def _verify_same_uid_peers(confinement: PhpFpmConfinement, peers: object, services: Mapping) -> None:
+def _verify_production_jobs_fenced(contract: EnvironmentContract, fenced: object) -> None:
+    """Production is marketing-only: its queue workers and scheduler must be provably unable to start."""
+    if not isinstance(fenced, Mapping) or set(fenced) != _FENCED_KEYS \
+            or not isinstance(fenced["units"], Mapping) or not isinstance(fenced["supervisor_programs"], (list, tuple)) \
+            or not isinstance(fenced["markers"], Mapping):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    timer = contract.scheduler_unit
+    twin = timer.removesuffix(".timer") + ".service"
+    for unit in sorted({timer, twin}):
+        state = fenced["units"].get(unit)
+        if not isinstance(state, Mapping) or set(state) != {"load_state", "active_state"}:
+            raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+        # `masked` links the unit to /dev/null: it cannot be started by anything, a fail-closed start policy.
+        if state["load_state"] != "masked" or state["active_state"] != "inactive":
+            raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+    for program in fenced["supervisor_programs"]:
+        if not isinstance(program, Mapping) or set(program) != {"name", "state", "autostart"} \
+                or not isinstance(program["name"], str) or not isinstance(program["state"], str) \
+                or type(program["autostart"]) is not bool:
+            raise EnvironmentRefused("confinement_observation_invalid")
+        if program["name"] in contract.worker_programs or program["name"].startswith("wpcaregrid-production-"):
+            # Absent is the preferred state. A defined program is acceptable only if stopped and not autostarting.
+            if program["state"] != "STOPPED" or program["autostart"] is not False:
+                raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+    markers = fenced["markers"]
+    if set(markers) != {"worker_fence_marker", "scheduler_fence_marker"} \
+            or markers["worker_fence_marker"] is not True or markers["scheduler_fence_marker"] is not True:
+        raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+
+
+def _verify_cron(confinement: PhpFpmConfinement, cron: object) -> bool:
+    """The legacy www-data crontab may exist only if it is the exact pinned one and its wrapper is attached."""
+    if not isinstance(cron, Mapping) or set(cron) != _CRON_KEYS or type(cron["cron_d_entries"]) is not int \
+            or not isinstance(cron["profile_mode"], str) \
+            or (cron["crontab_sha256"] is not None and not _sha(cron["crontab_sha256"])):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if cron["cron_d_entries"] != 0:
+        raise EnvironmentRefused("confinement_cron_unpinned")  # /etc/cron.d jobs as www-data are never pinned
+    if cron["crontab_sha256"] is None:
+        return False
+    if confinement.www_data_crontab_sha256 is None or cron["crontab_sha256"] != confinement.www_data_crontab_sha256:
+        raise EnvironmentRefused("confinement_cron_unpinned")
+    wrapper = cron["wrapper"]
+    if not isinstance(wrapper, Mapping) or set(wrapper) != {"uid", "gid", "mode", "type", "nlink"} \
+            or not all(_strict_int(wrapper[k]) for k in ("uid", "gid", "mode", "nlink")):
+        raise EnvironmentRefused("confinement_cron_wrapper_unsafe")
+    if wrapper["type"] != "regular" or wrapper["uid"] != 0 or wrapper["gid"] != 0 \
+            or wrapper["mode"] & 0o022 or wrapper["nlink"] != 1:
+        raise EnvironmentRefused("confinement_cron_wrapper_unsafe")
+    if cron["profile_mode"] != "enforce":
+        raise EnvironmentRefused("confinement_cron_wrapper_unconfined")
+    return True
+
+
+def _verify_same_uid_peers(confinement: PhpFpmConfinement, peers: object, services: Mapping,
+                           cron_pinned: bool = False) -> None:
     """All same-UID peers must be enforce-attached; an unconfined peer can read the other environment's secrets."""
     if not isinstance(peers, Mapping) or set(peers) != {"complete", "processes"} \
             or not isinstance(peers["processes"], (list, tuple)):
         raise EnvironmentRefused("confinement_observation_invalid")
     if peers["complete"] is not True:
         raise EnvironmentRefused("confinement_peer_inventory_incomplete")
-    enforced = {f"{b.apparmor_profile} (enforce)": role for role, b in CONFINEMENT_SERVICES.items()}
+    enforced: dict = {}
+    for role, b in CONFINEMENT_SERVICES.items():
+        enforced.setdefault(f"{b.apparmor_profile} (enforce)", {})[b.unit] = role
+    # The job profile also confines the exact-path-attached cron wrapper; that subtree runs under cron.service.
+    enforced[f"{JOBS_PROFILE} (enforce)"][CRON_UNIT] = "jobs-cron"
     seen_roles: set = set()
     for proc in peers["processes"]:
         if not isinstance(proc, Mapping) or set(proc) != _PEER_KEYS or type(proc["pid"]) is not int \
                 or not all(isinstance(proc[k], str) for k in ("comm", "label", "unit")):
             raise EnvironmentRefused("confinement_observation_invalid")
-        role = enforced.get(proc["label"])
-        if role is None:
+        by_unit = enforced.get(proc["label"])
+        if by_unit is None:
+            if proc["label"] == "unconfined" and proc["unit"] == CRON_UNIT and proc["comm"] in CRON_SHIM_COMM:
+                if not cron_pinned:
+                    raise EnvironmentRefused("confinement_cron_unpinned")
+                continue
             if proc["comm"] in ACCEPTED_UNCONFINED_SAME_UID_COMM:
                 continue
+            # Any other uid-33 process maps to no permitted class: unknown blocks.
             raise EnvironmentRefused("confinement_same_uid_peer_unconfined")
-        if proc["unit"] != CONFINEMENT_SERVICES[role].unit:
+        role = by_unit.get(proc["unit"])
+        if role is None:
             raise EnvironmentRefused("confinement_peer_label_outside_unit")
         seen_roles.add(role)
     for role in confinement.roles:

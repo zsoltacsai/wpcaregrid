@@ -71,4 +71,7 @@ profile wpcaregrid-php-fpm-production flags=(attach_disconnected) {
   audit deny /run/php/php-fpm.sock rwklm,
   audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
   audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny /var/lib/wpcaregrid-deploy/*/state/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
 }

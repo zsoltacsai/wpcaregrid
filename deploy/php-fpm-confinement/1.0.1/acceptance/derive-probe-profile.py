@@ -18,7 +18,7 @@ PROBE_RULES = (
     "  /usr/lib/python3*/{,**} mr,\n"
     "  /proc/[0-9]*/attr/current r,\n"
 )
-HEADER = re.compile(r"^profile (wpcaregrid-php-fpm-[a-z-]+) ", re.MULTILINE)
+HEADER = re.compile(r"^profile (wpcaregrid-[a-z-]+)(?: /\S+)? flags=", re.MULTILINE)
 
 
 def derive(text: str) -> str:
@@ -28,7 +28,8 @@ def derive(text: str) -> str:
     name = headers[0]
     if name.endswith("-probe") or "-probe" in text:
         raise ValueError("profile is already a probe")
-    out = text.replace(f"profile {name} ", f"profile {name}-probe ", 1)
+    # The probe profile never carries an exec attachment path: it must not compete with the real profile.
+    out = re.sub(rf"^profile {name}(?: /\S+)? flags=", f"profile {name}-probe flags=", text, count=1, flags=re.MULTILINE)
     out = out.replace(f"peer={name},", f"peer={name}-probe,")
     return out[: -len("}\n")] + "\n" + PROBE_RULES + "}\n"
 

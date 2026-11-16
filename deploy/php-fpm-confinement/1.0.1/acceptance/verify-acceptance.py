@@ -89,34 +89,57 @@ class Verdict:
         self.notes.append(f"NOTE {ident}: {detail}")
 
 
+def fd_ok(matrix: dict, role: str, target: str) -> bool:
+    """Descriptor policy per role. Edge and job roles are checked for secret fragments, FPM roles by tree."""
+    target = target.removesuffix(" (deleted)")
+    if any(under(target, p) for p in CONTROL_PREFIXES):
+        return False
+    if role == "nginx":
+        return not any(f in target for f in ("/shared/", "/.env", "/storage/", "/bootstrap/", "/state/", "/database-backups"))
+    if role.startswith("jobs-"):
+        return not any(under(target, p) for p in ROLE_PREFIXES["production"])
+    return fd_allowed(role, target)
+
+
 def check_inventory(v: Verdict, matrix: dict, inv: dict, phase: str, required_roles: list) -> dict:
-    labels = {f"{p} (enforce)": r for r, p in matrix["role_profiles"].items()}
+    """Every uid-33 process must map to exactly one explicitly permitted class; anything else blocks."""
+    label_roles: dict = {}
+    for role, profile in matrix["role_profiles"].items():
+        label_roles.setdefault(f"{profile} (enforce)", []).append(role)
     probe_labels = {f"{p}-probe (enforce)" for p in matrix["role_profiles"].values()}
     if not isinstance(inv, dict) or inv.get("schema") != 1 or inv.get("complete") is not True:
         v.fail(f"inventory:{phase}", f"peer inventory incomplete or malformed: {inv.get('reasons') if isinstance(inv, dict) else 'n/a'}")
         return {}
     by_pid = {}
-    roles_seen: dict = {r: 0 for r in required_roles}
+    seen: dict = {}
     for proc in inv["processes"]:
         by_pid[proc["pid"]] = proc
-        role = labels.get(proc["label"])
-        if role is None and proc["label"] not in probe_labels:
-            if proc["comm"] in ACCEPTED_UNCONFINED_SAME_UID_COMM:
-                v.note(f"inventory:{phase}", f"accepted unconfined {proc['comm']} pid {proc['pid']}")
-            else:
-                v.fail(f"inventory:{phase}", f"same-UID peer pid {proc['pid']} comm {proc['comm']!r} label {proc['label']!r} "
-                       "is not enforce-attached: it can read the other environment's secrets")
+        if proc["label"] in probe_labels:
             continue
-        if proc["unit"] == matrix["role_units"].get(role):
-            roles_seen[role] = roles_seen.get(role, 0) + 1
+        roles = [r for r in label_roles.get(proc["label"], []) if matrix["role_units"][r] == proc["unit"]]
+        if len(roles) == 1:
+            role = roles[0]
+            seen[role] = seen.get(role, 0) + 1
             for target in proc["fds"]:
-                if not fd_allowed(role, target):
+                if not fd_ok(matrix, role, target):
                     v.fail(f"fd-inventory:{phase}", f"pid {proc['pid']} ({role}) holds {target!r}")
-        elif role is not None and proc["unit"] not in matrix["role_units"].values():
-            v.fail(f"inventory:{phase}", f"pid {proc['pid']} carries {role} label outside its unit ({proc['unit']!r})")
+            continue
+        if label_roles.get(proc["label"]):
+            v.fail(f"inventory:{phase}", f"pid {proc['pid']} carries label {proc['label']!r} outside its permitted unit ({proc['unit']!r})")
+            continue
+        permitted = [c for c in matrix["permitted_unconfined_classes"]
+                     if proc["label"] == "unconfined" and proc["unit"] == c["unit"] and proc["comm"] in c["comm"]]
+        if permitted:
+            v.note(f"inventory:{phase}", f"permitted unconfined class {permitted[0]['class']} pid {proc['pid']} ({permitted[0]['condition']})")
+            continue
+        if proc["comm"] in ACCEPTED_UNCONFINED_SAME_UID_COMM:
+            v.note(f"inventory:{phase}", f"accepted unconfined {proc['comm']} pid {proc['pid']}")
+            continue
+        v.fail(f"inventory:{phase}", f"same-UID process pid {proc['pid']} comm {proc['comm']!r} label {proc['label']!r} unit "
+               f"{proc['unit']!r} maps to no permitted class: it can read the other environment's secrets")
     for role in required_roles:
         unit = matrix["role_units"][role]
-        if not inv["units"].get(unit, {}).get("present") or roles_seen.get(role, 0) < 1:
+        if matrix["role_required"].get(role) and (not inv["units"].get(unit, {}).get("present") or seen.get(role, 0) < 1):
             v.fail(f"inventory:{phase}", f"role {role} ({unit}) has no identified www-data process: peer enumeration incomplete")
     return by_pid
 
@@ -184,6 +207,7 @@ def verify(matrix_text: str, profile: str, baseline: dict, confined: dict, inv_b
     records = parse_audit(audit_text)
     pid = confined["pid"]
     required = [spec["profile_role"]] + list(spec["peer_roles"])
+    required = required + [r for r in matrix["role_required"] if matrix["role_required"][r] and r not in required]
     before = check_inventory(v, matrix, inv_before, "before", required)
     after = check_inventory(v, matrix, inv_after, "after", required)
     peers_used = {int(p) for pids in confined["peers"].values() for p in pids}
@@ -214,12 +238,14 @@ def verify(matrix_text: str, profile: str, baseline: dict, confined: dict, inv_b
         kind, item = expected[ident]
         b, c = base[ident]["errno"], conf[ident]["errno"]
         if kind == "control" or (kind in ("file", "socket") and item["expect"] == "allow"):
-            if b == 0 and c == 0:
+            if item.get("optional") and b == errno.ENOENT and c == errno.ENOENT:
+                v.note(ident, "UNPROVEN: optional target does not exist yet (checked again when it does)")
+            elif b == 0 and c == 0:
                 v.ok(ident, "allowed in both runs")
             else:
                 v.fail(ident, f"allowed access failed (baseline={b} confined={c})")
             continue
-        optional = kind == "file" and item.get("optional", False)
+        optional = kind in ("file", "socket") and item.get("optional", False)
         if kind == "peer-vm" and b in DENIED and c in DENIED:
             yama_masked = True
             v.note(ident, "baseline already refused (Yama/DAC): not attributable to AppArmor; valid only with the child calibration")
