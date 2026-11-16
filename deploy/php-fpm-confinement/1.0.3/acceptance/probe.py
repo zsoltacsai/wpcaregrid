@@ -117,7 +117,11 @@ def network(check: dict, tcp: dict | None = None) -> int:
     def go():
         sock = socket.socket(getattr(socket, check["family"]), getattr(socket, check["type"]))
         try:
-            if check["action"] == "bind":
+            if check["action"] == "bind" and check["family"] == "AF_UNIX":
+                path = f"/tmp/wpcg-probe-bind-{os.getpid()}"
+                sock.bind(path)
+                os.unlink(path)
+            elif check["action"] == "bind":
                 sock.bind(("127.0.0.1", 0))
             elif check["action"] == "connect":
                 target = (tcp or {}).get(check["family"])

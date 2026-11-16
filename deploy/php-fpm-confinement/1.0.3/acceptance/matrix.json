@@ -237,6 +237,18 @@
         "mode": "0755",
         "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/config",
         "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/app",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/sessions",
+        "uid": 33
       }
     ],
     "symlinks": [
@@ -749,12 +761,24 @@
           "id": "fixture-mysql-run",
           "optional": true,
           "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-app-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/app/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-sessions-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/sessions/wpcg-probe"
         }
       ],
       "commands_disabled": [
         {
           "id": "phase-b-migration-runner",
-          "reason": "Phase B stays disabled; it needs database DDL over TCP and must not gain network rights in this profile"
+          "reason": "Phase B stays disabled and is not authorized: it needs database DDL, AppArmor cannot tell DDL from a query on the allowed unix socket, and its current runner uses TCP host/port, which this profile never allows. It needs its own conversion and review before it could ever be enabled."
         }
       ],
       "commands_supported": [
@@ -820,6 +844,13 @@
           "expect": "deny",
           "family": "AF_INET",
           "id": "inet-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-stream-bind",
           "type": "SOCK_STREAM"
         },
         {
@@ -923,6 +954,17 @@
           "id": "fpm-production",
           "optional": true,
           "path": "/run/php/wpcaregrid-production-php8.4-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "journal-stdout",
+          "path": "/run/systemd/journal/stdout"
+        },
+        {
+          "expect": "deny",
+          "id": "dbus-system",
+          "optional": true,
+          "path": "/run/dbus/system_bus_socket"
         }
       ],
       "symlink_dirs": {

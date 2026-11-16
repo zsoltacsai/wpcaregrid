@@ -9,7 +9,7 @@
 # Exactly the helper's needs and nothing more:
 #   * run /usr/bin/php8.4 only (no shell, no other binary, no other PHP);
 #   * read the production release tree, shared vendor, shared .env and release bootstrap/cache;
-#   * write only release bootstrap/cache (package:discover, config:cache) and shared storage;
+#   * write only release bootstrap/cache (package:discover, config:cache) and shared storage logs and framework cache/views;
 #   * network: only a unix STREAM connect to the exact production MySQL socket; no TCP, no IPv6, no other family;
 #   * deny every staging tree, the control plane, deploy state, backups, every other credential and all sockets.
 # The helper's other commands (including the Phase B runner, once moved to /usr/bin/php8.4) run under this
@@ -35,7 +35,10 @@ profile wpcaregrid-php-cli-production-deploy flags=(attach_disconnected) {
   /var/lib/wpcaregrid-deploy/production/shared/.env r,
   /var/lib/wpcaregrid-deploy/production/shared/vendor/{,**} r,
   /var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**} rwk,
-  /var/lib/wpcaregrid-deploy/production/shared/storage/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/ r,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/framework/ r,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/logs/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/framework/{cache,views}/{,**} rwk,
 
   # NO TCP, NO OTHER NETWORK. The code that runs here reads production .env, and AppArmor cannot restrict a TCP
   # destination, so any inet/inet6 right would be a direct exfiltration path: every internet-family socket is denied.
@@ -45,6 +48,10 @@ profile wpcaregrid-php-cli-production-deploy flags=(attach_disconnected) {
   # the package binding; there is no environment-controlled path and no TCP fallback. If the host's mysqld socket is
   # elsewhere the probe is refused (fail closed): nothing here assumes the live path has been checked. Unix sockets other
   # than that one pathname are refused by the file rule below; abstract-namespace sockets are denied in the common file.
+  # Journald stdout streams and /dev/log are denied: they are unix stream/dgram sinks that would carry text off the host
+  # when a journal shipper is present. Residual (documented, not enforceable here): an inherited stream descriptor from
+  # the root console is not tied to the MySQL peer (this parser rejects a pathname peer address), so the helper must
+  # start the CLI with no inherited sockets.
   # Phase B stays disabled: this profile does not authorize migrations (see the runbook: AppArmor cannot tell a
   # query from DDL on an allowed socket, so that is helper policy, not something this profile enforces).
   network (create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream,
@@ -65,6 +72,8 @@ profile wpcaregrid-php-cli-production-deploy flags=(attach_disconnected) {
   audit deny /run/mysqld/wpcaregrid-production.sock.lock rwklm,
   audit deny /run/mysqld/*.pid rwklm,
   audit deny /run/mysqld/{,**} x,
+  audit deny /run/systemd/journal/{,**} rwklm,
+  audit deny /dev/log rwklm,
   audit deny userns,
 
   signal (send, receive) peer=wpcaregrid-php-cli-production-deploy,

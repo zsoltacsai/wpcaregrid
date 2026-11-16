@@ -101,6 +101,7 @@ jobs:
         env:
           PHP_FPM_CONFINEMENT_REQUIRE_PARSER: "1"
           PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY: "1"
+          PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY: "1"
         run: python3 scripts/tests/php-fpm-confinement-test.py
 
       - name: Staging diagnostics output and policy tests

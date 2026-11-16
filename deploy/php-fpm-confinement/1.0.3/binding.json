@@ -7,7 +7,7 @@
       "commands_disabled": [
         {
           "id": "phase-b-migration-runner",
-          "reason": "Phase B stays disabled; it needs database DDL over TCP and must not gain network rights in this profile"
+          "reason": "Phase B stays disabled and is not authorized: it needs database DDL, AppArmor cannot tell DDL from a query on the allowed unix socket, and its current runner uses TCP host/port, which this profile never allows. It needs its own conversion and review before it could ever be enabled."
         }
       ],
       "commands_supported": [
@@ -78,6 +78,12 @@
         "production shared .env",
         "production shared vendor"
       ],
+      "residuals": [
+        "inherited stream descriptors are not tied to the MySQL peer (the parser rejects a pathname peer address): the helper must start the CLI with no inherited sockets and close_fds",
+        "the write grants cover every release's bootstrap/cache, including the live release that FPM includes",
+        "the allowed socket is a data channel: the DB grant must have no FILE, REPLICATION or SUPER privilege, secure_file_priv set and local_infile off",
+        "child stdout/stderr go to the helper and are not confinable: the helper must not store them where staging can read them"
+      ],
       "runtime_probe_constraint": "the runtime identity probe connects over the unix socket only (no host/port, no TCP fallback); any TCP attempt is refused by the profile",
       "selected_by": "the production root-console helper only, per command: runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy -- /usr/bin/php8.4 ...",
       "uids": [
@@ -90,7 +96,8 @@
       "unit_attachment": null,
       "writes": [
         "production releases/*/bootstrap/cache",
-        "production shared storage"
+        "production shared storage/logs",
+        "production shared storage/framework/cache and views"
       ]
     }
   },
