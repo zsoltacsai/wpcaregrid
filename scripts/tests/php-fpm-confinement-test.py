@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.2).
+"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.3).
 
 WHAT THIS PROVES: the committed AppArmor profiles, systemd units and FPM config
 are internally consistent, fail closed under mutation, and -- evaluated by a
 small AppArmor path-rule model -- grant and deny the paths in
-deploy/php-fpm-confinement/1.0.2/acceptance/matrix.json in both directions
+deploy/php-fpm-confinement/1.0.3/acceptance/matrix.json in both directions
 between production and the existing staging pools, including symlink escapes.
 
 WHAT THIS DOES NOT PROVE: kernel enforcement. The model is not the kernel. The
@@ -40,7 +40,9 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # never leave bytecode inside the hashed artifact tree
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.2"
+ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.3"
+MYSQL_SOCKET = "/run/mysqld/wpcaregrid-production.sock"
+DEPLOY_UNIX = "(create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream"
 DOC = ROOT / "docs" / "PHP_FPM_CONFINEMENT_GO13.md"
 COMMON = "wpcaregrid-php-fpm-common"
 EXTERNAL_INCLUDES = {"tunables/global", "abstractions/base", "abstractions/nameservice", "abstractions/ssl_certs"}
@@ -108,6 +110,7 @@ WRITE_ALLOW = {
                          "/run/php/wpcaregrid-production-php8.4-fpm.sock", "/run/php/php8.5-fpm.sock",
                          "/run/php/php8.4-fpm.sock"},
     "wpcaregrid-php-cli-production-deploy": {
+        MYSQL_SOCKET,
         "/var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**}",
         "/var/lib/wpcaregrid-deploy/production/shared/storage/{,**}"},
     "wpcaregrid-php-cli-staging": {
@@ -122,7 +125,6 @@ CAPABILITY_ALLOW = {
     "wpcaregrid-php-fpm-production": set(),
     "wpcaregrid-php-fpm-staging-next": {"setuid", "setgid", "chown", "kill"},
 }
-DEPLOY_NETWORK = "(create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream"
 NETWORK_ALLOW = {"inet stream", "inet6 stream", "inet dgram", "inet6 dgram", "unix stream", "unix dgram",
                  "netlink raw"}
 PATH_EXCEPTIONS = {"/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/tmp/{,**}", "/proc/[0-9]*/maps", "/run/php/", "/etc/localtime", "/etc/mime.types", "/run/nginx.pid",
@@ -132,18 +134,20 @@ PATH_EXCEPTIONS = {"/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/tmp/{
 # even where default-deny would already refuse it.
 REQUIRED_DENIES = {
     "wpcaregrid-php-fpm-production": ("/var/lib/wpcaregrid-deploy/staging-next/{,**}", "/var/www/wpcaregrid-staging-new/{,**}",
-                                      "/var/www/wpcaregrid/{,**}"),
+                                      "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}"),
     "wpcaregrid-php-fpm-staging-next": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
-                                        "/var/www/wpcaregrid/{,**}"),
-    "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}"),
+                                        "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}"),
+    "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
     "wpcaregrid-php-cli-staging": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
-                                   "/var/log/wpcaregrid-production/{,**}"),
+                                   "/var/log/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
     "wpcaregrid-php-cli-production-deploy": ("/var/lib/wpcaregrid-deploy/staging-next/{,**}", "/var/www/wpcaregrid-staging-new/{,**}",
                                              "/var/www/wpcaregrid/{,**}", "/var/lib/wpcaregrid/{,**}", "/var/log/wpcaregrid-production/{,**}",
-                                             "/var/lib/wpcaregrid-deploy/production/state/{,**}", "/run/php/{,**}"),
+                                             "/var/lib/wpcaregrid-deploy/production/state/{,**}", "/run/php/{,**}",
+                                             "/run/mysqld/wpcaregrid-production-restore.sock", "/run/mysqld/mysqld.sock",
+                                             "/run/mysqld/wpcaregrid-production.sock.lock"),
 }
 # Exact gate/fence marker files that nginx and the job profiles may stat/read; the paths contain "/state".
-MARKER_EXCEPTIONS = {"/var/lib/wpcaregrid/deploy-maintenance", "/var/lib/wpcaregrid-deploy/staging-next/state/maintenance",
+MARKER_EXCEPTIONS = {MYSQL_SOCKET, "/var/lib/wpcaregrid/deploy-maintenance", "/var/lib/wpcaregrid-deploy/staging-next/state/maintenance",
                      "/var/lib/wpcaregrid-deploy/production/state/maintenance",
                      "/var/lib/wpcaregrid-deploy/staging-next/state/workers-disabled",
                      "/var/lib/wpcaregrid-deploy/staging-next/state/scheduler-paused"}
@@ -290,6 +294,30 @@ def decide(rules: list[Rule], path: str, access: str) -> bool:
         if not rule.deny:
             granted |= rule.perms
     return want <= granted
+
+
+NET_FAMILIES = {"inet", "inet6", "unix", "netlink", "packet", "bluetooth", "local"}
+NET_TYPES = {"stream", "dgram", "raw", "seqpacket", "rdm", "packet"}
+
+
+def net_rule_matches(body: str, family: str, sock_type: str, access: str) -> bool:
+    tokens = body.removeprefix("network").replace(",", " ").replace("(", " ( ").replace(")", " ) ").split()
+    accesses: set[str] = set()
+    if "(" in tokens:
+        end = tokens.index(")")
+        accesses = set(tokens[tokens.index("(") + 1:end])
+        tokens = tokens[end + 1:]
+    fams = [t for t in tokens if t in NET_FAMILIES]
+    types = [t for t in tokens if t in NET_TYPES]
+    return (not accesses or access in accesses) and (not fams or family in fams) and (not types or sock_type in types)
+
+
+def net_decide(rules: list, family: str, sock_type: str, access: str) -> bool:
+    """AppArmor network mediation model: any matching deny wins; otherwise a matching allow is required."""
+    matching = [r for r in rules if r.kind == "network" and net_rule_matches(r.body, family, sock_type, access)]
+    if any(r.deny for r in matching):
+        return False
+    return bool(matching)
 
 
 def resolve_in_tree(tree: Path, virtual: str) -> str:
@@ -459,7 +487,7 @@ def validate(root: Path) -> list[str]:
                 if len(rule.body.split()) == 1:
                     findings.append(f"{where}: bare capability allow")
             elif rule.kind == "network":
-                allowed = {DEPLOY_NETWORK} if name == "wpcaregrid-php-cli-production-deploy" else NETWORK_ALLOW
+                allowed = {DEPLOY_UNIX} if name == "wpcaregrid-php-cli-production-deploy" else NETWORK_ALLOW  # unix stream to one socket only
                 if rule.body.removeprefix("network ").strip() not in allowed:
                     findings.append(f"{where}: network rule not reviewed")
             elif rule.kind == "signal":
@@ -584,7 +612,7 @@ def load_script(path: Path, name: str):
 
 
 def copy_artifacts(destination: Path) -> Path:
-    target = destination / "1.0.2"
+    target = destination / "1.0.3"
     shutil.copytree(ARTIFACTS, target)
     return target
 
@@ -759,7 +787,7 @@ class ProcPtraceSignalAndSockets(unittest.TestCase):
 
     def test_tcp_port_separation_is_not_claimed(self) -> None:
         doc = DOC.read_text(encoding="utf-8")
-        self.assertIn("AppArmor 1.0.2 does not separate TCP ports", doc)
+        self.assertIn("AppArmor 1.0.3 does not separate TCP ports", doc)
 
 
 class InheritedDescriptors(unittest.TestCase):
@@ -2052,11 +2080,38 @@ class ProbeContracts(unittest.TestCase):
             self.assertIsInstance(r["pid"], int)
 
     def test_network_probe_reports_the_errno_of_each_family_without_sending_anything(self) -> None:
-        self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "create"}), 0)
+        for family, kind in (("AF_INET", "SOCK_STREAM"), ("AF_INET", "SOCK_DGRAM"), ("AF_UNIX", "SOCK_STREAM"), ("AF_UNIX", "SOCK_DGRAM")):
+            self.assertEqual(self.probe.network({"family": family, "type": kind, "action": "create"}), 0, (family, kind))
         self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "bind"}), 0)  # unconfined baseline
-        self.assertEqual(self.probe.network({"family": "AF_UNIX", "type": "SOCK_STREAM", "action": "create"}), 0)
-        source = (ACCEPTANCE / "probe.py").read_text()
-        self.assertNotIn("connect((", source.split("def network(")[1].split("def vm_readv")[0])  # creates/binds only
+        # connect with no listener can never read as a pass: the baseline must fail closed
+        self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "connect"}, {}), errno_.EDESTADDRREQ)
+        source = (ACCEPTANCE / "probe.py").read_text().split("def network(")[1].split("def vm_readv")[0]
+        for forbidden in (".send(", ".sendall(", ".recv(", ".sendto("):
+            self.assertNotIn(forbidden, source)  # nothing is ever sent
+
+    @unittest.skipIf(os.geteuid() == 0, "fd-sender refuses to run as root")
+    def test_loopback_tcp_connect_succeeds_unconfined_against_the_harness_listener(self) -> None:
+        """The baseline the negative checks rely on: IPv4 (and IPv6 when the host has ::1) really connect without a profile."""
+        canary = Path(tempfile.mkdtemp(prefix="wpcg-canary-")) / "canary"
+        canary.write_text(json.loads(MATRIX_TEXT)["canary"])
+        self.addCleanup(shutil.rmtree, canary.parent, True)
+        sender = subprocess.Popen([sys.executable, "-B", str(ACCEPTANCE / "fd-sender.py"), "tcptest", str(canary)], stdout=subprocess.PIPE, text=True)
+        try:
+            ready = sender.stdout.readline()
+            self.assertRegex(ready, r"^READY \S+ wpcg-probe-tcptest v4=(\d+|none) v6=(\d+|none)$")
+            v4, v6 = re.search(r"v4=(\w+) v6=(\w+)", ready).groups()
+            self.assertNotEqual(v4, "none")
+            self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "connect"},
+                                                {"AF_INET": ["127.0.0.1", int(v4)]}), 0)
+            if v6 != "none":
+                self.assertEqual(self.probe.network({"family": "AF_INET6", "type": "SOCK_STREAM", "action": "connect"},
+                                                    {"AF_INET6": ["::1", int(v6)]}), 0)
+            self.assertEqual(self.probe.network({"family": "AF_INET6", "type": "SOCK_STREAM", "action": "connect"}, {"AF_INET": ["127.0.0.1", int(v4)]}),
+                             errno_.EDESTADDRREQ)
+        finally:
+            sender.kill()
+            sender.wait()
+            shutil.rmtree("/tmp/wpcg-probe-tcptest", ignore_errors=True)
 
     def test_every_result_is_timed_and_attributed(self) -> None:
         results: list = []
@@ -2640,28 +2695,123 @@ class DeployCliProfile(unittest.TestCase):
         for path in ("/tmp/x", "/dev/shm/x", f"{self.P}/x"):
             self.assertFalse(decide(rules, path, "w"), path)
 
-    def test_network_is_tcp_connect_only_and_nothing_else(self) -> None:
+    def test_only_the_exact_mysql_unix_socket_and_no_tcp(self) -> None:
+        """Owner decision (a): no TCP of any kind; one unix STREAM connect to exactly one pathname."""
         rules = self.rules()
-        self.assertEqual({r.body for r in rules if r.kind == "network" and not r.deny}, {f"network {DEPLOY_NETWORK}"})
+        self.assertEqual([r.body for r in rules if r.kind == "network" and not r.deny], [f"network {DEPLOY_UNIX}"])
+        self.assertEqual([r.raw for r in rules if r.kind == "capability" and not r.deny], [])
+        # TCP/IP: nothing, in any family, type or access
+        for family in ("inet", "inet6"):
+            for sock_type in ("stream", "dgram", "raw", "seqpacket"):
+                for access in ("create", "connect", "bind", "listen", "accept", "send", "receive", "setopt", "getopt"):
+                    self.assertFalse(net_decide(rules, family, sock_type, access), f"{family}/{sock_type}/{access}")
+        for family in ("netlink", "packet"):
+            for access in ("create", "connect", "bind"):
+                self.assertFalse(net_decide(rules, family, "raw", access), family)
+        # unix: client side of a stream socket only
+        for access in ("create", "connect", "send", "receive", "shutdown", "getattr", "getopt", "setopt"):
+            self.assertTrue(net_decide(rules, "unix", "stream", access), access)
+        for access in ("bind", "listen", "accept"):
+            self.assertFalse(net_decide(rules, "unix", "stream", access), f"the process must not serve a unix socket ({access})")
+        for sock_type in ("dgram", "seqpacket", "raw"):
+            self.assertFalse(net_decide(rules, "unix", sock_type, "create"), sock_type)
         denied = {r.body for r in rules if r.deny}
-        for needed in ("network inet raw", "network inet6 raw", "network packet", "network (bind, listen, accept) inet stream",
-                       "network inet6", "network inet dgram", "network unix", "network netlink", "userns"):
+        for needed in ("network inet", "network inet6", "network netlink", "network (bind, listen, accept) unix stream", "network unix dgram",
+                       "network inet raw", "network packet", "userns"):
             self.assertIn(needed, denied)
-        self.assertNotRegex(f"network {DEPLOY_NETWORK}", r"\b(bind|listen|accept)\b")  # the process cannot serve
-        self.assertEqual([r.body for r in rules if r.kind == "capability" and not r.deny], [])
-        self.assertFalse([r for r in rules if r.kind == "unix" and not r.deny])
-        self.assertFalse(decide(rules, "/run/php/php8.5-fpm.sock", "rw"))
-        self.assertFalse(decide(rules, "/run/php/wpcaregrid-production-php8.4-fpm.sock", "rw"))
         text = (ARTIFACTS / PROFILES[self.NAME]).read_text()
-        self.assertNotIn("nameservice", text)  # no resolver: the database host is an address, not a name
-        self.assertNotIn("ssl_certs", text)
-        self.assertIn("any TCP address is reachable", text)  # the honest limit is stated next to the rule
+        for gone in ("nameservice", "ssl_certs", "/etc/nsswitch.conf", "/etc/hosts", "/etc/host.conf"):
+            self.assertNotIn(gone, text)  # no resolver and no TLS: there is nothing to resolve
+        self.assertIn("NO TCP, NO OTHER NETWORK", text)
+        self.assertIn("fail closed", text)
 
-    def test_the_live_probe_proves_the_network_limits_family_by_family(self) -> None:
+    def test_exact_socket_allowed_alternate_sockets_refused(self) -> None:
+        rules = self.rules()
+        self.assertTrue(decide(rules, MYSQL_SOCKET, "rw"))
+        self.assertFalse(decide(rules, MYSQL_SOCKET, "x"))
+        self.assertFalse(decide(rules, MYSQL_SOCKET, "l"))
+        for alternate in ("/run/mysqld/wpcaregrid-production-restore.sock", "/run/mysqld/mysqld.sock", "/run/mysqld/wpcaregrid-production.sock.lock",
+                          "/run/mysqld/wpcaregrid-production.pid", "/run/mysqld/wpcaregrid-production.sock.bak", "/run/mysqld/wpcaregrid-productionx.sock",
+                          "/run/mysqld/other.sock", "/run/mysqld/", "/run/mysqld/sub/wpcaregrid-production.sock", "/var/lib/mysql/mysql.sock",
+                          "/tmp/mysql.sock", "/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock", "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+                          "/run/supervisor.sock", "/run/systemd/private", "/var/run/docker.sock", "/run/user/0/bus"):
+            for access in ("r", "w", "rw"):
+                self.assertFalse(decide(rules, alternate, access), f"{alternate} {access}")
+        denied = {r.body for r in rules if r.deny}
+        for explicit in ("/run/mysqld/wpcaregrid-production-restore.sock", "/run/mysqld/mysqld.sock", "/run/mysqld/wpcaregrid-production.sock.lock"):
+            self.assertIn(explicit, denied)
+        # the allow is a single exact path, written in the profile, never a pattern and never from the environment
+        file_allows = [r.body for r in rules if r.kind == "file" and not r.deny and "/run/" in r.body]
+        self.assertEqual(file_allows, [MYSQL_SOCKET])
+        rule_lines = "\n".join(l for l in (ARTIFACTS / PROFILES[self.NAME]).read_text().splitlines() if not l.strip().startswith("#"))
+        self.assertNotRegex(rule_lines, r"@\{|\$\{|getenv|environ")  # no variable, so nothing environment-controlled can change the path
+
+    def test_the_socket_path_is_the_production_g1_instance_and_bound_everywhere(self) -> None:
+        spec = importlib.util.spec_from_file_location("wpcg_g1_contract", ROOT / "scripts" / "production_g1_mysql_contract.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        instances = module.INSTANCES
+        self.assertEqual(instances["wpcaregrid-production"].socket, MYSQL_SOCKET)
+        self.assertNotEqual(instances["wpcaregrid-production-restore"].socket, MYSQL_SOCKET)  # the isolated restore instance differs
+        binding = json.loads((ARTIFACTS / "binding.json").read_text())["aa_exec_profiles"]["wpcaregrid-php-cli-production-deploy"]
+        self.assertEqual(binding["mysql_unix_socket"]["path"], MYSQL_SOCKET)
+        self.assertIn(instances["wpcaregrid-production-restore"].socket, binding["mysql_unix_socket"]["alternates_denied"])
+        self.assertIn("has NOT been checked", binding["mysql_unix_socket"]["policy"])
+        self.assertIn("server-UUID", binding["mysql_unix_socket"]["policy"])
+        matrix = json.loads(MATRIX_TEXT)["profiles"][self.NAME]
+        self.assertEqual(matrix["mysql_unix_socket"], MYSQL_SOCKET)
+        self.assertEqual([x["path"] for x in matrix["sockets"] if x["expect"] == "allow"], [MYSQL_SOCKET])
+        self.assertEqual({x["path"] for x in matrix["sockets"] if x["id"].startswith("mysql-") and x["expect"] == "deny"},
+                         {instances["wpcaregrid-production-restore"].socket, "/run/mysqld/mysqld.sock"})
+        # no other profile may allow it: only the deploy CLI talks to MySQL over this socket
+        for other in PROFILES:
+            if other != self.NAME:
+                self.assertFalse(decide(load_profile(ARTIFACTS, other, [])[0], MYSQL_SOCKET, "rw"), other)
+
+    def test_1_0_2_had_a_tcp_rule_and_1_0_3_removed_it(self) -> None:
+        """Regression for the review: the model sees the old exfiltration path in 1.0.2 and its absence in 1.0.3."""
+        old = parse_text((ROOT / "deploy/php-fpm-confinement/1.0.2/apparmor/wpcaregrid-php-cli-production-deploy").read_text(), "old", [],
+                         ROOT / "deploy/php-fpm-confinement/1.0.2", set())[0]
+        new = self.rules()
+        self.assertTrue(net_decide(old, "inet", "stream", "connect"))   # 1.0.2: any IPv4 TCP address was reachable
+        self.assertFalse(net_decide(old, "inet6", "stream", "connect"))
+        self.assertFalse(net_decide(new, "inet", "stream", "connect"))  # 1.0.3: nothing
+        self.assertFalse(net_decide(new, "inet6", "stream", "connect"))
+
+    def test_local_operations_each_supported_command_needs_are_allowed(self) -> None:
+        """Positive tests for the three authorized helper commands, with no socket among their needs."""
+        rules = self.rules()
+        commands = {c["id"]: c for c in json.loads(MATRIX_TEXT)["profiles"][self.NAME]["commands_supported"]}
+        self.assertEqual(set(commands), {"runtime-identity-probe", "package-discover", "config-cache"})
+        self.assertEqual({k: c["network"] for k, c in commands.items() if k != "runtime-identity-probe"}, {"package-discover": "none", "config-cache": "none"})
+        self.assertEqual(commands["runtime-identity-probe"]["network"], f"unix stream connect to {MYSQL_SOCKET} only")
+        self.assertIn("no host/port, no TCP fallback", commands["runtime-identity-probe"]["note"])
+        self.assertIn("server-UUID", commands["runtime-identity-probe"]["note"])
+        needs = {
+            "runtime-identity-probe": [("/usr/bin/php8.4", "x"), (MYSQL_SOCKET, "rw"), (f"{self.P}/current/vendor/autoload.php", "r"), (f"{self.P}/current/bootstrap/app.php", "r"),
+                                       (f"{self.P}/current/.env", "r"), (f"{self.P}/current/bootstrap/cache/config.php", "r"),
+                                       (f"{self.P}/current/config/marketing_release.php", "r"), (f"{self.P}/current/storage/logs/laravel.log", "w")],
+            "package-discover": [("/usr/bin/php8.4", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/vendor/composer/installed.json", "r"),
+                                 (f"{self.P}/current/bootstrap/cache/packages.php", "w"), (f"{self.P}/current/bootstrap/cache/services.php", "w")],
+            "config-cache": [("/usr/bin/php8.4", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/config/app.php", "r"),
+                             (f"{self.P}/current/.env", "r"), (f"{self.P}/current/bootstrap/cache/config.php", "w")],
+        }
+        for command, paths in needs.items():
+            for path, access in paths:
+                self.assertTrue(decide(rules, self.resolve(path), access), f"{command}: {path} {access}")
+        disabled = json.loads(MATRIX_TEXT)["profiles"][self.NAME]["commands_disabled"]
+        self.assertEqual([d["id"] for d in disabled], ["phase-b-migration-runner"])
+        self.assertIn("must not gain network rights", disabled[0]["reason"])
+
+    def test_the_live_probe_proves_ipv4_and_ipv6_tcp_connects_and_every_family_are_refused(self) -> None:
         checks = {c["id"]: c for c in json.loads(MATRIX_TEXT)["profiles"][self.NAME]["network_checks"]}
-        self.assertEqual({k: v["expect"] for k, v in checks.items()}, {
-            "inet-stream-create": "allow", "inet-stream-bind": "deny", "inet6-stream-create": "deny", "inet-dgram-create": "deny",
-            "unix-stream-create": "deny", "netlink-raw-create": "deny"})
+        self.assertEqual({k: v["expect"] for k, v in checks.items()}, {**{i: "deny" for i in (
+            "inet-stream-create", "inet-stream-bind", "inet-stream-connect-loopback", "inet6-stream-create", "inet6-stream-connect-loopback",
+            "inet-dgram-create", "inet6-dgram-create", "unix-dgram-create", "netlink-raw-create")}, "unix-stream-create": "allow"})
+        self.assertEqual((checks["inet-stream-connect-loopback"]["action"], checks["inet6-stream-connect-loopback"]["action"]), ("connect", "connect"))
+        self.assertTrue(checks["inet6-stream-connect-loopback"]["optional"])  # a host without ::1 reports UNPROVEN, never PASS
+        self.assertNotIn("optional", checks["inet-stream-connect-loopback"])
 
     def test_fixture_cache_directory_is_writable_by_www_data_like_the_helper_leaves_it(self) -> None:
         matrix = json.loads(MATRIX_TEXT)
@@ -2675,6 +2825,66 @@ class DeployCliProfile(unittest.TestCase):
         ids = {c["id"] for c in matrix["checks"]}
         for needed in ("cache-write", "storage-write", "shared-env-read", "state-read", "staging-env-read", "exec-shell", "exec-python"):
             self.assertIn(needed, ids)
+
+
+class DeployNetworkVerdict(unittest.TestCase):
+    """The live net:* checks are what proves the no-network profile on the host; the verifier must fail if it regains any."""
+
+    PROFILE = "wpcaregrid-php-cli-production-deploy"
+
+    def run_with(self, mutate=None):
+        return VerifyAcceptance().run_verify(mutate, profile=self.PROFILE, phase="post")
+
+    def result(self, state, ident):
+        return next(r for r in state["confined"]["results"] if r["id"] == ident)
+
+    def test_coherent_run_has_every_net_check_denied_with_its_own_event(self) -> None:
+        verdict = self.run_with()
+        self.assertEqual(verdict.failures, [])
+        net = [p for p in verdict.passes if p.startswith("PASS net:")]
+        self.assertEqual(len(net), 10)
+        self.assertTrue([p for p in verdict.passes if p.startswith("PASS socket:mysql-production")])
+        for needed in ("net:inet-stream-connect-loopback", "net:inet6-stream-connect-loopback"):
+            self.assertTrue([p for p in net if needed in p], needed)
+
+    def test_a_profile_that_regained_tcp_connect_is_caught_for_ipv4_and_ipv6(self) -> None:
+        for ident in ("net:inet-stream-connect-loopback", "net:inet-stream-create", "net:inet6-stream-create", "net:inet6-stream-connect-loopback",
+                      "net:inet-dgram-create", "net:unix-dgram-create", "net:netlink-raw-create", "net:inet-stream-bind", "net:inet6-dgram-create"):
+            verdict = self.run_with(lambda s, i=ident: self.result(s, i).update(errno=0))
+            self.assertTrue(any(ident in f and "confined access not refused" in f for f in verdict.failures), ident)
+
+    def test_the_exact_socket_must_work_and_a_wrong_or_missing_path_fails_closed(self) -> None:
+        """No TCP fallback: if the host socket differs, the allowed connect fails and acceptance fails (never passes)."""
+        refused = self.run_with(lambda s: self.result(s, "socket:mysql-production").update(errno=13))
+        self.assertTrue(any("socket:mysql-production" in f and "allowed access failed" in f for f in refused.failures), refused.failures[:3])
+        missing = self.run_with(lambda s: [r.update(errno=errno_.ENOENT) for st in ("baseline", "confined") for r in s[st]["results"]
+                                            if r["id"] == "socket:mysql-production"])
+        self.assertTrue(any("socket:mysql-production" in f for f in missing.failures))
+        self.assertFalse(any("socket:mysql-production" in p for p in missing.passes))
+        # an alternate MySQL socket that the profile failed to refuse
+        for alt in ("socket:mysql-restore", "socket:mysql-vendor-main", "socket:fpm-staging-next", "socket:fpm-legacy"):
+            verdict = self.run_with(lambda s, a=alt: self.result(s, a).update(errno=0))
+            self.assertTrue(any(alt in f and "confined access not refused" in f for f in verdict.failures), alt)
+        # unix stream create refused would also break the probe: the allow check catches it
+        broken = self.run_with(lambda s: self.result(s, "net:unix-stream-create").update(errno=13))
+        self.assertTrue(any("net:unix-stream-create" in f and "allowed access failed" in f for f in broken.failures))
+
+    def test_a_refusal_without_the_matching_family_event_does_not_pass(self) -> None:
+        def wrong_family(state):
+            state["audit"] = state["audit"].replace('family=\\"inet6\\"', 'family=\\"inet\\"')
+        verdict = self.run_with(wrong_family)
+        self.assertTrue(any("net:inet6" in f and "no AppArmor DENIED record" in f for f in verdict.failures), verdict.failures[:3])
+        self.assertTrue(self.run_with(lambda s: s.update(audit="")).failures)
+
+    def test_a_baseline_that_never_connected_is_inconclusive_for_required_checks_and_unproven_for_optional_ipv6(self) -> None:
+        required = self.run_with(lambda s: next(r for r in s["baseline"]["results"] if r["id"] == "net:inet-stream-connect-loopback").update(errno=errno_.EDESTADDRREQ))
+        self.assertTrue(any("net:inet-stream-connect-loopback" in f and "baseline could not reach" in f for f in required.failures))
+        optional = self.run_with(lambda s: next(r for r in s["baseline"]["results"] if r["id"] == "net:inet6-stream-connect-loopback").update(errno=errno_.EDESTADDRREQ))
+        self.assertEqual(optional.failures, [])
+        self.assertTrue(any("net:inet6-stream-connect-loopback" in n and "UNPROVEN" in n for n in optional.notes))
+        masked = self.run_with(lambda s: (next(r for r in s["baseline"]["results"] if r["id"] == "net:inet6-stream-connect-loopback").update(errno=errno_.EDESTADDRREQ),
+                                          self.result(s, "net:inet6-stream-connect-loopback").update(errno=0)))
+        self.assertTrue(any("confined access succeeded" in f for f in masked.failures))
 
 
 class TransientDeployCliClass(unittest.TestCase):
@@ -2753,33 +2963,112 @@ class TransientDeployCliClass(unittest.TestCase):
         self.assertIn("never a *.service unit", binding["cgroup"])
 
 
-class PackageImmutability(unittest.TestCase):
-    """1.0.1 was reviewed and published to workstream A; its bytes must never change. Changes ship as a new version."""
+def git_out(*args: str) -> str | None:
+    try:
+        result = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
+
+class PackageImmutability(unittest.TestCase):
+    """Published packages never change: a change ships as a new version directory.
+
+    Independent immutable reference: the Git TREE OBJECT id of each frozen package directory (it commits to every
+    file name, mode and blob id, so it covers bytes, executable bits and the file set, not just the listed checksums),
+    pinned here AND re-derived from the historical commit when that history is available, so editing a package and
+    its checksums (or a constant) in one commit is caught. Set PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY=1 (CI does) to
+    make a missing git checkout a failure instead of a skip.
+    """
+
+    # version -> (git tree id of deploy/php-fpm-confinement/<version> at its reviewed commit, that commit)
+    FROZEN = {
+        "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
+        "1.0.2": ("90502b788a660347c52a83ccbe2c99c965fba2ef", "f478c8a70f91078e828ed89403cb9f890457c195"),
+    }
     SUMS_1_0_1 = "1a44d13aa63c71e2228e2ab52cfce76f7139724f4025d13c665d9064a2222883"
 
-    def test_1_0_1_is_byte_identical_to_what_was_reviewed(self) -> None:
+    def require_git(self) -> None:
+        if git_out("rev-parse", "--git-dir") is None:
+            if os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY") == "1":
+                self.fail("a git checkout is required to verify the frozen packages' object identity")
+            self.skipTest("not a git checkout: frozen-package object identity NOT verified in this run")
+
+    def test_frozen_packages_match_their_pinned_git_tree_object(self) -> None:
+        self.require_git()
+        for version, (tree, _) in self.FROZEN.items():
+            self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"), tree, version)
+
+    def test_frozen_packages_have_no_uncommitted_or_untracked_change(self) -> None:
+        self.require_git()
+        for version in self.FROZEN:
+            path = f"deploy/php-fpm-confinement/{version}"
+            self.assertEqual(git_out("status", "--porcelain", "--untracked-files=all", "--", path), "", f"{version} was modified in the working tree")
+
+    def test_the_pin_agrees_with_the_historical_commit_when_history_is_available(self) -> None:
+        self.require_git()
+        checked = 0
+        for version, (tree, commit) in self.FROZEN.items():
+            if git_out("cat-file", "-t", commit) != "commit":
+                continue  # shallow clone: the pinned tree id above is the reference
+            self.assertEqual(git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), tree, version)
+            self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"),
+                             git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), f"{version} changed after {commit[:7]}")
+            checked += 1
+        if checked == 0 and os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY") == "1":
+            self.fail("history required but unavailable")
+
+    def test_tree_identity_is_reproducible_from_bytes_and_tamper_evident(self) -> None:
+        """Re-derive the tree id from the files alone in a scratch repository: any byte or mode change moves it."""
+        self.require_git()
+        with tempfile.TemporaryDirectory(prefix="wpcg-tree-id-") as temp:
+            repo = Path(temp)
+            def run(*args):
+                return subprocess.run(["git", "-C", str(repo), "-c", "core.autocrlf=false", "-c", "core.filemode=true", *args],
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            run("init", "-q")
+            target = repo / "pkg"
+            shutil.copytree(ROOT / "deploy/php-fpm-confinement/1.0.1", target)
+            run("add", "-A")
+            self.assertEqual(run("write-tree", "--prefix=pkg/"), self.FROZEN["1.0.1"][0])
+            victim = target / "apparmor/wpcaregrid-php-fpm-production"
+            original = victim.read_bytes()
+            victim.write_bytes(original + b"#")
+            run("add", "-A")
+            self.assertNotEqual(run("write-tree", "--prefix=pkg/"), self.FROZEN["1.0.1"][0])
+            victim.write_bytes(original)
+            victim.chmod(0o755)
+            run("add", "-A")
+            self.assertNotEqual(run("write-tree", "--prefix=pkg/"), self.FROZEN["1.0.1"][0], "an executable-bit change is also caught")
+
+    def test_1_0_1_checksums_still_match(self) -> None:
         old = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1"
         self.assertEqual(hashlib.sha256((old / "SHA256SUMS").read_bytes()).hexdigest(), self.SUMS_1_0_1)
-        listed = {}
         for line in (old / "SHA256SUMS").read_text().splitlines():
             digest, _, name = line.partition("  ")
-            listed[name] = digest
-        actual = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file() and p.name != "SHA256SUMS"}
-        self.assertEqual(set(listed), actual)
-        for name, digest in listed.items():
             self.assertEqual(hashlib.sha256((old / name).read_bytes()).hexdigest(), digest, name)
 
-    def test_1_0_2_is_a_distinct_package_with_one_added_profile(self) -> None:
-        old, new = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1", ARTIFACTS
-        old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
-        new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
-        self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-deploy"})
-        self.assertEqual(old_files - new_files, set())
-        self.assertNotEqual((old / "SHA256SUMS").read_bytes(), (new / "SHA256SUMS").read_bytes())
-        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.2")
-        self.assertEqual(json.loads((old / "binding.json").read_text())["package_version"], "1.0.1")
+    def test_1_0_3_is_a_distinct_package_that_keeps_the_same_file_set(self) -> None:
+        new = ARTIFACTS
+        for version in self.FROZEN:
+            old = ROOT / "deploy" / "php-fpm-confinement" / version
+            old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
+            new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
+            if version == "1.0.1":
+                self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-deploy"})
+            else:
+                self.assertEqual(new_files, old_files)
+            self.assertEqual(old_files - new_files, set())
+            self.assertNotEqual((old / "SHA256SUMS").read_bytes(), (new / "SHA256SUMS").read_bytes())
+            self.assertEqual(json.loads((old / "binding.json").read_text())["package_version"], version)
+        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.3")
         self.assertEqual(len(json.loads((new / "binding.json").read_text())["installed_files"]), 16)
+        # the one security-relevant change since 1.0.2: the deploy CLI profile lost its network rule
+        old_profile = (ROOT / "deploy/php-fpm-confinement/1.0.2/apparmor/wpcaregrid-php-cli-production-deploy").read_text()
+        new_profile = (new / "apparmor/wpcaregrid-php-cli-production-deploy").read_text()
+        self.assertIn("network (create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream", old_profile)
+        self.assertNotIn("(getattr, getopt, setopt) inet stream", new_profile.replace("audit deny", ""))
+        self.assertIn("network (create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream", new_profile)
 
 
 class OriginalProfileHarness(unittest.TestCase):
@@ -2833,9 +3122,15 @@ class BindingManifest(unittest.TestCase):
         self.assertEqual(self.binding["package_version"], ARTIFACTS.name)
         deploy = self.binding["aa_exec_profiles"]["wpcaregrid-php-cli-production-deploy"]
         self.assertEqual((deploy["gids"], deploy["argv0"], deploy["max_age_seconds"]), ([33] * 4, "/usr/bin/php8.4", 960))
+        self.assertTrue(deploy["network"].startswith("no TCP"))
+        self.assertEqual({c["id"] for c in deploy["commands_supported"]}, {"runtime-identity-probe", "package-discover", "config-cache"})
+        self.assertEqual([c["id"] for c in deploy["commands_disabled"]], ["phase-b-migration-runner"])
+        self.assertIn("unix socket only", deploy["runtime_probe_constraint"])
+        self.assertIn("no TCP fallback", deploy["runtime_probe_constraint"])
+        self.assertEqual(self.binding["rules"]["deploy_cli_network"], "unix-stream connect to the exact MySQL socket only; no TCP")
         self.assertTrue(re.search(deploy["cgroup_regex"], "0::/user.slice/user-0.slice/session-12.scope"))
         self.assertFalse(re.search(deploy["cgroup_regex"], "0::/system.slice/run-u1.service"))
-        self.assertIn("/usr/bin/php8.4", deploy["phase_b_interpreter"])
+        self.assertIn("Phase B stays disabled", deploy["phase_b_interpreter"])
         self.assertEqual(self.binding["schema"], 1)
 
     def test_contract_module_is_not_carried_in_this_branch(self) -> None:
@@ -2870,7 +3165,7 @@ class DocumentationContract(unittest.TestCase):
         for needed in (
             "Source tests cannot prove kernel enforcement", "NOT PROVEN", "fail closed",
             "No new users, groups or FPM UID", "complain", "Rollback", "STOP", "Inherited descriptors",
-            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.2 does not separate TCP ports", "wpcaregrid-php-cli-production-deploy",
+            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.3 does not separate TCP ports", "wpcaregrid-php-cli-production-deploy",
             "aa-exec", "never a `*.service` unit", "Packages are immutable",
             "derive-probe-profile.py", "sha256sum -c --strict SHA256SUMS", "binding.json", "fence-production.py",
             "pre-production peer gate", "supplementary group 33", "workstream A", "wpcaregrid-php-fpm-harness",
@@ -2883,7 +3178,7 @@ class DocumentationContract(unittest.TestCase):
 
     def test_stage_zero_installs_nothing_into_unit_or_profile_search_paths(self) -> None:
         stage0 = self.section("**Stage 0", "**Stage 1")
-        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.2/", stage0)
+        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.3/", stage0)
         self.assertIn("does not install any profile, unit, drop-in", stage0)
         self.assertNotIn("90-wpcaregrid-confinement.conf", stage0)
         self.assertNotIn("cp ", stage0)
@@ -2910,6 +3205,13 @@ class DocumentationContract(unittest.TestCase):
         self.assertLess(stage1.index("90-wpcaregrid-confinement.conf"), stage1.index("daemon-reload"))
         self.assertLess(stage2.index("drop-in"), stage2.index("`daemon-reload` (only now)"))
         self.assertLess(stage3.index("copy that unit's drop-in only now"), stage3.index("`daemon-reload`"))
+
+    def test_runbook_states_the_socket_decision_and_its_limits(self) -> None:
+        doc = self.doc()
+        for needed in ("/run/mysqld/wpcaregrid-production.sock", "no environment-controlled path", "no TCP fallback", "Source has not checked the live host",
+                       "fails closed", "exact server-UUID check", "Phase B stays disabled and is not authorized here",
+                       "AppArmor cannot tell a query from DDL", "is a new Owner decision and a new package", "socket:mysql-production"):
+            self.assertIn(needed, doc, needed)
 
     def test_deploy_cli_profile_arrives_with_the_production_unit_never_before(self) -> None:
         name = "wpcaregrid-php-cli-production-deploy"
@@ -2998,11 +3300,11 @@ class DocumentationContract(unittest.TestCase):
     def test_harness_is_published_readably_and_hash_verified_instead_of_run_from_the_root_only_package(self) -> None:
         """QA (B): a root:root 0700 package directory cannot be executed by www-data."""
         stage0 = self.section("**Stage 0", "**Stage 1")
-        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.2",
+        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.3",
                        "install -o root -g root -m 0644", "fd-sender.py", "sha256sum -c --strict -", "stdlib-only"):
             self.assertIn(needed, stage0)
         doc = self.doc()
-        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.2/fd-sender.py", doc)
+        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.3/fd-sender.py", doc)
         self.assertNotIn('"$PKG/acceptance/fd-sender.py" "$N"', doc)  # never executed from the 0700 package directory
         tree = ast.parse((ACCEPTANCE / "fd-sender.py").read_text())
         imports = {n.names[0].name for n in ast.walk(tree) if isinstance(n, ast.Import)} | {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
