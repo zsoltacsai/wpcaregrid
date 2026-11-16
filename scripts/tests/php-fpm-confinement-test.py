@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.3).
+"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.4).
 
 WHAT THIS PROVES: the committed AppArmor profiles, systemd units and FPM config
 are internally consistent, fail closed under mutation, and -- evaluated by a
 small AppArmor path-rule model -- grant and deny the paths in
-deploy/php-fpm-confinement/1.0.3/acceptance/matrix.json in both directions
+deploy/php-fpm-confinement/1.0.4/acceptance/matrix.json in both directions
 between production and the existing staging pools, including symlink escapes.
 
 WHAT THIS DOES NOT PROVE: kernel enforcement. The model is not the kernel. The
@@ -41,7 +41,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # never leave bytecode inside the hashed artifact tree
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.3"
+ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.4"
 MYSQL_SOCKET = "/run/mysqld/wpcaregrid-production.sock"
 DEPLOY_UNIX = "(create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream"
 DOC = ROOT / "docs" / "PHP_FPM_CONFINEMENT_GO13.md"
@@ -59,6 +59,7 @@ EXPECTED_FILES = {
     "acceptance/matrix.json",
     "acceptance/probe.py",
     "acceptance/rollback-order.py",
+    "acceptance/sibling-listener.py",
     "acceptance/verify-acceptance.py",
     "apparmor/abstractions/wpcaregrid-php-fpm-common",
     "apparmor/wpcaregrid-nginx",
@@ -615,7 +616,7 @@ def load_script(path: Path, name: str):
 
 
 def copy_artifacts(destination: Path) -> Path:
-    target = destination / "1.0.3"
+    target = destination / "1.0.4"
     shutil.copytree(ARTIFACTS, target)
     return target
 
@@ -790,7 +791,7 @@ class ProcPtraceSignalAndSockets(unittest.TestCase):
 
     def test_tcp_port_separation_is_not_claimed(self) -> None:
         doc = DOC.read_text(encoding="utf-8")
-        self.assertIn("AppArmor 1.0.3 does not separate TCP ports", doc)
+        self.assertIn("AppArmor 1.0.4 does not separate TCP ports", doc)
 
 
 class InheritedDescriptors(unittest.TestCase):
@@ -1584,6 +1585,8 @@ def synthetic_run(profile: str, phase: str = "post"):
                 exec_pid += 1
                 actor = exec_pid
             entry = {"id": ident, "kind": kind, "target": "", "errno": errno_value, "pid": actor, "t0": t0, "t1": t1}
+            if kind == "socket" and item.get("banner"):
+                entry["banner_ok"] = run == "baseline"
             if ident.startswith(("calibration:child", "control:self")):
                 entry["child"] = child
             run_doc["results"].append(entry)
@@ -2784,7 +2787,7 @@ class DeployCliProfile(unittest.TestCase):
         self.assertEqual(matrix["mysql_unix_socket"], MYSQL_SOCKET)
         self.assertEqual([x["path"] for x in matrix["sockets"] if x["expect"] == "allow"], [MYSQL_SOCKET])
         self.assertEqual({x["path"] for x in matrix["sockets"] if x["id"].startswith("mysql-") and x["expect"] == "deny"},
-                         {instances["wpcaregrid-production-restore"].socket, "/run/mysqld/mysqld.sock"})
+                         {instances["wpcaregrid-production-restore"].socket, "/run/mysqld/mysqld.sock", "/run/mysqld/wpcaregrid-acceptance-canary.sock"})
         # no other profile may allow it: only the deploy CLI talks to MySQL over this socket
         for other in PROFILES:
             if other != self.NAME:
@@ -2797,8 +2800,10 @@ class DeployCliProfile(unittest.TestCase):
         new = self.rules()
         self.assertTrue(net_decide(old, "inet", "stream", "connect"))   # 1.0.2: any IPv4 TCP address was reachable
         self.assertFalse(net_decide(old, "inet6", "stream", "connect"))
-        self.assertFalse(net_decide(new, "inet", "stream", "connect"))  # 1.0.3: nothing
+        self.assertFalse(net_decide(new, "inet", "stream", "connect"))  # 1.0.3+: nothing
         self.assertFalse(net_decide(new, "inet6", "stream", "connect"))
+        self.assertFalse(net_decide(new, "unix", "raw", "create"))
+        self.assertFalse(net_decide(new, "netlink", "raw", "create"))
 
     def test_local_operations_each_supported_command_needs_are_allowed(self) -> None:
         """Positive tests for the three authorized helper commands, with no socket among their needs."""
@@ -2830,7 +2835,7 @@ class DeployCliProfile(unittest.TestCase):
         checks = {c["id"]: c for c in json.loads(MATRIX_TEXT)["profiles"][self.NAME]["network_checks"]}
         self.assertEqual({k: v["expect"] for k, v in checks.items()}, {**{i: "deny" for i in (
             "inet-stream-create", "inet-stream-bind", "inet-stream-connect-loopback", "inet6-stream-create", "inet6-stream-connect-loopback",
-            "inet-dgram-create", "inet6-dgram-create", "unix-dgram-create", "unix-seqpacket-create", "netlink-raw-create", "unix-stream-bind")}, "unix-stream-create": "allow"})
+            "inet-dgram-create", "inet6-dgram-create", "unix-dgram-create", "unix-seqpacket-create", "netlink-raw-create", "unix-raw-create", "unix-stream-bind")}, "unix-stream-create": "allow"})
         self.assertEqual((checks["inet-stream-connect-loopback"]["action"], checks["inet6-stream-connect-loopback"]["action"]), ("connect", "connect"))
         self.assertTrue(checks["inet6-stream-connect-loopback"]["optional"])  # a host without ::1 reports UNPROVEN, never PASS
         self.assertNotIn("optional", checks["inet-stream-connect-loopback"])
@@ -2901,14 +2906,15 @@ class DeployNetworkVerdict(unittest.TestCase):
         verdict = self.run_with()
         self.assertEqual(verdict.failures, [])
         net = [p for p in verdict.passes if p.startswith("PASS net:")]
-        self.assertEqual(len(net), 12)
+        self.assertEqual(len(net), 13)
         self.assertTrue([p for p in verdict.passes if p.startswith("PASS socket:mysql-production")])
         for needed in ("net:inet-stream-connect-loopback", "net:inet6-stream-connect-loopback"):
             self.assertTrue([p for p in net if needed in p], needed)
 
     def test_a_profile_that_regained_tcp_connect_is_caught_for_ipv4_and_ipv6(self) -> None:
         for ident in ("net:inet-stream-connect-loopback", "net:inet-stream-create", "net:inet6-stream-create", "net:inet6-stream-connect-loopback",
-                      "net:inet-dgram-create", "net:unix-dgram-create", "net:netlink-raw-create", "net:inet-stream-bind", "net:inet6-dgram-create"):
+                      "net:inet-dgram-create", "net:unix-dgram-create", "net:netlink-raw-create", "net:unix-raw-create",
+                      "net:inet-stream-bind", "net:inet6-dgram-create"):
             verdict = self.run_with(lambda s, i=ident: self.result(s, i).update(errno=0))
             self.assertTrue(any(ident in f and "confined access not refused" in f for f in verdict.failures), ident)
 
@@ -2927,6 +2933,25 @@ class DeployNetworkVerdict(unittest.TestCase):
         # unix stream create refused would also break the probe: the allow check catches it
         broken = self.run_with(lambda s: self.result(s, "net:unix-stream-create").update(errno=13))
         self.assertTrue(any("net:unix-stream-create" in f and "allowed access failed" in f for f in broken.failures))
+
+    def test_sibling_socket_requires_the_exact_live_canary_banner(self) -> None:
+        ident = "socket:mysql-sibling-canary"
+        good = self.run_with()
+        self.assertEqual(good.failures, [])
+        self.assertTrue([p for p in good.passes if p.startswith(f"PASS {ident}")])
+
+        # Listener absent/stale/wrong cannot count as baseline reachability, even if a stale socket pathname exists.
+        for errno_value, banner_ok in ((errno_.ECONNREFUSED, False), (0, False), (errno_.ENOENT, False)):
+            def bad_baseline(state, e=errno_value, banner=banner_ok):
+                result = next(r for r in state["baseline"]["results"] if r["id"] == ident)
+                result.update(errno=e, banner_ok=banner)
+            verdict = self.run_with(bad_baseline)
+            self.assertTrue(any(ident in f and "exact sibling canary banner" in f for f in verdict.failures), verdict.failures[:5])
+
+        # A confined read of the canary is never accepted, even if a crafted result also claims denial.
+        leaked = self.run_with(lambda s: next(r for r in s["confined"]["results"] if r["id"] == ident).update(errno=0, banner_ok=True))
+        self.assertTrue(any(ident in f and ("exact sibling canary banner" in f or "denied-canary outcome" in f or "confined access not refused" in f)
+                            for f in leaked.failures), leaked.failures[:5])
 
     def test_a_refusal_without_the_matching_family_event_does_not_pass(self) -> None:
         def wrong_family(state):
@@ -3044,6 +3069,7 @@ class PackageImmutability(unittest.TestCase):
     FROZEN = {
         "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
         "1.0.2": ("90502b788a660347c52a83ccbe2c99c965fba2ef", "f478c8a70f91078e828ed89403cb9f890457c195"),
+        "1.0.3": ("dcf18aa07cbdb8bcddde8f2a0527a13701ab0316", "96dc862ea00ebbcaa0dfe87e37ee44b984a74955"),
     }
     SUMS_1_0_1 = "1a44d13aa63c71e2228e2ab52cfce76f7139724f4025d13c665d9064a2222883"
 
@@ -3111,20 +3137,24 @@ class PackageImmutability(unittest.TestCase):
             digest, _, name = line.partition("  ")
             self.assertEqual(hashlib.sha256((old / name).read_bytes()).hexdigest(), digest, name)
 
-    def test_1_0_3_is_a_distinct_package_that_keeps_the_same_file_set(self) -> None:
+    def test_1_0_4_is_a_distinct_package_with_a_pinned_sibling_canary(self) -> None:
         new = ARTIFACTS
         for version in self.FROZEN:
             old = ROOT / "deploy" / "php-fpm-confinement" / version
             old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
             new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
             if version == "1.0.1":
-                self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-deploy"})
+                self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-deploy", "acceptance/sibling-listener.py"})
+            elif version == "1.0.3":
+                self.assertEqual(new_files - old_files, {"acceptance/sibling-listener.py"})
+            elif version == "1.0.2":
+                self.assertEqual(new_files - old_files, {"acceptance/sibling-listener.py"})
             else:
                 self.assertEqual(new_files, old_files)
             self.assertEqual(old_files - new_files, set())
             self.assertNotEqual((old / "SHA256SUMS").read_bytes(), (new / "SHA256SUMS").read_bytes())
             self.assertEqual(json.loads((old / "binding.json").read_text())["package_version"], version)
-        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.3")
+        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.4")
         self.assertEqual(len(json.loads((new / "binding.json").read_text())["installed_files"]), 16)
         # the one security-relevant change since 1.0.2: the deploy CLI profile lost its network rule
         old_profile = (ROOT / "deploy/php-fpm-confinement/1.0.2/apparmor/wpcaregrid-php-cli-production-deploy").read_text()
@@ -3132,6 +3162,20 @@ class PackageImmutability(unittest.TestCase):
         self.assertIn("network (create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream", old_profile)
         self.assertNotIn("(getattr, getopt, setopt) inet stream", new_profile.replace("audit deny", ""))
         self.assertIn("network (create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream", new_profile)
+        matrix = json.loads((new / "acceptance/matrix.json").read_text())
+        canary = matrix["sibling_canary"]
+        self.assertEqual(canary["path"], "/run/mysqld/wpcaregrid-acceptance-canary.sock")
+        self.assertEqual(canary["banner"], "WPCG-SIBLING-CANARY-v1\n")
+        deploy_cli = matrix["profiles"]["wpcaregrid-php-cli-production-deploy"]
+        sibling = next(item for item in deploy_cli["sockets"] if item["id"] == "mysql-sibling-canary")
+        self.assertEqual(sibling["path"], canary["path"])
+        self.assertEqual(sibling["banner"], canary["banner"])
+        self.assertEqual(sibling["expect"], "deny")
+        self.assertEqual({item["id"] for item in deploy_cli["network_checks"] if item["type"] == "SOCK_RAW"},
+                         {"unix-raw-create", "netlink-raw-create"})
+        self.assertEqual(hashlib.sha256((new / "acceptance/sibling-listener.py").read_bytes()).hexdigest(),
+                         next(line.split()[0] for line in (new / "SHA256SUMS").read_text().splitlines()
+                              if line.endswith("  acceptance/sibling-listener.py")))
 
 
 class OriginalProfileHarness(unittest.TestCase):
@@ -3215,7 +3259,7 @@ class AbstractSocketDenial(unittest.TestCase):
             explicit = {r.raw for r in rules if r.kind == "unix" and r.deny and r.audit and "@" not in r.body}
             # The deploy CLI also states its unix denies as unix rules, in case the parser does not turn the
             # `network unix <type>` form into them.
-            expected = {"audit deny unix type=dgram,", "audit deny unix type=seqpacket,",
+            expected = {"audit deny unix type=dgram,", "audit deny unix type=seqpacket,", "audit deny unix type=raw,",
                         "audit deny unix (bind, listen, accept) type=stream,"} if name == "wpcaregrid-php-cli-production-deploy" else set()
             self.assertEqual(explicit, expected, name)
             self.assertFalse([r for r in rules if r.kind == "unix" and not r.deny and "addr" in r.body], name)
@@ -3234,20 +3278,22 @@ class DocumentationContract(unittest.TestCase):
         for needed in (
             "Source tests cannot prove kernel enforcement", "NOT PROVEN", "fail closed",
             "No new users, groups or FPM UID", "complain", "Rollback", "STOP", "Inherited descriptors",
-            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.3 does not separate TCP ports", "wpcaregrid-php-cli-production-deploy",
+            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.4 does not separate TCP ports", "wpcaregrid-php-cli-production-deploy",
             "aa-exec", "never a `*.service` unit", "Packages are immutable",
             "derive-probe-profile.py", "sha256sum -c --strict SHA256SUMS", "binding.json", "fence-production.py",
             "pre-production peer gate", "supplementary group 33", "workstream A", "wpcaregrid-php-fpm-harness",
             "systemd 255", "PrivatePIDs", "never rely on exec-time revocation", "StandardInput=file:",
             "is not sufficient on its own", "exec-python", "Invariant I",
             "-p AppArmorProfile=wpcaregrid-php-fpm-production /usr/bin/python3",
+            "sibling-listener.py", "banner_ok: true", "banner_ok: false", "RuntimeMaxSec=600",
+            "ECONNREFUSED", "SOCK_RAW",
         ):
             self.assertIn(needed, doc, needed)
         self.assertNotRegex(doc, r"(?i)\bis (now )?installed\b|has been (applied|installed|loaded)")
 
     def test_stage_zero_installs_nothing_into_unit_or_profile_search_paths(self) -> None:
         stage0 = self.section("**Stage 0", "**Stage 1")
-        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.3/", stage0)
+        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.4/", stage0)
         self.assertIn("does not install any profile, unit, drop-in", stage0)
         self.assertNotIn("90-wpcaregrid-confinement.conf", stage0)
         self.assertNotIn("cp ", stage0)
@@ -3377,11 +3423,11 @@ class DocumentationContract(unittest.TestCase):
     def test_harness_is_published_readably_and_hash_verified_instead_of_run_from_the_root_only_package(self) -> None:
         """QA (B): a root:root 0700 package directory cannot be executed by www-data."""
         stage0 = self.section("**Stage 0", "**Stage 1")
-        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.3",
+        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.4",
                        "install -o root -g root -m 0644", "fd-sender.py", "sha256sum -c --strict -", "stdlib-only"):
             self.assertIn(needed, stage0)
         doc = self.doc()
-        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.3/fd-sender.py", doc)
+        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.4/fd-sender.py", doc)
         self.assertNotIn('"$PKG/acceptance/fd-sender.py" "$N"', doc)  # never executed from the 0700 package directory
         tree = ast.parse((ACCEPTANCE / "fd-sender.py").read_text())
         imports = {n.names[0].name for n in ast.walk(tree) if isinstance(n, ast.Import)} | {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
@@ -3389,6 +3435,16 @@ class DocumentationContract(unittest.TestCase):
         source = (ACCEPTANCE / "fd-sender.py").read_text()
         self.assertIn("os.geteuid() == 0", source)
         self.assertNotRegex(source, r"(?i)(password|token|api[_-]?key)")
+
+    def test_sibling_canary_listener_is_exact_path_root_only_and_inode_safe(self) -> None:
+        source = (ACCEPTANCE / "sibling-listener.py").read_text(encoding="utf-8")
+        self.assertIn('os.geteuid() != 0', source)
+        self.assertIn('"/run/mysqld/" + os.path.basename(path)', source)
+        self.assertIn('info.st_uid != 0 or info.st_mode & 0o022', source)
+        self.assertIn('if os.path.lexists(path):', source)
+        self.assertIn('"mode": "0666"', (ACCEPTANCE / "matrix.json").read_text())
+        self.assertIn('(now.st_dev, now.st_ino) == (identity.st_dev, identity.st_ino)', source)
+        self.assertIn('client.sendall(BANNER.encode())', source)
 
     def test_no_secret_values_in_artifacts(self) -> None:
         pattern = re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+")

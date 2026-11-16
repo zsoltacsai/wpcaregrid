@@ -1,5 +1,11 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-17 (GO-13 Workstream B: 1.0.4 acceptance-tool correction — source only)
+
+- **Status:** 1.0.4 is being prepared in source only; it is not reviewed, merged, installed or kernel-validated. The immutable 1.0.1–1.0.3 packages remain unchanged.
+- **Correction:** the sibling-socket check now requires a root-run, harmless listener to return the exact canary banner in the unconfined baseline, and an AppArmor-correlated denial in the confined run. `ECONNREFUSED`, missing or wrong listener is a failure. The probe explicitly exercises `SOCK_RAW` creation for unix and netlink; the deploy profile denies both.
+- **Next gates:** finish package hashes and runbook/test consistency, real-parser CI, independent exact-head Integration QA and AppSec. No host changes are authorized by this source preparation.
+
 ## Update — 2026-11-16 (GO-13 Workstream B: PHP-FPM confinement for the shared `www-data` UID — source only, AppSec fixes)
 
 - **Base:** `fa13359d8277cd3448bc43c471d3ec53e31cdc34`. Source only: nothing installed or loaded, no host, service, Nginx, helper or credential change; no PR, merge or push.

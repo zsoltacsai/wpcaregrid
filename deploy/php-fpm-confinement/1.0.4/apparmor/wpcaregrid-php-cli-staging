@@ -1,0 +1,91 @@
+# wpcaregrid-php-fpm-confinement 1.0.4 -- staging queue workers and scheduler CLI (PHP CLI as www-data)
+# Install as /etc/apparmor.d/wpcaregrid-php-cli-staging. Selected only by AppArmorProfile= in the
+# unit drop-ins for supervisor.service (every Supervisor-started queue worker inherits it),
+# wpcaregrid-staging-next-scheduler.service and wpcaregrid-staging-legacy-scheduler.service.
+# There is NO exec-path attachment and NO cron path: a www-data cron child would be an
+# unconfined same-UID shell, so www-data cron is not permitted at all (the legacy scheduler runs
+# from the systemd service above instead).
+# Allowlist: STAGING only. Production secrets, storage, code, state and sockets are denied, so a
+# worker or scheduler started against production by mistake or abuse cannot read them.
+# Production has no jobs (marketing release): its queue/scheduler units are fenced, see the runbook.
+# The supervisord/dispatcher/wrapper helper commands listed here are assumptions to be confirmed
+# in complain mode; anything else fails closed. Source artifact: not installed or loaded.
+#include <tunables/global>
+
+profile wpcaregrid-php-cli-staging flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  capability setuid,
+  capability setgid,
+  capability chown,
+  capability kill,
+  capability dac_override,
+
+  /usr/bin/supervisord rix,
+  /usr/bin/python3* mrix,
+  /usr/lib/python3*/{,**} mr,
+  /usr/lib/python3/dist-packages/{,**} r,
+  /usr/bin/php8.4 mrix,
+  /usr/bin/php8.5 mrix,
+  /usr/local/bin/wpcaregrid-php rix,
+  /usr/local/bin/wpcaregrid-scheduler rix,
+  /usr/bin/dash ix,
+  /usr/bin/bash ix,
+  /usr/bin/flock ix,
+  /usr/bin/logger ix,
+  /usr/lib/php/{,**} mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /etc/php/8.4/{cli,mods-available}/{,**} r,
+  /etc/php/8.5/{cli,mods-available}/{,**} r,
+  /usr/share/zoneinfo/{,**} r,
+  /etc/localtime r,
+  /etc/supervisor/{,**} r,
+  /run/supervisor.sock rw,
+  /run/supervisord.pid rw,
+  /var/log/supervisor/{,**} rw,
+  /tmp/{,**} rwk,
+  /proc/[0-9]*/maps r,
+
+  # Staging-next application (resolved release paths), shared state and the exact fence markers.
+  /var/www/wpcaregrid-staging-new/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/releases/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/.env r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/vendor/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/storage/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/staging-next/state/workers-disabled r,
+  /var/lib/wpcaregrid-deploy/staging-next/state/scheduler-paused r,
+  /var/lib/wpcaregrid-deploy/staging-next/state/maintenance r,
+  # Legacy staging application and its scheduler lock/pause marker.
+  /var/www/wpcaregrid/{,**} r,
+  /var/www/wpcaregrid/storage/{,**} rwk,
+  /var/www/wpcaregrid/bootstrap/cache/{,**} rwk,
+  /var/lib/wpcaregrid/{,**} rwk,
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  network netlink raw,
+
+  signal (send, receive) peer=wpcaregrid-php-cli-staging,
+  signal (receive) peer=unconfined,
+
+  audit deny /var/www/wpcaregrid-production/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-production/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} x,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/{wpcaregrid-production-php[0-9].[0-9]-fpm,php[0-9].[0-9]-fpm}.{sock,pid} rwklm,
+  audit deny /run/php/php-fpm.sock rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+  audit deny /run/mysqld/{,**} rwklm,
+}
