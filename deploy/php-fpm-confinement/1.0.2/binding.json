@@ -1,0 +1,201 @@
+{
+  "aa_exec_profiles": {
+    "wpcaregrid-php-cli-production-deploy": {
+      "cgroup": "the root-console helper's session or transient scope; never a *.service unit",
+      "exe": "/usr/bin/php8.4",
+      "exec_path_attachment": null,
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy"
+      ],
+      "lifetime": "short-lived child of the root-console helper; never a service; none may exist in the pre-production phase or during rollback",
+      "network": "TCP to the database only (AppArmor cannot restrict ports)",
+      "peer_label": "wpcaregrid-php-cli-production-deploy (enforce)",
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy",
+      "reads": [
+        "production releases tree",
+        "production shared .env",
+        "production shared vendor"
+      ],
+      "selected_by": "the production root-console helper only, per command: runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy -- /usr/bin/php8.4 ...",
+      "uids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "unit": null,
+      "unit_attachment": null,
+      "writes": [
+        "production releases/*/bootstrap/cache",
+        "production shared storage"
+      ]
+    }
+  },
+  "installed_files": {
+    "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common": "apparmor/abstractions/wpcaregrid-php-fpm-common",
+    "/etc/apparmor.d/wpcaregrid-nginx": "apparmor/wpcaregrid-nginx",
+    "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy": "apparmor/wpcaregrid-php-cli-production-deploy",
+    "/etc/apparmor.d/wpcaregrid-php-cli-staging": "apparmor/wpcaregrid-php-cli-staging",
+    "/etc/apparmor.d/wpcaregrid-php-fpm-production": "apparmor/wpcaregrid-php-fpm-production",
+    "/etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy": "apparmor/wpcaregrid-php-fpm-staging-legacy",
+    "/etc/apparmor.d/wpcaregrid-php-fpm-staging-next": "apparmor/wpcaregrid-php-fpm-staging-next",
+    "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf": "php-fpm/production/php-fpm.conf",
+    "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf": "php-fpm/production/pool.d/wpcaregrid-production.conf",
+    "/etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf": "systemd/nginx.service.d/90-wpcaregrid-confinement.conf",
+    "/etc/systemd/system/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf": "systemd/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf",
+    "/etc/systemd/system/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf": "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf",
+    "/etc/systemd/system/supervisor.service.d/90-wpcaregrid-confinement.conf": "systemd/supervisor.service.d/90-wpcaregrid-confinement.conf",
+    "/etc/systemd/system/wpcaregrid-production-php8.4-fpm.service": "systemd/wpcaregrid-production-php8.4-fpm.service",
+    "/etc/systemd/system/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf": "systemd/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf",
+    "/etc/systemd/system/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf": "systemd/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf"
+  },
+  "inventory_schema": {
+    "document": [
+      "schema=2",
+      "complete",
+      "reasons",
+      "incomplete_reasons",
+      "matrix_sha256",
+      "boot_id",
+      "collected_start_ns",
+      "collected_end_ns",
+      "scans>=2",
+      "processes",
+      "units",
+      "production_surface"
+    ],
+    "label_rule": "label == '<apparmor_profile> (enforce)' and unit == services[role].unit; anything else blocks",
+    "membership": "every process with ANY uid/gid/supplementary group == 33, plus every member of every service cgroup (root masters included)",
+    "process": [
+      "pid",
+      "ppid",
+      "state",
+      "uids[4]",
+      "gids[4]",
+      "groups",
+      "comm",
+      "argv0",
+      "cmdline_sha256",
+      "starttime",
+      "label",
+      "unit",
+      "cgroup",
+      "exe",
+      "fds"
+    ],
+    "stability": "two consecutive scans identical on (pid,starttime,label,unit,uids,gids,groups); churn/unreadable/cgroup disagreement => complete=false",
+    "units": [
+      "nginx.service",
+      "php8.4-fpm.service",
+      "php8.5-fpm.service",
+      "supervisor.service",
+      "wpcaregrid-production-php8.4-fpm.service",
+      "wpcaregrid-staging-legacy-scheduler.service",
+      "wpcaregrid-staging-next-scheduler.service"
+    ]
+  },
+  "package_version": "1.0.2",
+  "phases": {
+    "post": "all roles",
+    "pre": "production role excluded; production unit has no process; no non-fixture production file"
+  },
+  "rules": {
+    "exec_path_attachments": [],
+    "package_owner_mode": {
+      "gid": 0,
+      "mode": "0644",
+      "nlink": 1,
+      "type": "regular",
+      "uid": 0
+    },
+    "permitted_group33_holders": [],
+    "production_jobs": "fenced: scheduler units masked+inactive, no active/autostart wpcaregrid-production-* supervisor program, both fence markers",
+    "transient_classes": [
+      "production-deploy-cli"
+    ],
+    "unconfined_same_uid_classes": [],
+    "www_data_cron_permitted": false
+  },
+  "schema": 1,
+  "services": {
+    "jobs-legacy-scheduler": {
+      "apparmor_profile": "wpcaregrid-php-cli-staging",
+      "attachment_path": "/etc/systemd/system/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+        "/etc/systemd/system/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+      "unit": "wpcaregrid-staging-legacy-scheduler.service"
+    },
+    "jobs-scheduler": {
+      "apparmor_profile": "wpcaregrid-php-cli-staging",
+      "attachment_path": "/etc/systemd/system/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+        "/etc/systemd/system/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+      "unit": "wpcaregrid-staging-next-scheduler.service"
+    },
+    "jobs-supervisor": {
+      "apparmor_profile": "wpcaregrid-php-cli-staging",
+      "attachment_path": "/etc/systemd/system/supervisor.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+        "/etc/systemd/system/supervisor.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-cli-staging",
+      "unit": "supervisor.service"
+    },
+    "nginx": {
+      "apparmor_profile": "wpcaregrid-nginx",
+      "attachment_path": "/etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/wpcaregrid-nginx",
+        "/etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-nginx",
+      "unit": "nginx.service"
+    },
+    "production": {
+      "apparmor_profile": "wpcaregrid-php-fpm-production",
+      "attachment_path": "/etc/systemd/system/wpcaregrid-production-php8.4-fpm.service",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-production",
+        "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf",
+        "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf",
+        "/etc/systemd/system/wpcaregrid-production-php8.4-fpm.service"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-fpm-production",
+      "unit": "wpcaregrid-production-php8.4-fpm.service"
+    },
+    "staging-legacy": {
+      "apparmor_profile": "wpcaregrid-php-fpm-staging-legacy",
+      "attachment_path": "/etc/systemd/system/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy",
+        "/etc/systemd/system/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy",
+      "unit": "php8.4-fpm.service"
+    },
+    "staging-next": {
+      "apparmor_profile": "wpcaregrid-php-fpm-staging-next",
+      "attachment_path": "/etc/systemd/system/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf",
+      "files": [
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-staging-next",
+        "/etc/systemd/system/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf"
+      ],
+      "profile_path": "/etc/apparmor.d/wpcaregrid-php-fpm-staging-next",
+      "unit": "php8.5-fpm.service"
+    }
+  }
+}

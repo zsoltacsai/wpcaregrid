@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.1).
+"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.2).
 
 WHAT THIS PROVES: the committed AppArmor profiles, systemd units and FPM config
 are internally consistent, fail closed under mutation, and -- evaluated by a
 small AppArmor path-rule model -- grant and deny the paths in
-deploy/php-fpm-confinement/1.0.1/acceptance/matrix.json in both directions
+deploy/php-fpm-confinement/1.0.2/acceptance/matrix.json in both directions
 between production and the existing staging pools, including symlink escapes.
 
 WHAT THIS DOES NOT PROVE: kernel enforcement. The model is not the kernel. The
@@ -40,7 +40,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # never leave bytecode inside the hashed artifact tree
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1"
+ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.2"
 DOC = ROOT / "docs" / "PHP_FPM_CONFINEMENT_GO13.md"
 COMMON = "wpcaregrid-php-fpm-common"
 EXTERNAL_INCLUDES = {"tunables/global", "abstractions/base", "abstractions/nameservice", "abstractions/ssl_certs"}
@@ -59,6 +59,7 @@ EXPECTED_FILES = {
     "acceptance/verify-acceptance.py",
     "apparmor/abstractions/wpcaregrid-php-fpm-common",
     "apparmor/wpcaregrid-nginx",
+    "apparmor/wpcaregrid-php-cli-production-deploy",
     "apparmor/wpcaregrid-php-cli-staging",
     "apparmor/wpcaregrid-php-fpm-production",
     "apparmor/wpcaregrid-php-fpm-staging-legacy",
@@ -79,6 +80,7 @@ PROFILES = {
     "wpcaregrid-php-fpm-staging-legacy": "apparmor/wpcaregrid-php-fpm-staging-legacy",
     "wpcaregrid-nginx": "apparmor/wpcaregrid-nginx",
     "wpcaregrid-php-cli-staging": "apparmor/wpcaregrid-php-cli-staging",
+    "wpcaregrid-php-cli-production-deploy": "apparmor/wpcaregrid-php-cli-production-deploy",
 }
 ATTACHMENT: dict = {}  # no profile has an exec-path attachment: www-data cron is not permitted, so nothing attaches by path
 NO_COMMON = {"wpcaregrid-nginx"}  # nginx needs TLS keys, so it carries its own complete deny set
@@ -88,6 +90,7 @@ EXEC_ALLOW = {
     "wpcaregrid-php-fpm-staging-next": {"/usr/sbin/php-fpm8.5", "/usr/bin/kill", "/usr/bin/dash",
                                        "/usr/lib/php/php-fpm-socket-helper"},
     "wpcaregrid-nginx": {"/usr/sbin/nginx", "/usr/sbin/start-stop-daemon"},
+    "wpcaregrid-php-cli-production-deploy": {"/usr/bin/php8.4"},
     "wpcaregrid-php-cli-staging": {"/usr/bin/supervisord", "/usr/bin/python3*", "/usr/bin/php8.4", "/usr/bin/php8.5",
                                    "/usr/local/bin/wpcaregrid-php", "/usr/local/bin/wpcaregrid-scheduler",
                                    "/usr/bin/dash", "/usr/bin/bash", "/usr/bin/flock", "/usr/bin/logger"},
@@ -104,6 +107,9 @@ WRITE_ALLOW = {
     "wpcaregrid-nginx": {"/run/nginx.pid", "/var/log/nginx/{,**}", "/var/lib/nginx/{,**}",
                          "/run/php/wpcaregrid-production-php8.4-fpm.sock", "/run/php/php8.5-fpm.sock",
                          "/run/php/php8.4-fpm.sock"},
+    "wpcaregrid-php-cli-production-deploy": {
+        "/var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**}",
+        "/var/lib/wpcaregrid-deploy/production/shared/storage/{,**}"},
     "wpcaregrid-php-cli-staging": {
         "/run/supervisor.sock", "/run/supervisord.pid", "/var/log/supervisor/{,**}", "/tmp/{,**}",
         "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/{,**}", "/var/www/wpcaregrid/storage/{,**}",
@@ -112,12 +118,13 @@ WRITE_ALLOW = {
 CAPABILITY_ALLOW = {
     "wpcaregrid-nginx": {"net_bind_service", "setuid", "setgid", "chown", "kill", "sys_resource"},
     "wpcaregrid-php-cli-staging": {"setuid", "setgid", "chown", "kill", "dac_override"},
+    "wpcaregrid-php-cli-production-deploy": set(),  # runs as www-data: no capability at all
     "wpcaregrid-php-fpm-production": set(),
     "wpcaregrid-php-fpm-staging-next": {"setuid", "setgid", "chown", "kill"},
 }
 NETWORK_ALLOW = {"inet stream", "inet6 stream", "inet dgram", "inet6 dgram", "unix stream", "unix dgram",
                  "netlink raw"}
-PATH_EXCEPTIONS = {"/tmp/{,**}", "/proc/[0-9]*/maps", "/run/php/", "/etc/localtime", "/etc/mime.types", "/run/nginx.pid",
+PATH_EXCEPTIONS = {"/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/tmp/{,**}", "/proc/[0-9]*/maps", "/run/php/", "/etc/localtime", "/etc/mime.types", "/run/nginx.pid",
                    "/etc/nginx/{,**}", "/etc/supervisor/{,**}", "/var/www/*/public/{,**}", "/usr/bin/python3*",
                    "/usr/lib/python3*/{,**}", "/run/supervisor.sock", "/run/supervisord.pid"}
 # Explicit audited denials every allowlist profile must keep, so a denial leaves a correlatable audit record
@@ -130,6 +137,9 @@ REQUIRED_DENIES = {
     "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}"),
     "wpcaregrid-php-cli-staging": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
                                    "/var/log/wpcaregrid-production/{,**}"),
+    "wpcaregrid-php-cli-production-deploy": ("/var/lib/wpcaregrid-deploy/staging-next/{,**}", "/var/www/wpcaregrid-staging-new/{,**}",
+                                             "/var/www/wpcaregrid/{,**}", "/var/lib/wpcaregrid/{,**}", "/var/log/wpcaregrid-production/{,**}",
+                                             "/var/lib/wpcaregrid-deploy/production/state/{,**}", "/run/php/{,**}"),
 }
 # Exact gate/fence marker files that nginx and the job profiles may stat/read; the paths contain "/state".
 MARKER_EXCEPTIONS = {"/var/lib/wpcaregrid/deploy-maintenance", "/var/lib/wpcaregrid-deploy/staging-next/state/maintenance",
@@ -141,6 +151,7 @@ FOREIGN_TOKENS = {
     "wpcaregrid-php-fpm-staging-next": ("production", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.4-fpm.sock"),
     "wpcaregrid-nginx": ("/shared/", "/storage/", "/bootstrap/", "/.env", "/etc/wpcaregrid-deploy"),
     "wpcaregrid-php-cli-staging": ("production",),
+    "wpcaregrid-php-cli-production-deploy": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.5", "/run/php", "/log/"),
 }
 SECRET_PATHS_NEVER_GRANTED = (
     "/etc/wpcaregrid-deploy/", "/home/", "/root/", "/var/lib/mysql", "/run/mysqld/", "/etc/shadow",
@@ -571,7 +582,7 @@ def load_script(path: Path, name: str):
 
 
 def copy_artifacts(destination: Path) -> Path:
-    target = destination / "1.0.1"
+    target = destination / "1.0.2"
     shutil.copytree(ARTIFACTS, target)
     return target
 
@@ -691,6 +702,9 @@ class SymlinkEscape(unittest.TestCase):
     def test_staging_jobs(self) -> None:
         self._check("wpcaregrid-php-cli-staging")
 
+    def test_production_deploy_cli(self) -> None:
+        self._check("wpcaregrid-php-cli-production-deploy")
+
     def test_no_hard_link_grant_anywhere(self) -> None:
         for name in PROFILES:
             rules = load_profile(ARTIFACTS, name, [])[0]
@@ -743,7 +757,7 @@ class ProcPtraceSignalAndSockets(unittest.TestCase):
 
     def test_tcp_port_separation_is_not_claimed(self) -> None:
         doc = DOC.read_text(encoding="utf-8")
-        self.assertIn("AppArmor 1.0.1 does not separate TCP ports", doc)
+        self.assertIn("AppArmor 1.0.2 does not separate TCP ports", doc)
 
 
 class InheritedDescriptors(unittest.TestCase):
@@ -1217,6 +1231,7 @@ def fake_proc(base: Path, processes: list[dict], units: dict[str, list[int]], bo
         (d / "status").write_text(f"Name:\t{p['comm']}\nUid:\t" + "\t".join(map(str, uids)) + "\nGid:\t" + "\t".join(map(str, p.get("gids", uids)))
                                   + "\nGroups:\t" + " ".join(map(str, p.get("groups", []))) + "\n")
         (d / "comm").write_text(p["comm"] + "\n")
+        (d / "cmdline").write_bytes(p.get("cmdline", f"/usr/sbin/{p['comm']}\0--flag\0").encode())
         (d / "stat").write_text(f"{p['pid']} ({p['comm']}) S {p.get('ppid', 1)} " + " ".join(["0"] * 17) + f" {p['start']} 0\n")
         (d / "attr" / "current").write_text(p["label"] + "\n")
         (d / "cgroup").write_text(f"0::/system.slice/{p['unit']}\n" if p.get("unit") else "0::/user.slice\n")
@@ -1277,6 +1292,28 @@ class CollectPeers(unittest.TestCase):
         self.assertEqual(sorted(inv["units"]), sorted(set(self.units.values())))
         self.assertFalse(inv["units"]["php8.4-fpm.service"]["present"])
 
+    def test_inventory_carries_the_fields_the_canonical_contract_consumes(self) -> None:
+        procs = self.base_processes()
+        procs[0]["cmdline"] = "/usr/sbin/php-fpm8.4\0--nodaemonize\0"
+        _, inv = self.run_collect(procs, self.UNITS)
+        worker = next(p for p in inv["processes"] if p["pid"] == 10)
+        self.assertEqual(worker["state"], "S")
+        self.assertEqual(worker["argv0"], "/usr/sbin/php-fpm8.4")
+        self.assertEqual(worker["cmdline_sha256"], hashlib.sha256(b"/usr/sbin/php-fpm8.4\0--nodaemonize\0").hexdigest())
+        self.assertEqual(worker["cgroup"], "0::/system.slice/wpcaregrid-production-php8.4-fpm.service")
+        self.assertEqual(inv["incomplete_reasons"], inv["reasons"])
+        for p in inv["processes"]:
+            self.assertTrue({"pid", "ppid", "state", "uids", "gids", "groups", "comm", "argv0", "cmdline_sha256", "starttime", "label", "unit",
+                             "cgroup", "exe", "fds"} <= set(p))
+
+    def test_incomplete_reasons_mirrors_reasons_when_a_scan_fails(self) -> None:
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+        Path(proc, "21", "cmdline").unlink()
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)
+        self.assertFalse(inv["complete"])
+        self.assertEqual(inv["incomplete_reasons"], inv["reasons"])
+        self.assertTrue(inv["incomplete_reasons"])
+
     def test_a_process_holding_gid_33_or_supplementary_group_33_is_a_peer(self) -> None:
         """The secrets are root:33 0640: a deploy shell in the www-data group reads them without being uid 33."""
         procs = self.base_processes() + [
@@ -1307,6 +1344,7 @@ class CollectPeers(unittest.TestCase):
                 (extra / "fd").mkdir()
                 (extra / "status").write_text("Name:\tphp\nUid:\t33\t33\t33\t33\nGid:\t33\t33\t33\t33\n")
                 (extra / "comm").write_text("php\n")
+                (extra / "cmdline").write_bytes(b"php\0")
                 (extra / "stat").write_text("99 (php) S 1 " + " ".join(["0"] * 17) + " 4242 0\n")
                 (extra / "attr/current").write_text("unconfined\n")
                 (extra / "cgroup").write_text("0::/user.slice\n")
@@ -2090,6 +2128,21 @@ class EdgeAndJobPeers(unittest.TestCase):
                              (f"{self.SS}/state/other", "r")):
             self.assertFalse(decide(rules, self.resolve("wpcaregrid-php-cli-staging", path), access), f"{path} {access}")
 
+    def test_deploy_cli_profile_is_selected_only_by_aa_exec_never_by_a_unit(self) -> None:
+        for tree in ("systemd", "php-fpm"):
+            for path in (ARTIFACTS / tree).rglob("*"):
+                if path.is_file():
+                    self.assertNotIn("wpcaregrid-php-cli-production-deploy", path.read_text(),
+                                     f"{path.name} must not select the deploy CLI profile (it is not a service)")
+        profile = (ARTIFACTS / PROFILES["wpcaregrid-php-cli-production-deploy"]).read_text()
+        self.assertIn("aa-exec -p wpcaregrid-php-cli-production-deploy", profile)
+        self.assertIn("never a service", profile)
+        for other, relative in PROFILES.items():  # the only mentions elsewhere are the audited signal denials
+            if other != "wpcaregrid-php-cli-production-deploy":
+                mentions = [l.strip() for l in (ARTIFACTS / relative).read_text().splitlines()
+                            if "wpcaregrid-php-cli-production-deploy" in l]
+                self.assertEqual(mentions, ["audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,"], other)
+
     def test_job_profile_is_selected_by_unit_only_with_no_path_attachment_and_no_cron(self) -> None:
         for name in PROFILES:
             text = (ARTIFACTS / PROFILES[name]).read_text()
@@ -2102,8 +2155,7 @@ class EdgeAndJobPeers(unittest.TestCase):
         self.assertIn("www-data cron is not permitted", (ARTIFACTS / PROFILES["wpcaregrid-php-cli-staging"]).read_text())
 
     def test_every_peer_profile_denies_signalling_every_other_class(self) -> None:
-        names = {"wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next", "wpcaregrid-php-fpm-staging-legacy",
-                 "wpcaregrid-nginx", "wpcaregrid-php-cli-staging"}
+        names = set(PROFILES)
         for name in names:
             text = (ARTIFACTS / PROFILES[name]).read_text()
             for other in names - {name}:
@@ -2264,7 +2316,9 @@ class FenceProduction(unittest.TestCase):
 class FakeRollbackHost:
     """Simulates the host state the rollback order protects; asserts Invariant I at the moment of every unconfine."""
 
-    def __init__(self, peers, faults=None, reexpose_after=None, jobs_masked=True, service_stays_running=False, route_reopens=False):
+    def __init__(self, peers, faults=None, reexpose_after=None, jobs_masked=True, service_stays_running=False, route_reopens=False,
+                 deploy_cli=False):
+        self.deploy_cli = deploy_cli
         self.route, self.service, self.masked = True, True, jobs_masked
         self.exposed = {"/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php", "/var/log/wpcaregrid-production/php-fpm.log",
                         "/var/lib/wpcaregrid-deploy/production/shared/.env", "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"}
@@ -2301,6 +2355,9 @@ class FakeRollbackHost:
         self._fault("exposed_paths")
         return sorted(self.exposed)
 
+    def deploy_cli_running(self):
+        return self.deploy_cli
+
     def route_open(self):
         return self.route
 
@@ -2309,7 +2366,7 @@ class FakeRollbackHost:
 
     def unconfine(self, peer):
         self._fault("unconfine")
-        if self.exposed or self.route or self.service or not self.masked:
+        if self.exposed or self.route or self.service or not self.masked or self.deploy_cli:
             self.violations.append((peer, sorted(self.exposed), self.route, self.service, self.masked))
         self.confined.discard(peer)
         self.unconfined.append(peer)
@@ -2425,11 +2482,195 @@ class RollbackOrder(unittest.TestCase):
         self.assertNotIn("unmask(", source)
         self.assertNotIn("def unmask", source)
 
+    def test_a_running_production_deploy_cli_blocks_every_unconfine(self) -> None:
+        """The deploy CLI holds production secrets as www-data: no peer may be unconfined while one runs."""
+        host = self.host(deploy_cli=True)
+        with self.assertRaises(self.mod.RollbackAborted) as caught:
+            self.mod.run_rollback(host)
+        self.assertEqual(caught.exception.step, f"R3:require_fenced_before:{self.peers[0]}")
+        self.assertEqual(host.unconfined, [])
+        self.assertEqual(host.violations, [])
+
     def test_without_fencing_the_guard_itself_would_have_allowed_a_violation(self) -> None:
         """Control: prove the fake host can detect the review's bug (peers unconfined while paths are still readable)."""
         host = self.host()
         host.unconfine(self.peers[0])
         self.assertTrue(host.violations)
+
+
+class DeployCliProfile(unittest.TestCase):
+    """Owner-approved wpcaregrid-php-cli-production-deploy: the helper's PHP 8.4 CLI, separately confined, same www-data UID."""
+
+    NAME = "wpcaregrid-php-cli-production-deploy"
+    P = "/var/www/wpcaregrid-production"
+    PS = "/var/lib/wpcaregrid-deploy/production"
+
+    def rules(self):
+        return load_profile(ARTIFACTS, self.NAME, [])[0]
+
+    def resolve(self, path):
+        return resolve_virtual(json.loads(MATRIX_TEXT)["profiles"][self.NAME]["layout"]["symlinks"], path)
+
+    def test_positive_what_artisan_needs(self) -> None:
+        rules = self.rules()
+        for path, access in ((f"{self.P}/current/artisan", "r"), (f"{self.P}/current/vendor/autoload.php", "r"),
+                             (f"{self.P}/current/.env", "r"), (f"{self.PS}/shared/.env", "r"),
+                             (f"{self.P}/current/bootstrap/cache/config.php", "r"), (f"{self.P}/current/bootstrap/cache/packages.php", "w"),
+                             (f"{self.P}/current/bootstrap/cache/services.php", "w"), (f"{self.P}/current/bootstrap/cache/config.php", "w"),
+                             (f"{self.P}/current/storage/logs/laravel.log", "w"), (f"{self.P}/current/storage/framework/views/x.php", "w"),
+                             (f"{self.PS}/shared/storage/framework/cache/data/x", "w"), ("/usr/bin/php8.4", "x"),
+                             ("/etc/php/8.4/cli/php.ini", "r"), ("/etc/php/8.4/mods-available/pdo_mysql.ini", "r"),
+                             ("/usr/lib/php/20240924/pdo_mysql.so", "r")):
+            self.assertTrue(decide(rules, self.resolve(path), access), f"{path} {access}")
+
+    def test_negative_writes_only_cache_and_storage(self) -> None:
+        rules = self.rules()
+        for path in (f"{self.P}/current/artisan", f"{self.P}/current/app/Models/User.php", f"{self.P}/current/config/app.php",
+                     f"{self.P}/current/routes/web.php", f"{self.P}/current/.env", f"{self.PS}/shared/.env", f"{self.PS}/shared/vendor/autoload.php",
+                     f"{self.P}/current/vendor/composer/installed.php", f"{self.P}/current/public/index.php", f"{self.P}/releases/x/new-file",
+                     f"{self.P}/current/bootstrap/app.php"):
+            self.assertFalse(decide(rules, self.resolve(path), "w"), f"{path} must not be writable")
+        for path in (f"{self.PS}/shared/storage/x.php", f"{self.P}/current/bootstrap/cache/x.php"):
+            self.assertFalse(decide(rules, self.resolve(path), "x"), "written files are never executable")
+        self.assertFalse(decide(rules, f"{self.P}/releases/r1/bootstrap/cache/x", "l"))  # no hard links either
+
+    def test_negative_staging_control_plane_and_other_credentials(self) -> None:
+        rules = self.rules()
+        for path in ("/var/www/wpcaregrid-staging-new/artisan", "/var/www/wpcaregrid-staging-new/.env", "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+                     "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log", "/var/www/wpcaregrid/.env",
+                     "/var/www/wpcaregrid/storage/logs/laravel.log", "/var/lib/wpcaregrid/scheduler.lock",
+                     "/etc/wpcaregrid-deploy/profiles/production-v2.1.2.json", "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json",
+                     "/home/deploy/.private/x", "/home/deploy/private-backups/x", "/root/.ssh/id_ed25519", "/etc/shadow",
+                     f"{self.PS}/state/workers-disabled", f"{self.PS}/database-backups/x.sql.gz", f"{self.PS}/incoming/x", f"{self.PS}/inbox/x",
+                     f"{self.PS}/receipts/x", "/var/log/wpcaregrid-production/php-fpm.log", "/etc/mysql/debian.cnf", "/var/lib/mysql/x",
+                     "/run/mysqld/mysqld.sock", "/etc/ssl/private/x.key", "/etc/letsencrypt/live/x/privkey.pem", "/etc/ssh/ssh_host_rsa_key"):
+            for access in ("r", "w"):
+                self.assertFalse(decide(rules, path, access), f"{path} {access}")
+
+    def test_negative_shell_and_every_other_binary(self) -> None:
+        rules = self.rules()
+        for path in ("/usr/bin/dash", "/usr/bin/bash", "/bin/sh", "/usr/bin/python3", "/usr/bin/perl", "/usr/bin/curl", "/usr/bin/wget",
+                     "/usr/bin/nc", "/usr/bin/env", "/usr/bin/id", "/usr/bin/php8.5", "/usr/bin/php8.3", "/usr/sbin/php-fpm8.4", "/usr/sbin/sendmail",
+                     "/usr/bin/aa-exec", "/usr/bin/sudo", "/usr/bin/mysql", "/usr/local/bin/php", "/tmp/x"):
+            self.assertFalse(decide(rules, path, "x"), path)
+        self.assertEqual([r.body for r in rules if r.kind == "file" and not r.deny and "x" in r.perms], ["/usr/bin/php8.4"])
+        for path in ("/tmp/x", "/dev/shm/x", f"{self.P}/x"):
+            self.assertFalse(decide(rules, path, "w"), path)
+
+    def test_network_is_tcp_only_and_nothing_else(self) -> None:
+        rules = self.rules()
+        self.assertEqual({r.body for r in rules if r.kind == "network" and not r.deny}, {"network inet stream"})
+        denied = {r.body for r in rules if r.deny}
+        for needed in ("network inet raw", "network inet6 raw", "network packet"):
+            self.assertIn(needed, denied)
+        self.assertEqual([r.body for r in rules if r.kind == "capability" and not r.deny], [])
+        self.assertFalse([r for r in rules if r.kind == "unix" and not r.deny])
+        self.assertFalse(decide(rules, "/run/php/php8.5-fpm.sock", "rw"))
+        self.assertFalse(decide(rules, "/run/php/wpcaregrid-production-php8.4-fpm.sock", "rw"))
+        text = (ARTIFACTS / PROFILES[self.NAME]).read_text()
+        self.assertNotIn("nameservice", text)  # no resolver: the database host is an address, not a name
+        self.assertNotIn("ssl_certs", text)
+
+    def test_fixture_cache_directory_is_writable_by_www_data_like_the_helper_leaves_it(self) -> None:
+        matrix = json.loads(MATRIX_TEXT)
+        cache = next(e for e in matrix["fixtures"]["mkdirs"] if e["path"].endswith("releases/wpcg-fixture/bootstrap/cache"))
+        self.assertEqual((cache["uid"], cache["gid"], cache["mode"]), (33, 33, "2770"))
+
+    def test_matrix_proves_the_same_decisions_for_the_live_probe(self) -> None:
+        matrix = json.loads(MATRIX_TEXT)["profiles"][self.NAME]
+        self.assertEqual(matrix["profile_role"], "production-deploy-cli")
+        self.assertNotIn(matrix["profile_role"], json.loads(MATRIX_TEXT)["role_units"])  # a transient class, not a service role
+        ids = {c["id"] for c in matrix["checks"]}
+        for needed in ("cache-write", "storage-write", "shared-env-read", "state-read", "staging-env-read", "exec-shell", "exec-python"):
+            self.assertIn(needed, ids)
+
+
+class TransientDeployCliClass(unittest.TestCase):
+    """The deploy CLI is provable in complete peer inventories as a transient, non-service class."""
+
+    LABEL = "wpcaregrid-php-cli-production-deploy (enforce)"
+
+    def proc(self, **kw):
+        base = {"pid": 7001, "ppid": 7000, "uids": [33] * 4, "gids": [33] * 4, "groups": [], "comm": "php8.4", "starttime": 12, "label": self.LABEL,
+                "unit": None, "exe": "/usr/bin/php8.4", "fds": ["/dev/null", "socket:[9]", "/var/www/wpcaregrid-production/releases/r1/artisan"],
+                "state": "S", "argv0": "/usr/bin/php8.4", "cmdline_sha256": "a" * 64, "cgroup": "0::/user.slice/user-0.slice/session-7.scope"}
+        base.update(kw)
+        return base
+
+    def run_with(self, mutate_proc=None, phase="post", profile="wpcaregrid-nginx", **kw):
+        def mutate(state):
+            for key in ("before", "after"):
+                state[key]["processes"].append(self.proc(**kw))
+        return VerifyAcceptance().run_verify(mutate, profile=profile, phase=phase)
+
+    def test_a_confined_transient_deploy_cli_is_permitted_after_production_starts(self) -> None:
+        verdict = self.run_with()
+        self.assertEqual(verdict.failures, [])
+        self.assertTrue(any("transient production-deploy-cli" in n for n in verdict.notes))
+
+    def test_it_is_not_permitted_before_production_exists(self) -> None:
+        verdict = self.run_with(phase="pre")
+        self.assertTrue(any("production is not allowed to run PHP yet" in f for f in verdict.failures), verdict.failures[:3])
+
+    def test_wrong_exe_uid_or_a_service_unit_is_refused(self) -> None:
+        for change in ({"exe": "/usr/bin/php8.5"}, {"exe": "/usr/bin/dash"}, {"uids": [0, 0, 0, 0]}, {"uids": [33, 33, 33, 0]},
+                       {"unit": "supervisor.service"}, {"unit": "wpcaregrid-production-php8.4-fpm.service"}, {"exe": None}):
+            verdict = self.run_with(**change)
+            self.assertTrue(any("not the permitted class" in f for f in verdict.failures), (change, verdict.failures[:3]))
+
+    def test_a_deploy_cli_that_holds_staging_or_control_descriptors_is_refused(self) -> None:
+        for target in ("/var/lib/wpcaregrid-deploy/staging-next/shared/.env", "/var/www/wpcaregrid-staging-new/artisan", "/etc/wpcaregrid-deploy/x", "/home/deploy/x"):
+            verdict = self.run_with(fds=[target])
+            self.assertTrue(any("fd-inventory" in f for f in verdict.failures), target)
+
+    def test_the_label_without_the_class_attributes_and_other_labels_still_block(self) -> None:
+        verdict = self.run_with(label="wpcaregrid-php-cli-production-deploy (complain)")
+        self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures))
+        verdict = self.run_with(label="unconfined", comm="php8.4")
+        self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures))
+
+    def test_a_churning_transient_process_makes_the_two_inventories_disagree(self) -> None:
+        def only_before(state):
+            state["before"]["processes"].append(self.proc())
+        verdict = VerifyAcceptance().run_verify(only_before, profile="wpcaregrid-nginx", phase="post")
+        self.assertTrue(any("churn or pid reuse" in f for f in verdict.failures))
+
+    def test_matrix_and_binding_describe_the_class_for_the_canonical_contract(self) -> None:
+        (cls,) = json.loads(MATRIX_TEXT)["transient_classes"]
+        self.assertEqual((cls["exe"], cls["uids"], cls["unit"], cls["phases"]), ("/usr/bin/php8.4", [33] * 4, None, ["post"]))
+        binding = json.loads((ARTIFACTS / "binding.json").read_text())["aa_exec_profiles"]["wpcaregrid-php-cli-production-deploy"]
+        self.assertEqual((binding["exe"], binding["unit"], binding["unit_attachment"], binding["exec_path_attachment"], binding["peer_label"]),
+                         ("/usr/bin/php8.4", None, None, None, self.LABEL))
+        self.assertIn("never a *.service unit", binding["cgroup"])
+
+
+class PackageImmutability(unittest.TestCase):
+    """1.0.1 was reviewed and published to workstream A; its bytes must never change. Changes ship as a new version."""
+
+    SUMS_1_0_1 = "1a44d13aa63c71e2228e2ab52cfce76f7139724f4025d13c665d9064a2222883"
+
+    def test_1_0_1_is_byte_identical_to_what_was_reviewed(self) -> None:
+        old = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1"
+        self.assertEqual(hashlib.sha256((old / "SHA256SUMS").read_bytes()).hexdigest(), self.SUMS_1_0_1)
+        listed = {}
+        for line in (old / "SHA256SUMS").read_text().splitlines():
+            digest, _, name = line.partition("  ")
+            listed[name] = digest
+        actual = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file() and p.name != "SHA256SUMS"}
+        self.assertEqual(set(listed), actual)
+        for name, digest in listed.items():
+            self.assertEqual(hashlib.sha256((old / name).read_bytes()).hexdigest(), digest, name)
+
+    def test_1_0_2_is_a_distinct_package_with_one_added_profile(self) -> None:
+        old, new = ROOT / "deploy" / "php-fpm-confinement" / "1.0.1", ARTIFACTS
+        old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
+        new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
+        self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-deploy"})
+        self.assertEqual(old_files - new_files, set())
+        self.assertNotEqual((old / "SHA256SUMS").read_bytes(), (new / "SHA256SUMS").read_bytes())
+        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.2")
+        self.assertEqual(json.loads((old / "binding.json").read_text())["package_version"], "1.0.1")
+        self.assertEqual(len(json.loads((new / "binding.json").read_text())["installed_files"]), 16)
 
 
 class OriginalProfileHarness(unittest.TestCase):
@@ -2515,7 +2756,8 @@ class DocumentationContract(unittest.TestCase):
         for needed in (
             "Source tests cannot prove kernel enforcement", "NOT PROVEN", "fail closed",
             "No new users, groups or FPM UID", "complain", "Rollback", "STOP", "Inherited descriptors",
-            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.1 does not separate TCP ports",
+            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.2 does not separate TCP ports", "wpcaregrid-php-cli-production-deploy",
+            "aa-exec", "never a `*.service` unit", "Packages are immutable",
             "derive-probe-profile.py", "sha256sum -c --strict SHA256SUMS", "binding.json", "fence-production.py",
             "pre-production peer gate", "supplementary group 33", "workstream A", "wpcaregrid-php-fpm-harness",
             "systemd 255", "PrivatePIDs", "never rely on exec-time revocation", "StandardInput=file:",
@@ -2527,7 +2769,7 @@ class DocumentationContract(unittest.TestCase):
 
     def test_stage_zero_installs_nothing_into_unit_or_profile_search_paths(self) -> None:
         stage0 = self.section("**Stage 0", "**Stage 1")
-        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.1/", stage0)
+        self.assertIn("/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.2/", stage0)
         self.assertIn("does not install any profile, unit, drop-in", stage0)
         self.assertNotIn("90-wpcaregrid-confinement.conf", stage0)
         self.assertNotIn("cp ", stage0)
@@ -2554,6 +2796,18 @@ class DocumentationContract(unittest.TestCase):
         self.assertLess(stage1.index("90-wpcaregrid-confinement.conf"), stage1.index("daemon-reload"))
         self.assertLess(stage2.index("drop-in"), stage2.index("`daemon-reload` (only now)"))
         self.assertLess(stage3.index("copy that unit's drop-in only now"), stage3.index("`daemon-reload`"))
+
+    def test_deploy_cli_profile_arrives_with_the_production_unit_never_before(self) -> None:
+        name = "wpcaregrid-php-cli-production-deploy"
+        for earlier in ("**Stage 0", "**Stage 1", "**Stage 2", "**Stage 3", "**Stage 4"):
+            self.assertNotIn(name, self.section(earlier, "**Stage %d" % (int(earlier[-1]) + 1)), earlier)
+        stage5 = self.section("**Stage 5", "**Stage 6")
+        self.assertIn(name, stage5)
+        self.assertIn("never attached to a unit", stage5)
+        self.assertIn("without widening the FPM profile", stage5)
+        doc = self.doc()
+        for needed in ("7a. **Deploy CLI, real profile.**", "permitted transient class", "/usr/bin/php8.5", "never a service"):
+            self.assertIn(needed, doc)
 
     def test_staging_peers_are_confined_and_gated_before_any_production_stage(self) -> None:
         doc = self.doc()
@@ -2630,11 +2884,11 @@ class DocumentationContract(unittest.TestCase):
     def test_harness_is_published_readably_and_hash_verified_instead_of_run_from_the_root_only_package(self) -> None:
         """QA (B): a root:root 0700 package directory cannot be executed by www-data."""
         stage0 = self.section("**Stage 0", "**Stage 1")
-        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.1",
+        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.2",
                        "install -o root -g root -m 0644", "fd-sender.py", "sha256sum -c --strict -", "stdlib-only"):
             self.assertIn(needed, stage0)
         doc = self.doc()
-        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.1/fd-sender.py", doc)
+        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.2/fd-sender.py", doc)
         self.assertNotIn('"$PKG/acceptance/fd-sender.py" "$N"', doc)  # never executed from the 0700 package directory
         tree = ast.parse((ACCEPTANCE / "fd-sender.py").read_text())
         imports = {n.names[0].name for n in ast.walk(tree) if isinstance(n, ast.Import)} | {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
