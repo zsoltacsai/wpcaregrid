@@ -1,16 +1,26 @@
 {
   "aa_exec_profiles": {
     "wpcaregrid-php-cli-production-deploy": {
+      "argv0": "/usr/bin/php8.4",
       "cgroup": "the root-console helper's session or transient scope; never a *.service unit",
+      "cgroup_regex": "^0::/user\\.slice/user-0\\.slice/session-[0-9]+\\.scope$",
       "exe": "/usr/bin/php8.4",
       "exec_path_attachment": null,
       "files": [
         "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common",
         "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy"
       ],
+      "gids": [
+        33,
+        33,
+        33,
+        33
+      ],
       "lifetime": "short-lived child of the root-console helper; never a service; none may exist in the pre-production phase or during rollback",
-      "network": "TCP to the database only (AppArmor cannot restrict ports)",
+      "max_age_seconds": 960,
+      "network": "TCP connect only (no bind/listen/accept, no inet6/dgram/unix/netlink); destination/port not restrictable by AppArmor",
       "peer_label": "wpcaregrid-php-cli-production-deploy (enforce)",
+      "phase_b_interpreter": "/usr/bin/php8.4 (the profile grants no /usr/local/bin/php)",
       "profile_path": "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy",
       "reads": [
         "production releases tree",

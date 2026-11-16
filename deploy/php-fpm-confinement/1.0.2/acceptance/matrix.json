@@ -222,7 +222,7 @@
       },
       {
         "gid": 0,
-        "mode": "0750",
+        "mode": "0755",
         "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/bootstrap",
         "uid": 0
       },
@@ -766,6 +766,50 @@
         "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
         "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
         "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ],
+      "network_checks": [
+        {
+          "action": "create",
+          "expect": "allow",
+          "family": "AF_INET",
+          "id": "inet-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-bind",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_NETLINK",
+          "id": "netlink-raw-create",
+          "type": "SOCK_RAW"
+        }
       ],
       "other_sockets": [],
       "own_socket": "",
@@ -2192,11 +2236,23 @@
   },
   "transient_classes": [
     {
+      "argv0": "/usr/bin/php8.4",
       "cgroup": "the production root-console helper's session or transient scope; never a *.service unit",
+      "cgroup_regex": "^0::/user\\.slice/user-0\\.slice/session-[0-9]+\\.scope$",
       "class": "production-deploy-cli",
+      "cmdline_sha256": "64 hex required; the exact allowlist of fixed argv hashes is enforced by the canonical contract (workstream A)",
       "exe": "/usr/bin/php8.4",
+      "gids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "groups": [],
       "label": "wpcaregrid-php-cli-production-deploy (enforce)",
+      "label_required_state": "enforce",
       "lifetime": "short-lived child of the root-console helper, started as `runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy -- /usr/bin/php8.4 ...`; never a service",
+      "max_age_seconds": 960,
       "phases": [
         "post"
       ],

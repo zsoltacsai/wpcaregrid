@@ -172,15 +172,27 @@ def check_inventory(v: Verdict, matrix: dict, inv: dict, phase: str, required_ro
             v.fail(f"inventory:{phase}", f"duplicate pid {proc['pid']} in one snapshot")
         by_pid[proc["pid"]] = proc
         if proc["label"] in probe_labels:
+            v.fail(f"inventory:{phase}", f"pid {proc['pid']} still carries a probe-profile label ({proc['label']}): the probe profile grants python and "
+                   "production secrets, so no probe process or loaded probe profile may exist when an inventory is taken")
             continue
         if proc["label"] in transient:
             cls = transient[proc["label"]]
+            bad = []
+            if proc.get("exe") != cls["exe"] or proc.get("argv0") != cls["argv0"]:
+                bad.append(f"exe/argv0 {proc.get('exe')!r}/{proc.get('argv0')!r}")
+            if proc["uids"] != cls["uids"] or proc["gids"] != cls["gids"] or set(proc.get("groups", [])) - set(cls["groups"]):
+                bad.append(f"ids uid {proc['uids']} gid {proc['gids']} groups {proc.get('groups')}")
+            if proc["unit"] is not None or not re.match(cls["cgroup_regex"], str(proc.get("cgroup", ""))):
+                bad.append(f"cgroup {proc.get('cgroup')!r} unit {proc['unit']!r} (must be the root-console session scope, never a service)")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(proc.get("cmdline_sha256", ""))):
+                bad.append("no command line hash")
+            if not isinstance(proc.get("age_s"), (int, float)) or proc["age_s"] > cls["max_age_seconds"]:
+                bad.append(f"age {proc.get('age_s')!r}s is not short-lived (limit {cls['max_age_seconds']}s)")
             for target in proc["fds"]:
                 if any(under(target, p) for p in CONTROL_PREFIXES + ROLE_PREFIXES["staging-next"] + ROLE_PREFIXES["staging-legacy"]):
-                    v.fail(f"fd-inventory:{phase}", f"pid {proc['pid']} ({cls['class']}) holds {target!r}")
-            if proc.get("exe") != cls["exe"] or proc["uids"] != cls["uids"] or proc["unit"] is not None:
-                v.fail(f"inventory:{phase}", f"pid {proc['pid']} carries the {cls['class']} label but exe {proc.get('exe')!r}, uids {proc['uids']} or "
-                       f"service unit {proc['unit']!r} is not the permitted class ({cls['exe']}, uid 33, never a service unit)")
+                    bad.append(f"descriptor {target!r}")
+            if bad:
+                v.fail(f"inventory:{phase}", f"pid {proc['pid']} carries the {cls['class']} label but is not the permitted class: " + "; ".join(bad))
             elif probe_phase not in cls["phases"]:
                 v.fail(f"inventory:{phase}", f"pid {proc['pid']}: a {cls['class']} process exists in phase {probe_phase!r}: production is not allowed to run PHP yet")
             else:
@@ -262,6 +274,8 @@ def expected_checks(matrix: dict, profile: str, peers: dict, phase: str = "post"
         expected[f"symlink-escape:{i}"] = ("symlink", {"expect": "deny", "path": target, "access": "r"})
         targets.add(target)
     expected["abstract-connect"] = ("abstract", {"expect": "deny"})
+    for net in spec.get("network_checks", []):
+        expected[f"net:{net['id']}"] = ("net", net)
     for role in spec["peer_roles"]:
         if role in excluded:
             continue
@@ -370,7 +384,7 @@ def verify(matrix_text: str, profile: str, phase: str, baseline: dict, confined:
         kind, item = expected[ident]
         rb, rc = base[ident], conf[ident]
         b, c = rb["errno"], rc["errno"]
-        if kind == "control" or (kind in ("file", "socket") and item["expect"] == "allow"):
+        if kind == "control" or (kind in ("file", "socket", "net") and item["expect"] == "allow"):
             if item.get("optional") and b == errno.ENOENT and c == errno.ENOENT:
                 v.note(ident, "UNPROVEN: optional target does not exist yet (checked again when it does)")
             elif b == 0 and c == 0:
@@ -408,6 +422,10 @@ def verify(matrix_text: str, profile: str, phase: str, baseline: dict, confined:
             hit = window_hit(*args, {"connect", "open", "file_perm", "sendmsg"}, name=item["path"])
         elif kind == "abstract":
             hit = window_hit(*args, {"connect", "sendmsg"}, mention="wpcg-probe-")
+        elif kind == "net":
+            family = {"AF_INET": "inet", "AF_INET6": "inet6", "AF_UNIX": "unix", "AF_NETLINK": "netlink"}[item["family"]]
+            hit = window_hit(*args, {"create", "bind", "socket_create", "socket_bind"}, mention=f'"{family}"') \
+                or window_hit(*args, {"create", "bind", "socket_create", "socket_bind"}, mention=family)
         elif kind == "peer":
             target = f"/proc/{item['pid']}/{item['entry']}"
             hit = window_hit(*args, {"open", "readlink", "file_perm", "getattr"}, name={target, target.rstrip("/"), target.rstrip("/") + "/"})

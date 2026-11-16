@@ -122,6 +122,7 @@ CAPABILITY_ALLOW = {
     "wpcaregrid-php-fpm-production": set(),
     "wpcaregrid-php-fpm-staging-next": {"setuid", "setgid", "chown", "kill"},
 }
+DEPLOY_NETWORK = "(create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream"
 NETWORK_ALLOW = {"inet stream", "inet6 stream", "inet dgram", "inet6 dgram", "unix stream", "unix dgram",
                  "netlink raw"}
 PATH_EXCEPTIONS = {"/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/tmp/{,**}", "/proc/[0-9]*/maps", "/run/php/", "/etc/localtime", "/etc/mime.types", "/run/nginx.pid",
@@ -244,7 +245,7 @@ def parse_text(text: str, source: str, findings: list[str], root: Path, seen: se
             if body.startswith("/"):
                 path, _, perms = body.partition(" ")
                 rules.append(Rule("file", path, deny=deny, audit=audit, perms=parse_perms(perms.strip()), raw=stripped))
-            elif re.fullmatch(r"(capability|network|signal|ptrace|mount|umount|remount|pivot_root|dbus|unix)(\s.*)?", body):
+            elif re.fullmatch(r"(capability|network|signal|ptrace|mount|umount|remount|pivot_root|dbus|unix|userns)(\s.*)?", body):
                 rules.append(Rule(body.split()[0], body, deny=deny, audit=audit, raw=stripped))
             else:
                 findings.append(f"{where}: unknown rule {stripped!r}")
@@ -458,7 +459,8 @@ def validate(root: Path) -> list[str]:
                 if len(rule.body.split()) == 1:
                     findings.append(f"{where}: bare capability allow")
             elif rule.kind == "network":
-                if rule.body.removeprefix("network ").strip() not in NETWORK_ALLOW:
+                allowed = {DEPLOY_NETWORK} if name == "wpcaregrid-php-cli-production-deploy" else NETWORK_ALLOW
+                if rule.body.removeprefix("network ").strip() not in allowed:
                     findings.append(f"{where}: network rule not reviewed")
             elif rule.kind == "signal":
                 if not re.fullmatch(rf"signal \((send, receive|receive)\) peer=({name}|unconfined)", rule.body):
@@ -1176,6 +1178,50 @@ class FixturesTool(unittest.TestCase):
                 if not target.startswith(real):
                     self.assertIn(resolve_virtual(merged, target), fixture_files, target)
 
+    def test_every_live_fixture_check_is_dac_reachable_for_uid_gid_33(self) -> None:
+        """Review: an unreachable fixture ancestor (bootstrap 0750 root:root) turns allow checks into false FAILs
+        and deny checks into 'baseline could not reach' even though the profile is right."""
+        fixtures = self.matrix["fixtures"]
+        dirs = {e["path"]: e for e in fixtures["mkdirs"]}
+        files = {e["path"]: e for e in fixtures["files"]}
+        merged: dict = {}
+        for spec in self.matrix["profiles"].values():
+            merged.update(spec["layout"]["symlinks"])
+        symlink_targets = {e["path"]: e["target"] for e in fixtures["symlinks"]}
+
+        def grants(entry, bit):  # bit: 4 read, 2 write, 1 search/execute; uid/gid 33 is the actor
+            mode = int(entry["mode"], 8) & 0o777
+            klass = (mode >> 6) if entry["uid"] == 33 else ((mode >> 3) if entry["gid"] == 33 else mode)
+            return bool(klass & bit)
+        real = ("/var/www/wpcaregrid-staging-new", "/var/lib/wpcaregrid-deploy/staging-next", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "/usr/", "/run/php/")
+        checked = 0
+        for name, spec in self.matrix["profiles"].items():
+            for check in spec["checks"]:
+                if not check.get("live", True) or check.get("probe_scope") or check["path"].startswith(real):
+                    continue
+                path = resolve_virtual(merged, check["path"])
+                if path.rstrip("/") not in dirs and path not in files and str(Path(path).parent) not in dirs:
+                    continue  # not a fixture path (system path with its own host modes)
+                node, parent = (path, str(Path(path).parent)) if path in files else (path.rstrip("/"), str(Path(path.rstrip("/")).parent))
+                ancestors = []
+                walker = Path(node).parent
+                while str(walker) != "/":
+                    ancestors.append(str(walker))
+                    walker = walker.parent
+                for ancestor in ancestors:
+                    if ancestor in dirs:
+                        self.assertTrue(grants(dirs[ancestor], 1), f"{name}/{check['id']}: ancestor {ancestor} is not searchable by 33:33 ({dirs[ancestor]})")
+                want = {"r": 4, "rw": 6, "w": 2}.get(check["access"], 4)
+                if path in files:
+                    if check["access"] in ("r", "rw"):
+                        self.assertTrue(grants(files[path], 4), f"{name}/{check['id']}: {path} not readable by 33:33")
+                elif check["access"] in ("w", "rw"):  # creating a probe file needs write+search on the parent directory
+                    self.assertTrue(grants(dirs[parent], 3) if parent in dirs else True, f"{name}/{check['id']}: cannot create in {parent}")
+                elif path.rstrip("/") in dirs:
+                    self.assertTrue(grants(dirs[path.rstrip("/")], 4), f"{name}/{check['id']}: {path} not readable by 33:33")
+                checked += 1
+        self.assertGreater(checked, 40)
+
     def test_create_remove_roundtrip_in_an_isolated_root(self) -> None:
         root, receipt = self.tree(), self.tree() / "receipt.json"
         made = self.tool.create(self.matrix["fixtures"], str(root), str(receipt), chown=False)
@@ -1497,7 +1543,7 @@ def synthetic_run(profile: str, phase: str = "post"):
         for ident, (kind, item) in expected.items():
             t0, t1 = cursor, cursor + 5_000_000
             cursor += 10_000_000
-            allow = kind == "control" or (kind in ("file", "socket") and item["expect"] == "allow")
+            allow = kind == "control" or (kind in ("file", "socket", "net") and item["expect"] == "allow")
             if run == "baseline":
                 errno_value = EFAULT_ if kind == "peer-vm" else 0
             else:
@@ -1520,6 +1566,10 @@ def synthetic_run(profile: str, phase: str = "post"):
                     event(mid, operation="open", name=item["path"], pid=actor)
                 elif kind == "abstract":
                     event(mid, operation="connect", addr="@wpcg-probe-x", pid=actor)
+                elif kind == "net":
+                    event(mid, operation="bind" if item["action"] == "bind" else "create", class_="net",
+                          family={"AF_INET": "inet", "AF_INET6": "inet6", "AF_UNIX": "unix", "AF_NETLINK": "netlink"}[item["family"]],
+                          sock_type=item["type"].removeprefix("SOCK_").lower(), pid=actor)
                 elif kind in ("peer", "peer-vm"):
                     event(mid, operation="ptrace", peer=matrix["role_profiles"][item["role"]], pid=actor)
                 elif kind == "peer-signal":
@@ -2001,6 +2051,13 @@ class ProbeContracts(unittest.TestCase):
             self.assertTrue(r["t0"] <= r["t1"])
             self.assertIsInstance(r["pid"], int)
 
+    def test_network_probe_reports_the_errno_of_each_family_without_sending_anything(self) -> None:
+        self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "create"}), 0)
+        self.assertEqual(self.probe.network({"family": "AF_INET", "type": "SOCK_STREAM", "action": "bind"}), 0)  # unconfined baseline
+        self.assertEqual(self.probe.network({"family": "AF_UNIX", "type": "SOCK_STREAM", "action": "create"}), 0)
+        source = (ACCEPTANCE / "probe.py").read_text()
+        self.assertNotIn("connect((", source.split("def network(")[1].split("def vm_readv")[0])  # creates/binds only
+
     def test_every_result_is_timed_and_attributed(self) -> None:
         results: list = []
         self.probe.timed(results, "x", "file", "/nonexistent", lambda: self.probe.open_path("/nonexistent/wpcg", "r"))
@@ -2317,8 +2374,8 @@ class FakeRollbackHost:
     """Simulates the host state the rollback order protects; asserts Invariant I at the moment of every unconfine."""
 
     def __init__(self, peers, faults=None, reexpose_after=None, jobs_masked=True, service_stays_running=False, route_reopens=False,
-                 deploy_cli=False):
-        self.deploy_cli = deploy_cli
+                 deploy_cli=False, cli_on_call=None):
+        self.deploy_cli, self.cli_on_call, self.cli_calls = deploy_cli, cli_on_call, 0
         self.route, self.service, self.masked = True, True, jobs_masked
         self.exposed = {"/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php", "/var/log/wpcaregrid-production/php-fpm.log",
                         "/var/lib/wpcaregrid-deploy/production/shared/.env", "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"}
@@ -2356,7 +2413,8 @@ class FakeRollbackHost:
         return sorted(self.exposed)
 
     def deploy_cli_running(self):
-        return self.deploy_cli
+        self.cli_calls += 1
+        return self.deploy_cli or self.cli_on_call == self.cli_calls
 
     def route_open(self):
         return self.route
@@ -2408,7 +2466,9 @@ class RollbackOrder(unittest.TestCase):
         log = self.mod.run_rollback(host)
         self.assertEqual(host.violations, [])
         self.assertEqual(host.unconfined, list(self.peers))
-        order = [log.index(x) for x in ("R1:close_route", "R1:stop_production_service", "R1:assert_jobs_masked", "R2:fence_secrets")]
+        order = [log.index(x) for x in ("R1:close_route", "R1:stop_production_service", "R1:assert_jobs_masked",
+                                        "R1:assert_no_deploy_cli", "R2:fence_secrets")]
+        self.assertLess(log.index("R4:assert_no_deploy_cli"), log.index("R4:remove_artifacts"))
         self.assertEqual(order, sorted(order))
         self.assertLess(log.index("R2:fence_secrets"), log.index(f"R3:unconfine:{self.peers[0]}"))
         for peer in self.peers:  # re-proven immediately before EVERY unconfine, and again after its restart
@@ -2482,14 +2542,37 @@ class RollbackOrder(unittest.TestCase):
         self.assertNotIn("unmask(", source)
         self.assertNotIn("def unmask", source)
 
-    def test_a_running_production_deploy_cli_blocks_every_unconfine(self) -> None:
-        """The deploy CLI holds production secrets as www-data: no peer may be unconfined while one runs."""
+    def test_a_running_production_deploy_cli_aborts_in_r1_before_any_change(self) -> None:
+        """Review: the CLI guard must run in R1 (before the fence), not first inside the R3 loop."""
         host = self.host(deploy_cli=True)
         with self.assertRaises(self.mod.RollbackAborted) as caught:
             self.mod.run_rollback(host)
-        self.assertEqual(caught.exception.step, f"R3:require_fenced_before:{self.peers[0]}")
+        self.assertEqual(caught.exception.step, "R1:assert_no_deploy_cli")
         self.assertEqual(host.unconfined, [])
+        self.assertTrue(host.exposed, "nothing was fenced yet: the operator investigates the running CLI first")
+        self.assertNotIn("fence_secrets", host.calls)
+
+    def test_a_cli_started_between_the_last_peer_and_profile_removal_blocks_r4(self) -> None:
+        """Removing the deploy profile would turn a running CLI unconfined: it is re-checked immediately before R4."""
+        peers = len(self.peers)
+        host = self.host(cli_on_call=1 + 2 * peers + 1)  # call 1: R1; 2 per peer in R3; then the R4 guard
+        with self.assertRaises(self.mod.RollbackAborted) as caught:
+            self.mod.run_rollback(host)
+        self.assertEqual(caught.exception.step, "R4:assert_no_deploy_cli")
+        self.assertNotIn("remove_artifacts", host.calls)
         self.assertEqual(host.violations, [])
+
+    def test_a_cli_appearing_mid_rollback_stops_the_remaining_peers(self) -> None:
+        host = self.host(cli_on_call=1 + 2 * 2 + 1)  # appears at the check before the third peer
+        with self.assertRaises(self.mod.RollbackAborted) as caught:
+            self.mod.run_rollback(host)
+        self.assertTrue(caught.exception.step.startswith("R3:require_fenced_before:"), caught.exception.step)
+        self.assertEqual(len(host.unconfined), 2)
+
+    def test_the_cli_guard_detects_by_label_not_by_name(self) -> None:
+        source = (ACCEPTANCE / "rollback-order.py").read_text()
+        self.assertIn("attr/current", source)
+        self.assertNotIn("pgrep", source)
 
     def test_without_fencing_the_guard_itself_would_have_allowed_a_violation(self) -> None:
         """Control: prove the fake host can detect the review's bug (peers unconfined while paths are still readable)."""
@@ -2557,12 +2640,14 @@ class DeployCliProfile(unittest.TestCase):
         for path in ("/tmp/x", "/dev/shm/x", f"{self.P}/x"):
             self.assertFalse(decide(rules, path, "w"), path)
 
-    def test_network_is_tcp_only_and_nothing_else(self) -> None:
+    def test_network_is_tcp_connect_only_and_nothing_else(self) -> None:
         rules = self.rules()
-        self.assertEqual({r.body for r in rules if r.kind == "network" and not r.deny}, {"network inet stream"})
+        self.assertEqual({r.body for r in rules if r.kind == "network" and not r.deny}, {f"network {DEPLOY_NETWORK}"})
         denied = {r.body for r in rules if r.deny}
-        for needed in ("network inet raw", "network inet6 raw", "network packet"):
+        for needed in ("network inet raw", "network inet6 raw", "network packet", "network (bind, listen, accept) inet stream",
+                       "network inet6", "network inet dgram", "network unix", "network netlink", "userns"):
             self.assertIn(needed, denied)
+        self.assertNotRegex(f"network {DEPLOY_NETWORK}", r"\b(bind|listen|accept)\b")  # the process cannot serve
         self.assertEqual([r.body for r in rules if r.kind == "capability" and not r.deny], [])
         self.assertFalse([r for r in rules if r.kind == "unix" and not r.deny])
         self.assertFalse(decide(rules, "/run/php/php8.5-fpm.sock", "rw"))
@@ -2570,6 +2655,13 @@ class DeployCliProfile(unittest.TestCase):
         text = (ARTIFACTS / PROFILES[self.NAME]).read_text()
         self.assertNotIn("nameservice", text)  # no resolver: the database host is an address, not a name
         self.assertNotIn("ssl_certs", text)
+        self.assertIn("any TCP address is reachable", text)  # the honest limit is stated next to the rule
+
+    def test_the_live_probe_proves_the_network_limits_family_by_family(self) -> None:
+        checks = {c["id"]: c for c in json.loads(MATRIX_TEXT)["profiles"][self.NAME]["network_checks"]}
+        self.assertEqual({k: v["expect"] for k, v in checks.items()}, {
+            "inet-stream-create": "allow", "inet-stream-bind": "deny", "inet6-stream-create": "deny", "inet-dgram-create": "deny",
+            "unix-stream-create": "deny", "netlink-raw-create": "deny"})
 
     def test_fixture_cache_directory_is_writable_by_www_data_like_the_helper_leaves_it(self) -> None:
         matrix = json.loads(MATRIX_TEXT)
@@ -2593,7 +2685,7 @@ class TransientDeployCliClass(unittest.TestCase):
     def proc(self, **kw):
         base = {"pid": 7001, "ppid": 7000, "uids": [33] * 4, "gids": [33] * 4, "groups": [], "comm": "php8.4", "starttime": 12, "label": self.LABEL,
                 "unit": None, "exe": "/usr/bin/php8.4", "fds": ["/dev/null", "socket:[9]", "/var/www/wpcaregrid-production/releases/r1/artisan"],
-                "state": "S", "argv0": "/usr/bin/php8.4", "cmdline_sha256": "a" * 64, "cgroup": "0::/user.slice/user-0.slice/session-7.scope"}
+                "state": "S", "argv0": "/usr/bin/php8.4", "cmdline_sha256": "a" * 64, "cgroup": "0::/user.slice/user-0.slice/session-7.scope", "age_s": 3.2}
         base.update(kw)
         return base
 
@@ -2614,14 +2706,31 @@ class TransientDeployCliClass(unittest.TestCase):
 
     def test_wrong_exe_uid_or_a_service_unit_is_refused(self) -> None:
         for change in ({"exe": "/usr/bin/php8.5"}, {"exe": "/usr/bin/dash"}, {"uids": [0, 0, 0, 0]}, {"uids": [33, 33, 33, 0]},
-                       {"unit": "supervisor.service"}, {"unit": "wpcaregrid-production-php8.4-fpm.service"}, {"exe": None}):
+                       {"unit": "supervisor.service"}, {"unit": "wpcaregrid-production-php8.4-fpm.service"}, {"exe": None},
+                       {"gids": [33, 33, 33, 0]}, {"gids": [1000] * 4}, {"groups": [33, 4]}, {"groups": [1000]},
+                       {"argv0": "/usr/bin/php8.4 -S 0.0.0.0:80"}, {"argv0": "php8.4"},
+                       {"cgroup": "0::/system.slice/run-u12.service"}, {"cgroup": "0::/user.slice/user-0.slice/user@0.service/app.slice/x.scope"},
+                       {"cgroup": "0::/user.slice/user-1000.slice/session-3.scope"}, {"cgroup": ""},
+                       {"cmdline_sha256": None}, {"cmdline_sha256": "xyz"}, {"age_s": 5000.0}, {"age_s": None}):
             verdict = self.run_with(**change)
             self.assertTrue(any("not the permitted class" in f for f in verdict.failures), (change, verdict.failures[:3]))
+
+    def test_a_daemonised_or_long_lived_php_in_the_session_scope_is_refused(self) -> None:
+        """Review: `php -S` or `queue:work` left in a session scope must not pass indefinitely as 'transient'."""
+        verdict = self.run_with(age_s=86400.0, argv0="/usr/bin/php8.4")
+        self.assertTrue(any("not short-lived" in f for f in verdict.failures), verdict.failures[:2])
+        self.assertEqual(self.run_with(age_s=959.0).failures, [])
+
+    def test_a_probe_profile_process_in_an_inventory_is_refused(self) -> None:
+        """Review: probe labels used to skip every inventory check although the probe profile grants python and secrets."""
+        for label in ("wpcaregrid-php-cli-production-deploy-probe (enforce)", "wpcaregrid-nginx-probe (enforce)"):
+            verdict = self.run_with(label=label, comm="python3", exe="/usr/bin/python3")
+            self.assertTrue(any("probe-profile label" in f for f in verdict.failures), label)
 
     def test_a_deploy_cli_that_holds_staging_or_control_descriptors_is_refused(self) -> None:
         for target in ("/var/lib/wpcaregrid-deploy/staging-next/shared/.env", "/var/www/wpcaregrid-staging-new/artisan", "/etc/wpcaregrid-deploy/x", "/home/deploy/x"):
             verdict = self.run_with(fds=[target])
-            self.assertTrue(any("fd-inventory" in f for f in verdict.failures), target)
+            self.assertTrue(any("not the permitted class" in f and "descriptor" in f for f in verdict.failures), target)
 
     def test_the_label_without_the_class_attributes_and_other_labels_still_block(self) -> None:
         verdict = self.run_with(label="wpcaregrid-php-cli-production-deploy (complain)")
@@ -2722,6 +2831,11 @@ class BindingManifest(unittest.TestCase):
             self.assertNotRegex((ARTIFACTS / PROFILES[name]).read_text(), r"(?m)^profile \S+ /\S+ flags=")
         self.assertEqual(self.binding["inventory_schema"]["units"], sorted(set(self.matrix["role_units"].values())))
         self.assertEqual(self.binding["package_version"], ARTIFACTS.name)
+        deploy = self.binding["aa_exec_profiles"]["wpcaregrid-php-cli-production-deploy"]
+        self.assertEqual((deploy["gids"], deploy["argv0"], deploy["max_age_seconds"]), ([33] * 4, "/usr/bin/php8.4", 960))
+        self.assertTrue(re.search(deploy["cgroup_regex"], "0::/user.slice/user-0.slice/session-12.scope"))
+        self.assertFalse(re.search(deploy["cgroup_regex"], "0::/system.slice/run-u1.service"))
+        self.assertIn("/usr/bin/php8.4", deploy["phase_b_interpreter"])
         self.assertEqual(self.binding["schema"], 1)
 
     def test_contract_module_is_not_carried_in_this_branch(self) -> None:

@@ -106,6 +106,18 @@ class Iov(ctypes.Structure):
     _fields_ = [("base", ctypes.c_void_p), ("len", ctypes.c_size_t)]
 
 
+def network(check: dict) -> int:
+    """errno of creating (and for action=bind, binding to loopback port 0) one socket; nothing is connected or sent."""
+    def go():
+        sock = socket.socket(getattr(socket, check["family"]), getattr(socket, check["type"]))
+        try:
+            if check["action"] == "bind":
+                sock.bind(("127.0.0.1", 0))
+        finally:
+            sock.close()
+    return code(go)
+
+
 def vm_readv(pid: int, remote_address: int) -> int:
     """Raw errno of process_vm_readv(): 0 = bytes read; EFAULT = the kernel allowed it, the address was unmapped."""
     libc = ctypes.CDLL(None, use_errno=True)
@@ -287,6 +299,8 @@ def main(argv: list) -> int:
             os.unlink(os.path.join(scratch, name))
         os.rmdir(scratch)
     timed(results, "abstract-connect", "abstract", "@" + env["abstract"], lambda: connect("\0" + env["abstract"]))
+    for net in spec.get("network_checks", []):
+        timed(results, f"net:{net['id']}", "net", f"{net['family']}/{net['type']}/{net['action']}", lambda n=net: network(n))
     descendant_calibration(results)
     for role in spec["peer_roles"]:
         for pid in env["peers"].get(role, []):

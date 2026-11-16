@@ -39,8 +39,18 @@ profile wpcaregrid-php-cli-production-deploy flags=(attach_disconnected) {
   /var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**} rwk,
   /var/lib/wpcaregrid-deploy/production/shared/storage/{,**} rwk,
 
-  # Database over TCP only. No IPv6, no datagram, no unix, no raw, no netlink.
-  network inet stream,
+  # Database over TCP only: connecting IPv4 stream sockets. No IPv6, datagram, unix, raw or netlink family, and
+  # no bind/listen/accept (the process must not be able to serve). AppArmor cannot restrict the destination
+  # address or port: any TCP address is reachable, so credentials (not this rule) separate databases, and an
+  # egress rule for uid 33 is a separate host-firewall decision. Fine-grained access rules need a kernel with
+  # network access mediation; the live probe's network checks prove it on the host and fail closed otherwise.
+  network (create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream,
+  audit deny network (bind, listen, accept) inet stream,
+  audit deny network inet6,
+  audit deny network inet dgram,
+  audit deny network unix,
+  audit deny network netlink,
+  audit deny userns,
 
   signal (send, receive) peer=wpcaregrid-php-cli-production-deploy,
   signal (receive) peer=unconfined,

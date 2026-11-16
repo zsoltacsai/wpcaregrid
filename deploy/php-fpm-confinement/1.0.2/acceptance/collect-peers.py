@@ -65,6 +65,16 @@ def unit_of(cgroup_text: str) -> str | None:
     return None
 
 
+def boot_wall_seconds(proc: str) -> float | None:
+    try:
+        for line in read(f"{proc}/stat").splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except OSError:
+        pass
+    return None
+
+
 def read_process(proc: str, entry: str, units: set, uid: int, reasons: list) -> dict | None:
     base = f"{proc}/{entry}"
     try:
@@ -89,6 +99,8 @@ def read_process(proc: str, entry: str, units: set, uid: int, reasons: list) -> 
                 "starttime": start, "label": read(f"{base}/attr/current").strip("\0\n "), "unit": unit,
                 "state": state, "cgroup": read(f"{base}/cgroup").strip().splitlines()[0] if read(f"{base}/cgroup").strip() else "",
                 "exe": None, "fds": []}
+        btime = boot_wall_seconds(proc)
+        item["age_s"] = None if btime is None else max(0.0, round(time.time() - (btime + start / os.sysconf("SC_CLK_TCK")), 1))
         raw = read_bytes(f"{base}/cmdline")
         item["argv0"] = raw.split(b"\0", 1)[0].decode("utf-8", "replace")[:200]
         item["cmdline_sha256"] = hashlib.sha256(raw).hexdigest()

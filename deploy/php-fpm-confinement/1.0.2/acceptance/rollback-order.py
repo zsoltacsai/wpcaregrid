@@ -54,11 +54,18 @@ def run_rollback(host, peers=PEERS_NEWEST_FIRST) -> list:
     step("R1:stop_production_service", host.stop_production_service)
     step("R1:assert_jobs_masked", lambda: (_ for _ in ()).throw(RuntimeError("production job units are not masked and inactive"))
          if not host.jobs_masked() else None)
+    def no_deploy_cli() -> None:
+        # Detect by the process label (/proc/<pid>/attr/current == the deploy profile), never by name.
+        if host.deploy_cli_running():
+            raise RuntimeError("a production deploy CLI is running: it reads production secrets as www-data and would turn unconfined "
+                               "when its profile is removed")
+    step("R1:assert_no_deploy_cli", no_deploy_cli)
     step("R2:fence_secrets", host.fence_secrets)
     for peer in peers:
         require_fenced(f"R3:require_fenced_before:{peer}")
         step(f"R3:unconfine:{peer}", lambda peer=peer: host.unconfine(peer))
         step(f"R3:restart:{peer}", lambda peer=peer: host.restart(peer))
         require_fenced(f"R3:require_fenced_after:{peer}")
+    step("R4:assert_no_deploy_cli", no_deploy_cli)  # a CLI started meanwhile would go unconfined with its profile
     step("R4:remove_artifacts", host.remove_artifacts)
     return log
