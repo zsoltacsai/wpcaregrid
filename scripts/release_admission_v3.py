@@ -37,6 +37,7 @@ REQUIRED_CI_JOBS = (
 )
 MAX_REPORT_BYTES = 45 * 1024
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
+_AGENT = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
 _ARTIFACT_PREFIX = "WPCG_RELEASE_REVIEW_ARTIFACT_V3"
 _ARTIFACT = re.compile(
     r"WPCG_RELEASE_REVIEW_ARTIFACT_V3\n"
@@ -48,6 +49,80 @@ _ARTIFACT = re.compile(
     r"report_sha256=([0-9a-f]{64})\n"
     r"report_base64=([A-Za-z0-9+/]+={0,2})\n?\Z"
 )
+ARTIFACT_CORRECTION_PREFIX = "WPCG_RELEASE_ARTIFACT_CORRECTION_V3"
+_ARTIFACT_CORRECTION = re.compile(
+    r"WPCG_RELEASE_ARTIFACT_CORRECTION_V3\n"
+    r"target_comment_id=([1-9][0-9]{0,19})\n"
+    r"target_body_sha256=([0-9a-f]{64})\n"
+    r"target_pr=([1-9][0-9]{0,8})\n"
+    r"target_head_sha=([0-9a-f]{40})\n"
+    r"target_base_sha=([0-9a-f]{40})\n"
+    r"target_role=(integration_qa|appsec)\n"
+    r"disposition=INVALIDATED\n"
+    r"reason_code=legacy_artifact_schema_invalid\n?\Z"
+)
+_LEGACY_ARTIFACT_ALLOWLIST = {
+    6901547471: {
+        "body_sha256": "60f4e44dc88d587f669d56c76ed2bc4aa4f9d0f0b133782a8b34107d37560821",
+        "pr": 408,
+        "head_sha": "a3776603e8ea8135811b739dd6194a6ddbd73ac1",
+        "base_sha": "88e1518da9abcee611afb66202fd7b613eaec99f",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr407_409",
+        "report_sha256": "4102b53aacc23f1426338c76b71699898499228ce81b6f00a854009fbbb9f078",
+        "report_encoding": "valid",
+    },
+    6901849333: {
+        "body_sha256": "3d8323ea12903264bd1508021c198f2b9f06922465d8c240dd4009ff5f5c7c94",
+        "pr": 408,
+        "head_sha": "5f0a818c0eac04f618fff3d9977cd378b2cc6dda",
+        "base_sha": "5b94fe9920875e6c5693850799646c7751ec4f41",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr407_409",
+        "report_sha256": "53b2c627ad64a272bc67babea128e18eb2825d9aac1edb797f541dba72f091a6",
+        "report_encoding": "valid",
+    },
+    6901985822: {
+        "body_sha256": "db4987243fe4f17cab4f5c321d03f7f351d7685f7ff7e21d5f08a59642cc55fa",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "base_sha": "8bb4d458513ac8c70f52250685a7bbf46cbc1e11",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr409_rebase",
+        "report_sha256": "edf04bbf830e8c92bedb7df8f90ddb9c03b8537f98477a796087a83ac10bccdd",
+        "report_encoding": "invalid_base64",
+    },
+    6901986071: {
+        "body_sha256": "4d5aab5035320bbf80b54d31ad0b270295c14dc813718ca1e6896a8440038dd2",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "base_sha": "8bb4d458513ac8c70f52250685a7bbf46cbc1e11",
+        "role": "appsec",
+        "agent": "/root/appsec_pr409_rebase",
+        "report_sha256": "7fd9eba9ca0bfd462737bfb081dd715716a943b2b7eabf989e405205decaf7fd",
+        "report_encoding": "invalid_base64",
+    },
+    6902000274: {
+        "body_sha256": "51fe41506d94fbb103eca975c8dc9472b9774378b47fd4b0c2d1b3b08d86d9f3",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "base_sha": "8bb4d458513ac8c70f52250685a7bbf46cbc1e11",
+        "role": "integration_qa",
+        "agent": "/root/qa_pr409_rebase",
+        "report_sha256": "2471561f859d41a02e6a964bd81c76fc88cecaccd86346aef1730c18390fc19f",
+        "report_encoding": "valid",
+    },
+    6902000507: {
+        "body_sha256": "6cf263f97df033a4a3b02efe4959998fc82e86c4127cae4452b96d987646c921",
+        "pr": 409,
+        "head_sha": "19c951f94082b03a8f0880039e59410cede60cf0",
+        "base_sha": "8bb4d458513ac8c70f52250685a7bbf46cbc1e11",
+        "role": "appsec",
+        "agent": "/root/appsec_pr409_rebase",
+        "report_sha256": "88918ea3972522f5fefa6335368e420f7a1c4b11ffb8198c0e89d2e684a302f0",
+        "report_encoding": "valid",
+    },
+}
 
 
 class AdmissionRefused(ValueError):
@@ -73,11 +148,117 @@ def _owner_comment(comment: object, owner: str) -> bool:
             and type(comment.get("id")) is int and comment["id"] > 0)
 
 
+def render_artifact_correction(*, target_comment_id: int, target_body_sha256: str,
+                               target_pr: int, target_head_sha: str,
+                               target_base_sha: str, target_role: str) -> str:
+    """Render an exact-scope invalidation for one pinned historical artifact."""
+    body = (f"{ARTIFACT_CORRECTION_PREFIX}\n"
+            f"target_comment_id={target_comment_id}\n"
+            f"target_body_sha256={target_body_sha256}\n"
+            f"target_pr={target_pr}\n"
+            f"target_head_sha={target_head_sha}\n"
+            f"target_base_sha={target_base_sha}\n"
+            f"target_role={target_role}\n"
+            "disposition=INVALIDATED\nreason_code=legacy_artifact_schema_invalid\n")
+    if _ARTIFACT_CORRECTION.fullmatch(body) is None:
+        raise AdmissionRefused("artifact_correction_invalid")
+    return body
+
+
+def _artifact_fields(body: object) -> dict[str, str] | None:
+    if not isinstance(body, str):
+        return None
+    lines = body.splitlines()
+    if not lines or lines[0] != _ARTIFACT_PREFIX or len(lines) != 8:
+        return None
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        if "=" not in line:
+            return None
+        key, value = line.split("=", 1)
+        if key in fields:
+            return None
+        fields[key] = value
+    if set(fields) != {"role", "pr", "head_sha", "base_sha", "agent",
+                       "report_sha256", "report_base64"}:
+        return None
+    return fields
+
+
+def _authorized_artifact_corrections(comments: list[object], *, owner: str
+                                     ) -> dict[int, dict[str, object]]:
+    by_id: dict[int, object] = {}
+    for comment in comments:
+        if not isinstance(comment, Mapping) or type(comment.get("id")) is not int:
+            continue
+        comment_id = comment["id"]
+        if comment_id in by_id:
+            raise AdmissionRefused("artifact_correction_ambiguous")
+        by_id[comment_id] = comment
+
+    corrections: dict[int, dict[str, object]] = {}
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str) or not body.startswith(ARTIFACT_CORRECTION_PREFIX):
+            continue
+        if not _owner_comment(comment, owner):
+            raise AdmissionRefused("artifact_correction_invalid")
+        match = _ARTIFACT_CORRECTION.fullmatch(body)
+        if match is None:
+            raise AdmissionRefused("artifact_correction_invalid")
+        raw_id, digest, raw_pr, head_sha, base_sha, role = match.groups()
+        target_id, target_pr = int(raw_id), int(raw_pr)
+        target = by_id.get(target_id)
+        allowed = _LEGACY_ARTIFACT_ALLOWLIST.get(target_id)
+        if (allowed is None or not isinstance(target, Mapping)
+                or not _owner_comment(target, owner)
+                or not isinstance(target.get("body"), str)
+                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
+                != allowed["body_sha256"]
+                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest() != digest):
+            raise AdmissionRefused("artifact_correction_target_invalid")
+        if (target.get("id") != target_id or comment["id"] <= target_id
+                or comment["created_at"] <= target["created_at"]):
+            raise AdmissionRefused("artifact_correction_not_append_only")
+        fields = _artifact_fields(target["body"])
+        if (fields is None or _AGENT.fullmatch(fields["agent"]) is not None
+                or fields["agent"] != allowed["agent"]
+                or (int(fields["pr"]), fields["head_sha"], fields["base_sha"],
+                    fields["role"], fields["agent"], fields["report_sha256"])
+                != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
+                    allowed["role"], allowed["agent"], allowed["report_sha256"])
+                or (target_pr, head_sha, base_sha, role)
+                != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
+                    allowed["role"])):
+            raise AdmissionRefused("artifact_correction_subject_mismatch")
+        try:
+            raw = base64.b64decode(fields["report_base64"], validate=True)
+        except (ValueError, base64.binascii.Error):
+            if allowed["report_encoding"] != "invalid_base64":
+                raise AdmissionRefused("artifact_correction_report_invalid") from None
+        else:
+            if (allowed["report_encoding"] != "valid"
+                    or hashlib.sha256(raw).hexdigest() != allowed["report_sha256"]):
+                raise AdmissionRefused("artifact_correction_report_invalid")
+        if target_id in corrections:
+            raise AdmissionRefused("artifact_correction_ambiguous")
+        corrections[target_id] = {
+            "id": comment["id"], "created_at": comment["created_at"],
+            "body_sha256": digest, "pr": target_pr, "head_sha": head_sha,
+            "base_sha": base_sha, "role": role,
+        }
+    return corrections
+
+
 def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
                                 head_sha: str, base_sha: str,
                                 owner: str) -> dict[str, dict[str, object]]:
+    items = list(comments)
+    corrections = _authorized_artifact_corrections(items, owner=owner)
     latest: dict[str, dict[str, object]] = {}
-    for comment in comments:
+    for comment in items:
         if not isinstance(comment, Mapping):
             continue
         body = comment.get("body")
@@ -88,7 +269,10 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
         if not _owner_comment(comment, owner):
             continue
         match = _ARTIFACT.fullmatch(body)
-        _require(match is not None, "review_artifact_invalid")
+        if match is None:
+            if comment.get("id") in corrections:
+                continue
+            raise AdmissionRefused("review_artifact_invalid")
         role, record_pr, record_sha, record_base, agent, digest, encoded = match.groups()
         if int(record_pr) != pr_number or record_sha != head_sha or record_base != base_sha:
             continue

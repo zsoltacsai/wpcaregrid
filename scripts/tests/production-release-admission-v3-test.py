@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,8 @@ from scripts import production_release_controller_v3 as CONTROLLER
 from scripts.release_admission_v3 import (
     AdmissionRefused,
     REQUIRED_CI_JOBS,
+    _verified_report_artifacts,
+    render_artifact_correction,
     verify_release_admission,
 )
 from scripts.release_review_policy_v3 import render_record
@@ -141,6 +144,28 @@ def refusal_reason(**changes):
     with unittest.TestCase().assertRaises(AdmissionRefused) as caught:
         verify_release_admission(**args)
     return str(caught.exception)
+
+
+def historical_artifacts():
+    return json.loads((Path(__file__).parent / "fixtures" /
+                       "v3-artifact-ledger-historical.json").read_text(encoding="utf-8"))
+
+
+def artifact_correction(target, *, comment_id=None, body=None, login=OWNER,
+                        association="OWNER", created_at="2026-11-16T10:00:00Z"):
+    fields = dict(line.split("=", 1) for line in target["body"].splitlines()[1:])
+    rendered = render_artifact_correction(
+        target_comment_id=target["id"],
+        target_body_sha256=hashlib.sha256(target["body"].encode("utf-8")).hexdigest(),
+        target_pr=int(fields["pr"]), target_head_sha=fields["head_sha"],
+        target_base_sha=fields["base_sha"], target_role=fields["role"],
+    )
+    return {
+        "id": comment_id if comment_id is not None else target["id"] + 1_000_000,
+        "created_at": created_at, "updated_at": created_at,
+        "author_association": association, "user": {"login": login},
+        "body": body if body is not None else rendered,
+    }
 
 
 class ReleaseAdmissionV3Tests(unittest.TestCase):
@@ -316,6 +341,117 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
                          "author_association": "OWNER", "user": {"login": OWNER},
                          "body": "WPCG_RELEASE_REVIEW_ARTIFACT_V3\nmalformed"})
         self.assertEqual(refusal_reason(ledger_comments=comments), "review_artifact_invalid")
+
+    def test_all_six_exact_historical_artifacts_are_invalidated_without_becoming_evidence(self):
+        historical = historical_artifacts()
+        self.assertEqual(len(historical), 6)
+        args = fixture()
+        comments = args["ledger_comments"] + historical
+        comments.extend(artifact_correction(item, comment_id=9_900_000_000 + index)
+                        for index, item in enumerate(historical))
+        args["ledger_comments"] = comments
+        self.assertEqual(verify_release_admission(**args)["result"], "PASS")
+        verified = _verified_report_artifacts(comments, pr_number=383, head_sha=HEAD,
+                                              base_sha=BASE, owner=OWNER)
+        self.assertEqual(set(verified), {"integration_qa", "appsec"})
+        self.assertEqual(verified["integration_qa"]["agent"], "qa-agent-independent")
+        self.assertEqual(verified["appsec"]["agent"], "appsec-agent-independent")
+
+    def test_each_allowlisted_original_body_matches_its_pinned_digest_and_schema_failure(self):
+        historical = historical_artifacts()
+        self.assertEqual({item["id"] for item in historical},
+                         {6901547471, 6901849333, 6901985822,
+                          6901986071, 6902000274, 6902000507})
+        for item in historical:
+            with self.subTest(comment_id=item["id"]):
+                self.assertEqual(item["user"]["login"], OWNER)
+                self.assertEqual(item["author_association"], "OWNER")
+                self.assertIsNone(re.fullmatch(
+                    r"WPCG_RELEASE_REVIEW_ARTIFACT_V3\n"
+                    r"role=(integration_qa|appsec)\npr=[1-9][0-9]{0,8}\n"
+                    r"head_sha=[0-9a-f]{40}\nbase_sha=[0-9a-f]{40}\n"
+                    r"agent=[a-z0-9][a-z0-9._-]{2,63}\n"
+                    r"report_sha256=[0-9a-f]{64}\n"
+                    r"report_base64=[A-Za-z0-9+/]+={0,2}\n?\Z", item["body"]))
+                correction = artifact_correction(item, comment_id=9_900_000_000 + item["id"])
+                comments = [item, correction]
+                self.assertEqual(len(_verified_report_artifacts(
+                    comments + fixture()["ledger_comments"], pr_number=383,
+                    head_sha=HEAD, base_sha=BASE, owner=OWNER)), 2)
+
+    def test_malformed_artifact_without_its_exact_correction_is_refused(self):
+        comments = fixture()["ledger_comments"] + historical_artifacts()[:1]
+        with self.assertRaisesRegex(AdmissionRefused, "review_artifact_invalid"):
+            _verified_report_artifacts(comments, pr_number=383, head_sha=HEAD,
+                                       base_sha=BASE, owner=OWNER)
+
+    def test_artifact_correction_rejects_modified_body(self):
+        target = historical_artifacts()[0]
+        changed = dict(target, body=target["body"] + "x")
+        comments = [changed, artifact_correction(target)] + fixture()["ledger_comments"]
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_target_invalid"):
+            _verified_report_artifacts(comments, pr_number=383, head_sha=HEAD,
+                                       base_sha=BASE, owner=OWNER)
+
+    def test_artifact_correction_rejects_wrong_author_and_wrong_target_id(self):
+        target = historical_artifacts()[0]
+        comments = [target, artifact_correction(target, login="not-owner")]
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_invalid"):
+            _verified_report_artifacts(comments + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+        wrong_id = artifact_correction(target, body=artifact_correction(target)["body"].replace(
+            f"target_comment_id={target['id']}\n", f"target_comment_id={target['id'] + 1}\n"))
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_target_invalid"):
+            _verified_report_artifacts([target, wrong_id] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_artifact_correction_rejects_wrong_pr_head_base_and_role(self):
+        target = historical_artifacts()[0]
+        good = artifact_correction(target)["body"]
+        variants = (
+            ("pr", f"target_pr={int(good.split('target_pr=')[1].splitlines()[0]) + 1}\n"),
+            ("head", f"target_head_sha={'f' * 40}\n"),
+            ("base", f"target_base_sha={'e' * 40}\n"),
+            ("role", "target_role=appsec\n"),
+        )
+        for label, replacement in variants:
+            with self.subTest(field=label):
+                lines = good.splitlines(keepends=True)
+                index = {"pr": 3, "head": 4, "base": 5, "role": 6}[label]
+                prefix = lines[index].split("=", 1)[0] + "="
+                changed = "\n".join(line for line in good.splitlines() if not line.startswith(prefix))
+                insertion = {"pr": 3, "head": 4, "base": 5, "role": 6}[label]
+                parts = changed.splitlines()
+                parts.insert(insertion, replacement.rstrip("\n"))
+                correction = artifact_correction(target, body="\n".join(parts) + "\n")
+                with self.assertRaisesRegex(AdmissionRefused,
+                                            "artifact_correction_(invalid|subject_mismatch)"):
+                    _verified_report_artifacts([target, correction] + fixture()["ledger_comments"],
+                                               pr_number=383, head_sha=HEAD, base_sha=BASE,
+                                               owner=OWNER)
+
+    def test_artifact_correction_rejects_duplicate_and_stale_corrections(self):
+        target = historical_artifacts()[0]
+        first = artifact_correction(target, comment_id=9_900_000_001)
+        duplicate = artifact_correction(target, comment_id=9_900_000_002,
+                                        created_at="2026-11-16T10:01:00Z")
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_ambiguous"):
+            _verified_report_artifacts([target, first, duplicate] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+        stale = artifact_correction(target, created_at="2026-11-15T20:00:00Z")
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_not_append_only"):
+            _verified_report_artifacts([target, stale] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_corrected_historical_artifacts_do_not_replace_current_fresh_artifacts(self):
+        comments = historical_artifacts()
+        comments.extend(artifact_correction(item, comment_id=9_900_000_100 + index)
+                        for index, item in enumerate(historical_artifacts()))
+        with self.assertRaisesRegex(AdmissionRefused, "review_artifact_missing"):
+            _verified_report_artifacts(comments, pr_number=409,
+                                       head_sha="6ce39d23473bc6b55930429905678fee6b4dbbe8",
+                                       base_sha="ff9f86cea3a591415c64714acd2db297c83e0702",
+                                       owner=OWNER)
 
     def test_pr_ci_stale_or_failed_is_refused(self):
         args = fixture()
