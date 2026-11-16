@@ -56,12 +56,12 @@ REVIEW_POLICY_SOURCE = "release_review_policy_v3.py"
 CONTROLLER_SOURCE = "production_deploy_controller_2_1_3.py"
 
 ENTRY_SHA256 = "357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3"
-BACKEND_SHA256 = "b73a27d35e6f12fb4088d99e594acf10eb2db2e411b2803e63028962ab46dbdd"
+BACKEND_SHA256 = "f123d5225056bfaa45f26b338e0d48768cd47c688d025c98847ff199c8b14a0f"
 TRANSACTION_SHA256 = "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00"
-ENVIRONMENT_SHA256 = "adbac3720905a924f0a2fc33d5bccb57e337f8002bfddaa28490e21dab58f72a"
+ENVIRONMENT_SHA256 = "2ccbf8c430905aa69c6a121471657aafca6750f23aacce8228c6b1e1532acf32"
 REVIEW_POLICY_SHA256 = "e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db"
-HELPER_ARTIFACT_SHA256 = "77a344782369ee600db0c776f4b6f933ef99ddfb879c52887bb153429d6f8fdf"
-CONTROLLER_SHA256 = "7eaf8dc2267b20b1d24087f84bca03fc5e0b83ee17937e9a2cc87b875087a671"
+HELPER_ARTIFACT_SHA256 = "6ccd4fef69a5e10b5bd0adbfcc580db01e9ccf54ee3c9dd4d382f83650090991"
+CONTROLLER_SHA256 = "02f8a008b650b9a5c0f6c5289f683e2e8ba1b558be639f25260a48a6af0724bd"
 
 TRANSFER_USER = "deploy"
 STAGING_HELPER = "/usr/local/sbin/wpcaregrid-deploy-priv"
@@ -80,7 +80,7 @@ MAX_SUDOERS_ENTRIES = 256
 ENVIRONMENT_FIELDS = (
     "app_root", "application_link", "release_root", "incoming_root",
     "inbox_root", "state_root", "backup_root", "shared_env_file", "shared_storage_root", "shared_vendor_root",
-    "database", "database_host", "database_port", "database_server_uuid_sha256",
+    "database", "database_host", "database_port", "database_socket", "database_server_uuid_sha256",
     "isolated_database", "isolated_database_host", "isolated_database_port",
     "isolated_database_uuid_sha256", "host", "mysql_version", "deploy_user", "deploy_uid", "php_version",
     "php_fpm_socket", "php_fpm_unit", "php_fpm_uid", "php_fpm_gid", "worker_programs",

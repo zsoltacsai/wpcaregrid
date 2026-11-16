@@ -85,6 +85,7 @@ SOURCES = {
     "release_review_policy_sha256": "scripts/release_review_policy_v3.py",
 }
 TRANSFER_UID = 1001
+SOCKET = "/run/mysqld/wpcaregrid-production.sock"
 STAGING_RULE = "(root) NOPASSWD: /usr/local/sbin/wpcaregrid-deploy-priv *"
 
 
@@ -128,6 +129,7 @@ def production_config(pin=PIN, **changes):
         "shared_storage_root": "/var/lib/wpcaregrid-deploy/production/shared/storage",
         "shared_vendor_root": "/var/lib/wpcaregrid-deploy/production/shared/vendor",
         "database": "wpcg_prod_main", "database_host": "127.0.0.1", "database_port": 3306,
+        "database_socket": SOCKET,
         "database_server_uuid_sha256": "c" * 64, "isolated_database": "wpcg_prod_restore_test",
         "isolated_database_host": "127.0.0.1", "isolated_database_port": 3307,
         "isolated_database_uuid_sha256": "d" * 64, "host": "www.wpcaregrid.com", "mysql_version": "8.4",
@@ -183,7 +185,7 @@ def observation(pin=PIN):
             "www_data_scheduled_jobs": {"complete": True, "crontab_present": False, "system_cron_entries": 0,
                                         "at_jobs": 0},
             "helper": {"pid": 4000, "starttime": 50, "cgroup": HELPER_CGROUP, "deploy_cli_profile_mode": "enforce",
-                       "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256()},
+                       "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256(SOCKET)},
             "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes}}
 
 
@@ -211,7 +213,7 @@ def cmdline_sha(argv):
 
 
 def deploy_cli_peer(pid, argv=None, **changes):
-    argv = argv or BACKEND._deploy_cli_commands()[0]
+    argv = argv or BACKEND._deploy_cli_commands(SOCKET)[0]
     item = peer(pid, unit="", label=DEPLOY_CLI_LABEL, exe="/usr/bin/php8.4", comm="php8.4")
     item.update(cgroup=HELPER_CGROUP, cmdline_sha256=cmdline_sha(argv), argv0=argv[0])
     item.update(changes)
@@ -563,7 +565,7 @@ class ContractTests(unittest.TestCase):
             "confinement_same_uid_peer_unconfined")
 
     def test_production_deploy_cli_class_is_exact(self):
-        for argv in BACKEND._deploy_cli_commands():
+        for argv in BACKEND._deploy_cli_commands(SOCKET):
             with self.subTest(argv=argv[:3]):
                 self._passes(with_peer(observation(), deploy_cli_peer(8200, argv)))
         cases = (
@@ -764,7 +766,7 @@ class BackendProfileTests(unittest.TestCase):
     def test_application_php_runs_only_as_exact_commands_under_the_deploy_cli_profile(self):
         profile = production_profile()
         calls, gates = [], []
-        probe = list(BACKEND._deploy_cli_commands()[0])
+        probe = list(BACKEND._deploy_cli_commands(SOCKET)[0])
         with patch.object(BACKEND.os, "geteuid", return_value=0), \
                 patch.object(BACKEND.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="www-data")), \
                 patch.object(BACKEND.grp, "getgrgid", return_value=SimpleNamespace(gr_name="www-data")), \
@@ -792,7 +794,7 @@ class BackendProfileTests(unittest.TestCase):
                 BACKEND._run_as_php_fpm(profile, probe, cwd=Path("/"), timeout=5)
 
     def test_deploy_cli_commands_are_the_helpers_actual_php_calls(self):
-        commands = BACKEND._deploy_cli_commands()
+        commands = BACKEND._deploy_cli_commands(SOCKET)
         self.assertEqual(len(commands), 4)
         self.assertTrue(all(argv[0] == "/usr/bin/php8.4" for argv in commands))
         source = (ROOT / "scripts/deployment_backend_v2_1_3.py").read_text()
@@ -801,7 +803,7 @@ class BackendProfileTests(unittest.TestCase):
         self.assertNotIn('_run_as_php_fpm(profile, ["/usr/local/bin/php"', source)
         old = (ROOT / "scripts/deployment_backend_v2_1_2.py").read_text()
         self.assertIn('output = _run_as_php_fpm(profile, ["/usr/local/bin/php", "-r", script]', old)
-        self.assertEqual(len(set(BACKEND.deploy_cli_cmdline_sha256())), 4)
+        self.assertEqual(len(set(BACKEND.deploy_cli_cmdline_sha256(SOCKET))), 4)
 
     def test_release_activation_is_followed_by_the_peer_gate_before_any_receipt(self):
         source = (ROOT / "scripts/deployment_backend_v2_1_3.py").read_text()
@@ -815,6 +817,201 @@ class BackendProfileTests(unittest.TestCase):
 # ==========================================================================
 # Backend: untrusted transfer input (no-follow, race, copy into root inbox)
 # ==========================================================================
+
+class DatabaseSocketPolicyTests(unittest.TestCase):
+    """Runtime identity probe: exact policy Unix socket only, no TCP, no other instance."""
+
+    def test_policy_requires_the_exact_production_instance_socket(self):
+        self.assertEqual(resolved().database_socket, SOCKET)
+        self.assertEqual(CONTRACT.PRODUCTION_DATABASE_SOCKET, SOCKET)
+        g1 = _load("g1_contract_for_socket", "scripts/production_g1_mysql_contract.py")
+        self.assertEqual(g1.INSTANCES["wpcaregrid-production"].socket, SOCKET)  # repository source default
+        self.assertEqual(g1.INSTANCES["wpcaregrid-production"].unit, CONTRACT.PRODUCTION_DATABASE_UNIT)
+        with patch.object(CONTRACT, "CONFINEMENT_PIN", PIN):
+            for value, code in (("/run/mysqld/mysqld.sock", "production_database_socket_mismatch"),
+                                ("/run/mysqld/wpcaregrid-production-restore.sock",
+                                 "production_database_socket_mismatch"),
+                                ("/run/mysqld/other.sock", "production_database_socket_mismatch"),
+                                ("/var/run/mysqld/wpcaregrid-production.sock", "production_database_socket_invalid"),
+                                ("/run/mysqld/../mysqld/wpcaregrid-production.sock",
+                                 "production_database_socket_invalid"),
+                                ("127.0.0.1:3306", "production_database_socket_invalid"),
+                                (None, "production_database_socket_invalid")):
+                with self.subTest(value=value), self.assertRaisesRegex(CONTRACT.EnvironmentRefused, f"^{code}$"):
+                    CONTRACT.resolve_environment("production", production_config=production_config(
+                        database_socket=value))
+            config = production_config()
+            del config["database_socket"]
+            with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "production_profile_schema_invalid"):
+                CONTRACT.resolve_environment("production", production_config=config)
+
+    def test_probe_embeds_only_the_policy_socket_and_never_reads_the_environment(self):
+        script = BACKEND._runtime_probe_script(SOCKET)
+        self.assertIn(f"$wpcgSocket='{SOCKET}';", script)
+        self.assertIn('unix_socket"=>$wpcgSocket', script)
+        self.assertIn("@@socket AS server_socket", script)
+        self.assertIn("PDO::ATTR_CONNECTION_STATUS", script)
+        for forbidden in ("getenv", "$_ENV", "$_SERVER", "DB_SOCKET", "env(", "127.0.0.1", "3306", 'port"=>3'):
+            self.assertNotIn(forbidden, script)
+        for value in ("/run/mysqld/mysqld.sock", "/run/mysqld/x';system('id');'.sock", None):
+            with self.subTest(value=value), patch.object(BACKEND, "BOUND_ENVIRONMENT", None), \
+                    self.assertRaisesRegex(BACKEND.DeployRefused, "database_socket_policy_invalid"):
+                BACKEND._runtime_probe_script(value)  # None: no bound root policy, nothing to fall back to
+        # The socket is bound into the deploy-CLI command-line allowlist.
+        with patch.object(CONTRACT, "PRODUCTION_DATABASE_SOCKET", "/run/mysqld/other.sock"):
+            other = BACKEND.deploy_cli_cmdline_sha256("/run/mysqld/other.sock")
+        self.assertNotEqual(other[0], BACKEND.deploy_cli_cmdline_sha256(SOCKET)[0])
+        self.assertEqual(other[1:], BACKEND.deploy_cli_cmdline_sha256(SOCKET)[1:])
+
+    def test_rendered_probe_is_valid_php(self):
+        php = shutil.which("php")
+        if php is None:
+            self.skipTest("php CLI not installed here; CI runs this check")
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "probe.php"
+            target.write_text("<?php " + BACKEND._runtime_probe_script(SOCKET) + "\n")
+            result = subprocess.run([php, "-l", str(target)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def _runtime(self, **probe_changes):
+        profile = production_profile()
+        result = {"database": "wpcg_prod_main", "version": "8.4.13", "uuid_sha256": "c" * 64,
+                  "server_socket": SOCKET, "connection_status": "Localhost via UNIX socket",
+                  "application_environment": "production", "deployment_environment": "production",
+                  "application_url": "https://www.wpcaregrid.com", "debug": False,
+                  "marketing_profile": "marketing_only", "marketing_enforcement": "enforced",
+                  "staging_admin_qa_enabled": False}
+        result.update(probe_changes)
+        calls = []
+
+        def run_fixed(argv, **kwargs):
+            return b"8.4.13" if argv[-1] == "echo PHP_VERSION;" else b""
+
+        def run_php(profile_arg, argv, **kwargs):
+            calls.append(argv)
+            return json.dumps(result).encode()
+
+        with patch.object(BACKEND, "_run_fixed", side_effect=run_fixed), \
+                patch.object(BACKEND, "_verify_environment_nginx_route"), \
+                patch.object(BACKEND, "_verify_database_socket") as socket_check, \
+                patch.object(BACKEND, "_run_as_php_fpm", side_effect=run_php):
+            outcome = BACKEND._verify_runtime(profile, Path("/var/www/wpcaregrid-production/releases/x"))
+        socket_check.assert_called_once()
+        self.assertEqual(calls[0], ["/usr/bin/php8.4", "-r", BACKEND._runtime_probe_script(SOCKET)])
+        return outcome
+
+    def test_runtime_accepts_only_the_exact_unix_socket(self):
+        self.assertEqual(self._runtime()["database"], "wpcg_prod_main")
+        for changes, code in (
+                ({"connection_status": "127.0.0.1 via TCP/IP"}, "database_connection_not_unix_socket"),
+                ({"connection_status": "localhost via TCP/IP"}, "database_connection_not_unix_socket"),
+                ({"server_socket": "/run/mysqld/mysqld.sock"}, "database_socket_mismatch"),
+                ({"server_socket": "/run/mysqld/wpcaregrid-production-restore.sock"}, "database_socket_mismatch"),
+                ({"uuid_sha256": "d" * 64}, "database_identity_mismatch"),
+                ({"connection_status": None}, "database_connection_not_unix_socket")):
+            with self.subTest(changes=changes), self.assertRaisesRegex(BACKEND.DeployRefused, f"^{code}$"):
+                self._runtime(**changes)
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "production_marketing_environment_unavailable"):
+            profile = production_profile()
+            BACKEND._verify_marketing_environment(profile, {"database": "x"})
+
+
+class DatabaseSocketHostCheckTests(unittest.TestCase):
+    """Root-side: the policy path must be the single listener of the production mysqld."""
+
+    def setUp(self):
+        import socket as socket_module
+        self.socket_module = socket_module
+        self.tmp = Path(tempfile.mkdtemp(prefix="wpcg"))
+        self.tmp.chmod(0o755)
+        (self.tmp / "run" / "mysqld").mkdir(parents=True)
+        for directory in (self.tmp / "run", self.tmp / "run" / "mysqld"):
+            directory.chmod(0o755)
+        self.path = self.tmp / "run" / "mysqld" / "wpcaregrid-production.sock"
+        self.listener = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+        self.listener.bind(str(self.path))
+        self.listener.listen(1)
+        self.proc = self.tmp / "proc"
+        (self.proc / "net").mkdir(parents=True)
+        self.rows = [(SOCKET, "00010000", "01", 4242)]
+        self.mysqld(4100, exe="/usr/sbin/mysqld", inodes=(4242, 77))
+        self.unit = {"Id": "mysql@wpcaregrid-production.service", "LoadState": "loaded", "ActiveState": "active",
+                     "MainPID": "4100", "AppArmorProfile": "wpcaregrid-mysql-production"}
+
+    def tearDown(self):
+        self.listener.close()
+        shutil.rmtree(self.tmp)
+
+    def mysqld(self, pid, *, exe, inodes):
+        base = self.proc / str(pid)
+        shutil.rmtree(base, ignore_errors=True)
+        (base / "fd").mkdir(parents=True)
+        os.symlink(exe, base / "exe")
+        for index, inode in enumerate(inodes):
+            os.symlink(f"socket:[{inode}]", base / "fd" / str(index))
+
+    def check(self):
+        table = "Num       RefCount Protocol Flags    Type St Inode Path\n" + "".join(
+            f"0000000000000000: 00000002 00000000 {flags} 0001 {state} {inode} {path}\n"
+            for path, flags, state, inode in self.rows)
+        (self.proc / "net" / "unix").write_text(table)
+        with patch.object(BACKEND, "BOUND_ENVIRONMENT", resolved()), \
+                patch.object(BACKEND, "DATABASE_SOCKET_ROOT", self.tmp), \
+                patch.object(BACKEND, "CONFINEMENT_PROC_ROOT", self.proc), \
+                patch.object(BACKEND.pwd, "getpwnam", return_value=SimpleNamespace(pw_uid=os.getuid())), \
+                patch.object(BACKEND, "_run_fixed", side_effect=lambda argv, **kw: "".join(
+                    f"{k}={v}\n" for k, v in self.unit.items()).encode()):
+            BACKEND._verify_database_socket(production_profile())
+
+    def refused(self, code):
+        with self.assertRaisesRegex(BACKEND.DeployRefused, f"^{code}$"):
+            self.check()
+
+    def test_exact_listening_socket_of_the_production_mysqld_passes(self):
+        self.check()
+
+    def test_alternate_unix_socket_or_tcp_only_listener_is_refused(self):
+        self.rows = [("/run/mysqld/mysqld.sock", "00010000", "01", 4242)]
+        self.refused("database_socket_listener_invalid")  # only another instance's socket listens
+        self.rows = []
+        self.refused("database_socket_listener_invalid")  # TCP-only server: no Unix listener at all
+        self.rows = [(SOCKET, "00000000", "03", 4242)]
+        self.refused("database_socket_listener_invalid")  # a connected client, not a listener
+
+    def test_second_listener_on_the_same_path_is_refused(self):
+        self.rows = [(SOCKET, "00010000", "01", 4242), (SOCKET, "00010000", "01", 5353)]
+        self.refused("database_socket_listener_invalid")
+
+    def test_listener_not_owned_by_the_production_mysqld_is_refused(self):
+        self.rows = [(SOCKET, "00010000", "01", 5353)]
+        self.refused("database_socket_owner_mismatch")
+        self.rows = [(SOCKET, "00010000", "01", 4242)]
+        self.mysqld(4100, exe="/usr/bin/socat", inodes=(4242,))
+        self.refused("database_socket_owner_mismatch")
+        self.mysqld(4100, exe="/usr/sbin/mysqld", inodes=(4242,))
+        self.unit["ActiveState"] = "inactive"
+        self.refused("database_socket_owner_mismatch")
+
+    def test_socket_path_type_owner_and_parents_are_enforced(self):
+        self.listener.close()
+        self.path.unlink()
+        self.refused("database_socket_unavailable")
+        self.path.write_text("not a socket")
+        self.refused("database_socket_invalid")
+        self.path.unlink()
+        self.path.symlink_to(self.tmp / "elsewhere.sock")
+        self.refused("database_socket_invalid")
+        self.path.unlink()
+        self.listener = self.socket_module.socket(self.socket_module.AF_UNIX, self.socket_module.SOCK_STREAM)
+        self.listener.bind(str(self.path))
+        (self.tmp / "run" / "mysqld").chmod(0o777)
+        self.refused("database_socket_parent_untrusted")
+        (self.tmp / "run" / "mysqld").chmod(0o755)
+        with patch.object(BACKEND.pwd, "getpwnam", side_effect=KeyError("mysql")):
+            with self.assertRaisesRegex(BACKEND.DeployRefused, "database_socket_owner_unavailable"):
+                with patch.object(BACKEND, "BOUND_ENVIRONMENT", resolved()):
+                    BACKEND._verify_database_socket(production_profile())
+
 
 class BootstrapCacheTests(unittest.TestCase):
     """www-data writes the candidate bootstrap/cache; root must never follow what it planted."""
@@ -1189,7 +1386,9 @@ class ConfinementCollectorTests(unittest.TestCase):
                 patch.object(BACKEND, "_run_status", side_effect=lambda argv: self.supervisorctl), \
                 patch.object(BACKEND, "_observe_confinement_file",
                              side_effect=lambda p: real_observe(self.files_root / str(p).lstrip("/"))):
-            return BACKEND._collect_php_fpm_confinement_observation(resolved(self.pin))
+            env = resolved(self.pin)
+            with patch.object(BACKEND, "BOUND_ENVIRONMENT", env):
+                return BACKEND._collect_php_fpm_confinement_observation(env)
 
     def verify(self, data):
         # Synthetic files are owned by the test user under /tmp; model root ownership.
@@ -1481,7 +1680,7 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.assertEqual(self.refusal(data), "confinement_www_data_jobs_unverifiable")
 
     def test_deploy_cli_peer_in_the_helper_session_passes_and_elsewhere_refuses(self):
-        probe = BACKEND._deploy_cli_commands()[0]
+        probe = BACKEND._deploy_cli_commands(SOCKET)[0]
         self.process(9950, unit="", label=DEPLOY_CLI_LABEL, exe="/usr/bin/php8.4", comm="php8.4",
                      cgroup=HELPER_CGROUP, argv=probe)
         self.verify(self.collect())

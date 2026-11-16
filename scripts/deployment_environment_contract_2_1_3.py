@@ -52,6 +52,17 @@ PRIVILEGED_INVOCATION = "root-console-direct"
 TRANSFER_USER = "deploy"
 WWW_DATA_UID = 33
 WWW_DATA_GID = 33
+# Production database access from the deploy CLI is Unix-socket only (Owner decision:
+# the deploy-CLI profile has no network). Source default from the repository's
+# production MySQL instance contract (scripts/production_g1_mysql_contract.py,
+# instance "wpcaregrid-production"); NOT yet verified on any host. The root policy
+# must name exactly this path; the helper verifies on the host that this path is the
+# one listening socket of that instance's mysqld, and refuses otherwise. No TCP fallback.
+PRODUCTION_DATABASE_SOCKET = "/run/mysqld/wpcaregrid-production.sock"
+PRODUCTION_DATABASE_UNIT = "mysql@wpcaregrid-production.service"
+PRODUCTION_DATABASE_EXECUTABLE = "/usr/sbin/mysqld"
+# Other instances' sockets on the same host (shared distribution instance, restore instance).
+FOREIGN_DATABASE_SOCKETS = frozenset({"/run/mysqld/mysqld.sock", "/run/mysqld/wpcaregrid-production-restore.sock"})
 # Identities that already exist on the shared host and must never be reused as
 # the production transfer identity.
 STAGING_NEXT_DEPLOY_UID = 996
@@ -222,6 +233,7 @@ class EnvironmentContract:
     scheduler_fence_marker: str | None
     privileged_invocation: str | None = None
     php_fpm_confinement: PhpFpmConfinement | None = None
+    database_socket: str | None = None
 
 
 PRODUCTION_TEMPLATE = EnvironmentContract(
@@ -242,7 +254,7 @@ PROFILES: Mapping[str, EnvironmentContract] = MappingProxyType({"production": PR
 _ENVIRONMENT_FIELDS = (
     "app_root", "application_link", "release_root", "incoming_root",
     "inbox_root", "state_root", "backup_root", "shared_env_file", "shared_storage_root", "shared_vendor_root",
-    "database", "database_host", "database_port", "database_server_uuid_sha256",
+    "database", "database_host", "database_port", "database_socket", "database_server_uuid_sha256",
     "isolated_database", "isolated_database_host", "isolated_database_port",
     "isolated_database_uuid_sha256", "host", "mysql_version", "deploy_user", "deploy_uid", "php_version",
     "php_fpm_socket", "php_fpm_unit", "php_fpm_uid", "php_fpm_gid", "worker_programs",
@@ -402,6 +414,11 @@ def _production_config(data: object) -> EnvironmentContract:
         raise EnvironmentRefused("production_host_identity_invalid")
     if data["database_host"] != "127.0.0.1" or data["isolated_database_host"] != "127.0.0.1":
         raise EnvironmentRefused("production_database_host_invalid")
+    socket_path = data["database_socket"]
+    if not isinstance(socket_path, str) or re.fullmatch(r"/run/mysqld/[a-z0-9][a-z0-9._-]{0,62}\.sock", socket_path) is None:
+        raise EnvironmentRefused("production_database_socket_invalid")
+    if socket_path in FOREIGN_DATABASE_SOCKETS or socket_path != PRODUCTION_DATABASE_SOCKET:
+        raise EnvironmentRefused("production_database_socket_mismatch")
     db_port = _positive_int(data["database_port"], "database_port", maximum=65535)
     isolated_port = _positive_int(data["isolated_database_port"], "isolated_database_port", maximum=65535)
     if db_port == isolated_port:
@@ -463,6 +480,7 @@ def _production_config(data: object) -> EnvironmentContract:
         maintenance_marker=paths["maintenance_marker"], worker_fence_marker=paths["worker_fence_marker"],
         scheduler_fence_marker=paths["scheduler_fence_marker"],
         privileged_invocation=PRIVILEGED_INVOCATION, php_fpm_confinement=confinement,
+        database_socket=socket_path,
     )
 
 

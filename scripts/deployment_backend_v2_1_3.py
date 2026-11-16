@@ -418,7 +418,7 @@ def _verify_marketing_environment(profile: StagingProfile, observed: object) -> 
         "application_environment", "deployment_environment", "application_url",
         "debug", "marketing_profile", "marketing_enforcement", "staging_admin_qa_enabled",
     }
-    expected_fields.update({"database", "version", "uuid_sha256"})
+    expected_fields.update({"database", "version", "uuid_sha256", "server_socket", "connection_status"})
     _require(isinstance(observed, Mapping) and set(observed) == expected_fields,
              "production_marketing_environment_unavailable")
     _require(observed["application_environment"] == "production"
@@ -2307,34 +2307,107 @@ $status=Illuminate\Support\Facades\Artisan::call("migrate",[
   while (ob_get_level() > $wpcgOutputLevel) { ob_end_clean(); }
 }
 echo json_encode($response,JSON_UNESCAPED_SLASHES);'''
-_RUNTIME_PROBE_SCRIPT = (
+# Runtime identity probe. The database socket comes only from the root policy and is
+# embedded literally (so it is bound into the deploy-CLI command-line hash); the probe
+# never reads a socket, host or port from .env or the process environment, forces the
+# Unix socket on the default mysql connection, and reports what the server and the
+# driver actually used. There is no TCP fallback: the deploy-CLI profile has no network.
+_RUNTIME_PROBE_TEMPLATE = (
     "require 'vendor/autoload.php'; $app=require 'bootstrap/app.php'; "
     "$kernel=$app->make('Illuminate\\\\Contracts\\\\Console\\\\Kernel'); $kernel->bootstrap(); "
-    "$c=$app['db']->connection(); $r=$c->selectOne('SELECT DATABASE() AS db, VERSION() AS version, @@server_uuid AS uuid'); "
+    "$wpcgSocket='__WPCG_DATABASE_SOCKET__'; $wpcgName=config('database.default'); "
+    "if (!is_string($wpcgName) || config(\"database.connections.$wpcgName.driver\")!=='mysql') "
+    "{ fwrite(STDERR, 'wpcg_database_driver_invalid'); exit(3); } "
+    "config([\"database.connections.$wpcgName.unix_socket\"=>$wpcgSocket,"
+    "\"database.connections.$wpcgName.url\"=>null,\"database.connections.$wpcgName.host\"=>'localhost',"
+    "\"database.connections.$wpcgName.port\"=>null]); $app['db']->purge($wpcgName); "
+    "$c=$app['db']->connection($wpcgName); "
+    "$r=$c->selectOne('SELECT DATABASE() AS db, VERSION() AS version, @@server_uuid AS uuid, @@socket AS server_socket'); "
     "echo json_encode(['database'=>$r->db,'version'=>$r->version,'uuid_sha256'=>hash('sha256',$r->uuid),"
+    "'server_socket'=>$r->server_socket,"
+    "'connection_status'=>$c->getPdo()->getAttribute(PDO::ATTR_CONNECTION_STATUS),"
     "'application_environment'=>config('app.env'),'deployment_environment'=>config('app.deployment_environment'),"
     "'application_url'=>config('app.url'),'debug'=>config('app.debug'),"
     "'marketing_profile'=>config('marketing_release.profile'),"
     "'marketing_enforcement'=>config('marketing_release.enforcement_mode'),"
     "'staging_admin_qa_enabled'=>config('marketing_release.staging_admin_qa_enabled')]);"
 )
+_DATABASE_SOCKET_RE = re.compile(r"/run/mysqld/[a-z0-9][a-z0-9._-]{0,62}\.sock")
+UNIX_SOCKET_CONNECTION_STATUS = "Localhost via UNIX socket"
+# Prefix for the database socket path (patched only by synthetic tests).
+DATABASE_SOCKET_ROOT = Path("/")
 
 
-def _deploy_cli_commands() -> tuple[tuple[str, ...], ...]:
+def _policy_database_socket(socket_path: str | None = None) -> str:
+    """The exact socket named by the bound root policy; never derived from the environment."""
+    if socket_path is None:
+        socket_path = getattr(BOUND_ENVIRONMENT, "database_socket", None)
+    _require(isinstance(socket_path, str) and _DATABASE_SOCKET_RE.fullmatch(socket_path) is not None
+             and socket_path == _ENVIRONMENT_MODULE.PRODUCTION_DATABASE_SOCKET, "database_socket_policy_invalid")
+    return socket_path
+
+
+def _runtime_probe_script(socket_path: str | None = None) -> str:
+    return _RUNTIME_PROBE_TEMPLATE.replace("__WPCG_DATABASE_SOCKET__", _policy_database_socket(socket_path))
+
+
+def _deploy_cli_commands(socket_path: str | None = None) -> tuple[tuple[str, ...], ...]:
     """Every exact argv the helper may run as www-data under the deploy-CLI profile."""
     php = _ENVIRONMENT_MODULE.DEPLOY_CLI_EXECUTABLE
     return (
-        (php, "-r", _RUNTIME_PROBE_SCRIPT),
+        (php, "-r", _runtime_probe_script(socket_path)),
         (php, "artisan", "package:discover", "--ansi", "--no-interaction"),
         (php, "artisan", "config:cache", "--no-interaction"),
         (php, "-r", _MIGRATION_RUNNER_SCRIPT),  # Phase B only; Phase B stays disabled
     )
 
 
-def deploy_cli_cmdline_sha256() -> list[str]:
+def deploy_cli_cmdline_sha256(socket_path: str | None = None) -> list[str]:
     """SHA-256 of each /proc/<pid>/cmdline the deploy-CLI commands produce."""
     return [hashlib.sha256(b"".join(arg.encode("utf-8") + b"\0" for arg in argv)).hexdigest()
-            for argv in _deploy_cli_commands()]
+            for argv in _deploy_cli_commands(socket_path)]
+
+
+def _verify_database_socket(profile: StagingProfile) -> None:
+    """Root-side proof that the policy socket is the one listening socket of the production mysqld."""
+    module = _ENVIRONMENT_MODULE
+    socket_path = _policy_database_socket()
+    try:
+        mysql_uid = pwd.getpwnam("mysql").pw_uid
+    except KeyError:
+        raise DeployRefused("database_socket_owner_unavailable") from None
+    cursor = DATABASE_SOCKET_ROOT
+    for component in PurePosixPath(socket_path).parts[1:-1]:
+        cursor = cursor / component
+        info = _lstat(cursor, "database_socket_unavailable")
+        _require(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, mysql_uid}
+                 and not stat.S_IMODE(info.st_mode) & 0o022, "database_socket_parent_untrusted")
+    info = _lstat(DATABASE_SOCKET_ROOT / socket_path.lstrip("/"), "database_socket_unavailable")
+    _require(stat.S_ISSOCK(info.st_mode) and info.st_uid == mysql_uid, "database_socket_invalid")
+    listening = []
+    table = _read_host_text(CONFINEMENT_PROC_ROOT / "net" / "unix", maximum=16_000_000,
+                            reason="database_socket_listener_unavailable")
+    for line in table.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 8 or fields[7] != socket_path:
+            continue
+        try:
+            flags, state, inode = int(fields[3], 16), fields[5], int(fields[6])
+        except ValueError:
+            raise DeployRefused("database_socket_listener_unavailable") from None
+        if flags & 0x10000 and state == "01":  # __SO_ACCEPTCON, unconnected: a listener
+            listening.append(inode)
+    _require(len(listening) == 1, "database_socket_listener_invalid")
+    properties = _systemd_properties(module.PRODUCTION_DATABASE_UNIT)
+    _require(properties["ActiveState"] == "active" and properties["MainPID"].isdigit()
+             and int(properties["MainPID"]) > 1, "database_socket_owner_mismatch")
+    base = CONFINEMENT_PROC_ROOT / properties["MainPID"]
+    try:
+        _require(os.readlink(base / "exe") == module.PRODUCTION_DATABASE_EXECUTABLE, "database_socket_owner_mismatch")
+        targets = {os.readlink(base / "fd" / name) for name in os.listdir(base / "fd")}
+    except OSError:
+        raise DeployRefused("database_socket_owner_mismatch") from None
+    _require(f"socket:[{listening[0]}]" in targets, "database_socket_owner_mismatch")
 
 
 def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
@@ -3010,7 +3083,9 @@ def _verify_runtime(profile: StagingProfile, active_path: Path) -> Mapping[str, 
     _run_fixed(["/usr/sbin/nginx", "-t"], timeout=15)
     nginx_dump = _run_fixed(["/usr/sbin/nginx", "-T"], timeout=15, maximum=2_000_000)
     _verify_environment_nginx_route(nginx_dump, hostname=APPLICATION_HOST, socket_path=EXPECTED_FPM_SOCKET)
-    php_probe = _RUNTIME_PROBE_SCRIPT
+    socket_path = _policy_database_socket()
+    _verify_database_socket(profile)
+    php_probe = _runtime_probe_script(socket_path)
     raw = _run_as_php_fpm(profile, [PHP_BINARY, "-r", php_probe],
                           cwd=active_path, timeout=20, maximum=4096)
     try:
@@ -3024,6 +3099,10 @@ def _verify_runtime(profile: StagingProfile, active_path: Path) -> Mapping[str, 
              and _sha(profile.mysql_server_uuid_sha256, SHA256_RE)
              and result.get("uuid_sha256") == profile.mysql_server_uuid_sha256,
              "database_identity_mismatch")
+    # Unix socket only: the exact policy socket, never TCP and never another instance.
+    _require(result.get("connection_status") == UNIX_SOCKET_CONNECTION_STATUS,
+             "database_connection_not_unix_socket")
+    _require(result.get("server_socket") == socket_path, "database_socket_mismatch")
     return {"php": PHP_VERSION, "mysql": ".".join(version.split(".")[:2]), "database": DATABASE}
 
 

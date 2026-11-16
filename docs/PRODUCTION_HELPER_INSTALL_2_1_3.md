@@ -167,7 +167,8 @@ Workstream B runbook.
 runs application PHP only as these exact argv (`_deploy_cli_commands`), each through
 `runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy --`:
 
-1. `/usr/bin/php8.4 -r <fixed runtime identity probe>` (every preflight; before and after activation);
+1. `/usr/bin/php8.4 -r <runtime identity probe bound to the policy database socket>` (every preflight;
+   before and after activation);
 2. `/usr/bin/php8.4 artisan package:discover --ansi --no-interaction` (bootstrap cache of a candidate release);
 3. `/usr/bin/php8.4 artisan config:cache --no-interaction` (same);
 4. `/usr/bin/php8.4 -r <fixed Phase B migration runner>`, only when Phase B is enabled, which it
@@ -181,6 +182,27 @@ installed and enforced, `deploy_cli_profile_mode` is not `enforce` and every ope
 The deploy-CLI class additionally requires `argv0` `/usr/bin/php8.4`, no supplementary group
 other than 33, and a start time not earlier than the current helper process (leftovers from an
 earlier run refuse with `confinement_deploy_cli_stale`).
+
+**Database access: Unix socket only (Owner decision, option a).** The deploy-CLI profile has no
+network. The production policy field `database_socket` must be exactly
+`/run/mysqld/wpcaregrid-production.sock`, the production instance socket from the repository's
+`scripts/production_g1_mysql_contract.py` (`mysql@wpcaregrid-production.service`). This is a
+**source default, not yet verified on any host**; any other value (including the shared
+`/run/mysqld/mysqld.sock`, the restore instance's socket or a `/var/run` alias) refuses with
+`production_database_socket_mismatch`/`…_invalid`. The probe embeds that path literally (so it is
+bound into the deploy-CLI command-line allowlist), never reads a socket, host or port from `.env`
+or the environment, forces `unix_socket` on the default mysql connection and reports `@@socket`
+and the PDO connection status. The helper requires `Localhost via UNIX socket`
+(`database_connection_not_unix_socket` otherwise: no TCP fallback), `@@socket` equal to the policy
+path (`database_socket_mismatch`) and the existing exact server-UUID hash. Before each probe, root
+verifies on the host that the path is a `mysql`-owned socket under root/mysql-owned, non-writable
+parents, that exactly one listening Unix socket in `/proc/net/unix` has that path, and that its
+socket inode is held by the `MainPID` of the active `mysql@wpcaregrid-production.service` whose
+executable is `/usr/sbin/mysqld` (`database_socket_listener_invalid`,
+`database_socket_owner_mismatch`, `…_invalid`, `…_parent_untrusted`). Host acceptance must confirm
+the real socket path; a mismatch fails closed and needs a new contract version, not a policy edit.
+Phase B stays disabled; its runner still uses TCP host/port and would need the same conversion
+before it could ever be enabled.
 
 **Candidate `bootstrap/cache` (www-data-writable while PHP runs).** After the artisan commands
 return, the helper seals the directory first (no-follow descriptor: `0700`, root-owned), then
@@ -203,13 +225,13 @@ sibling PHP that runs `sendmail`, `proc_open` or `exec`, then complain-mode soak
 | Artifact | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
-| `scripts/deployment_backend_v2_1_3.py` | `b73a27d35e6f12fb4088d99e594acf10eb2db2e411b2803e63028962ab46dbdd` |
+| `scripts/deployment_backend_v2_1_3.py` | `f123d5225056bfaa45f26b338e0d48768cd47c688d025c98847ff199c8b14a0f` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `adbac3720905a924f0a2fc33d5bccb57e337f8002bfddaa28490e21dab58f72a` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `2ccbf8c430905aa69c6a121471657aafca6750f23aacce8228c6b1e1532acf32` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `77a344782369ee600db0c776f4b6f933ef99ddfb879c52887bb153429d6f8fdf` |
-| `scripts/production_deploy_controller_2_1_3.py` | `7eaf8dc2267b20b1d24087f84bca03fc5e0b83ee17937e9a2cc87b875087a671` |
-| `scripts/install_production_helper_2_1_3.py` | `8225323efe859741bbddbf2c9f1fbf69bd20d549e9fb4c98287c1797c0e4d2f9` |
+| helper artifact digest | `6ccd4fef69a5e10b5bd0adbfcc580db01e9ccf54ee3c9dd4d382f83650090991` |
+| `scripts/production_deploy_controller_2_1_3.py` | `02f8a008b650b9a5c0f6c5289f683e2e8ba1b558be639f25260a48a6af0724bd` |
+| `scripts/install_production_helper_2_1_3.py` | `002dec192a105774bd9fcbd4753de0c82d5751a8d449a54a3239ab528b0fdd60` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.
