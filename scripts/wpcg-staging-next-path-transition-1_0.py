@@ -543,11 +543,7 @@ def transition(*, mode: str, root: Path, nginx_file: str, root_uid: int, app_uid
         if not stat.S_ISLNK(link_info.st_mode) or link_info.st_uid != root_uid or link_info.st_nlink != 1 \
                 or os.readlink(link_path) != str(APP_ROOT):
             raise TransitionStop("active_link_conflict")
-        _validate_vhost(source_map[source_path], source_path, NEW_WEB_ROOT)
-        return _receipt("PASS", "already_applied", {"application_root": str(APP_ROOT),
-                "active_link": str(ACTIVE_LINK), "nginx_source": source_path,
-                "nginx_root": NEW_WEB_ROOT, "configuration_backup": None,
-                "app_storage_migration": "not_performed"})
+        raise TransitionStop("active_link_already_exists_receipt_required")
 
     config_new, config_sha = _prepare_config(dump, source_path, OLD_WEB_ROOT, NEW_WEB_ROOT)
     details = {"application_root": str(APP_ROOT), "active_link": str(ACTIVE_LINK),

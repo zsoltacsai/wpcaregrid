@@ -22,7 +22,10 @@ class RuntimeLayoutTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.ids = LAYOUT._test_identities()
         for logical, mode in (("/var", 0o755), ("/var/www", 0o755), ("/var/lib", 0o755),
-                              (LAYOUT.APP_ROOT, 0o755)):
+                              (LAYOUT.APP_ROOT, 0o755), ("/usr", 0o755), ("/usr/local", 0o755),
+                              ("/usr/local/libexec", 0o755), ("/usr/local/libexec/wpcaregrid-deploy", 0o755),
+                              ("/etc", 0o755), ("/etc/wpcaregrid-deploy", 0o755),
+                              ("/etc/wpcaregrid-deploy/profiles", 0o755)):
             path = LAYOUT._physical(self.root, logical)
             path.mkdir(parents=True, exist_ok=True)
             path.chmod(mode)
@@ -87,6 +90,17 @@ class RuntimeLayoutTests(unittest.TestCase):
                 LAYOUT.provision(self.root, self.ids, apply=True)
         self.assertFalse(LAYOUT._physical(self.root, LAYOUT.DEPLOY_ROOT).exists())
         self.assertTrue((LAYOUT._physical(self.root, LAYOUT.APP_ROOT) / "keep.me").exists())
+
+    def test_source_checkout_directory_is_created_for_controller_and_existing_data_is_preserved(self):
+        source = LAYOUT._physical(self.root, LAYOUT.STAGING_ROOT + "/source")
+        staging = LAYOUT._physical(self.root, LAYOUT.STAGING_ROOT)
+        staging.mkdir(parents=True)
+        source.mkdir()
+        source.chmod(0o700)
+        (source / "git-marker").write_text("preserve")
+        result = LAYOUT.provision(self.root, self.ids, apply=True)
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual((source / "git-marker").read_text(), "preserve")
 
 
 if __name__ == "__main__":

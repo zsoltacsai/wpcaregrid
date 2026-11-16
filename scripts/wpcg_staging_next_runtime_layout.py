@@ -73,6 +73,7 @@ def _specs(ids: Identities) -> tuple[DirectorySpec, ...]:
         DirectorySpec(DEPLOY_ROOT, ids.root_uid, ids.root_gid, 0o755),
         DirectorySpec(STAGING_ROOT, ids.root_uid, ids.root_gid, 0o755),
         DirectorySpec(f"{STAGING_ROOT}/releases", ids.root_uid, ids.root_gid, 0o755),
+        DirectorySpec(f"{STAGING_ROOT}/source", ids.deploy_uid, ids.deploy_gid, 0o700),
         DirectorySpec(f"{STAGING_ROOT}/incoming", ids.deploy_uid, ids.deploy_gid, 0o700),
         DirectorySpec(f"{STAGING_ROOT}/inbox", ids.root_uid, ids.root_gid, 0o755),
         DirectorySpec(f"{STAGING_ROOT}/state", ids.root_uid, ids.root_gid, 0o700),
@@ -80,6 +81,8 @@ def _specs(ids: Identities) -> tuple[DirectorySpec, ...]:
         DirectorySpec(f"{STAGING_ROOT}/database-backups", ids.root_uid, ids.root_gid, 0o700),
         DirectorySpec(f"{STAGING_ROOT}/shared", ids.root_uid, ids.root_gid, 0o755),
         DirectorySpec(f"{STAGING_ROOT}/shared/storage", ids.fpm_uid, ids.fpm_gid, 0o2770),
+        DirectorySpec("/usr/local/libexec/wpcaregrid-deploy/staging-next", ids.root_uid, ids.root_gid, 0o755),
+        DirectorySpec("/etc/wpcaregrid-deploy/profiles", ids.root_uid, ids.root_gid, 0o755),
     )
 
 
@@ -161,7 +164,7 @@ def _check_staging_children(root: Path) -> None:
         return
     if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise LayoutError("staging_root_not_real_directory")
-    expected = {"releases", "incoming", "inbox", "state", "receipts", "database-backups", "shared"}
+    expected = {"releases", "source", "incoming", "inbox", "state", "receipts", "database-backups", "shared"}
     try:
         names = {entry.name for entry in os.scandir(staging)}
     except OSError:

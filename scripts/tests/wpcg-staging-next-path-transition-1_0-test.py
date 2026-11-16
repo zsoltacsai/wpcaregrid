@@ -156,6 +156,15 @@ class PathTransitionTests(unittest.TestCase):
         self.assertEqual(os.readlink(link), "/wrong")
         self.assertEqual(self.config.read_bytes(), self.original)
 
+    def test_expected_existing_link_without_receipt_is_not_reported_as_pass(self):
+        link = self.root / TRANSITION.ACTIVE_LINK.relative_to("/")
+        link.symlink_to(str(TRANSITION.APP_ROOT))
+        with self.assertRaisesRegex(TRANSITION.TransitionStop,
+                                    "active_link_already_exists_receipt_required"):
+            self.run_transition("apply")
+        self.assertEqual(os.readlink(link), str(TRANSITION.APP_ROOT))
+        self.assertEqual(self.config.read_bytes(), self.original)
+
     def test_receipt_bound_rollback_restores_vhost_and_removes_only_owned_link(self):
         applied = self.run_transition("apply")
         self.assertEqual(applied["result"], "PASS")

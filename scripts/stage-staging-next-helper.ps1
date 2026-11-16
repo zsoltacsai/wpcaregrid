@@ -14,8 +14,8 @@ $PinnedManifestPath = 'deploy/release-manifests/staging-next-helper-1.4.12.json'
 $PinnedManifestSha256 = '602f8427974d7ebe7f30837bd8dc5304c9fe82334d4a8b2ba9c2e63c648caa7e'
 $PinnedReceiverSha256 = 'e80b3821fa90b3b9fe96195c5b0464f69900b7ed2a407ea5b06ed68f46d3e65d'
 $PinnedOperations = [ordered]@{
-    'wpcg_staging_next_runtime_layout.py' = 'a37b3346d354350a239e83b39253f48edf1f4f42fa201c714fdbf56353779957'
-    'wpcg-staging-next-path-transition-1_0.py' = '84ae27a8b725d17160716740cc31e2749fe4638e944a4b2ab4d3b1b9cbe2b9f2'
+    'wpcg_staging_next_runtime_layout.py' = '61042c51c88996568a180b66f461695198d2ed48a5c8a118d4deebcebe484daa'
+    'wpcg-staging-next-path-transition-1_0.py' = '199f2489aeebbb4dd00285edbd263d9a56db642e9e5e5d966d8f2bacb2cd0c12'
     'install_staging_next_helper_1_4_12.py' = 'a6126bd9f43d53f69dc213b466b66a15402e21adbbe3c88ab95590dab890aecc'
 }
 $Repository = 'zsoltacsai/wpcaregrid'
@@ -157,8 +157,10 @@ try {
         backend_sha256 = [string] $manifest.backend_sha256
         compatibility_contract = [string] $manifest.compatibility_contract
         entrypoint_sha256 = [string] $manifest.entrypoint_sha256
+        environment_contract_sha256 = [string] $manifest.environment_contract_sha256
         helper_version = [string] $manifest.helper_version
         schema = 1
+        target_binding_sha256 = [string] $manifest.target_binding_sha256
         transaction_module_sha256 = [string] $manifest.transaction_module_sha256
     }
     $artifactJson = ConvertTo-Json -InputObject $artifactPayload -Compress
@@ -196,10 +198,11 @@ try {
     }
 
     if ($Mode -eq 'check') {
-        $remote = Invoke-SshCommand 'preflight'
+        $remote = Invoke-SshCommand "preflight $version $nonce"
         Write-Output "TRANSFER_CHECK=PASS;VERSION=$version;SOURCE_COMMIT=$commit"
         Write-Output $remote
-        exit 0
+        $global:LASTEXITCODE = 0
+        return
     }
 
     $scp = Get-Command 'scp.exe' -ErrorAction SilentlyContinue

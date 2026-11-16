@@ -61,8 +61,8 @@ The separately pinned host operations are:
 
 | File | SHA-256 |
 |---|---|
-| `scripts/wpcg_staging_next_runtime_layout.py` | `a37b3346d354350a239e83b39253f48edf1f4f42fa201c714fdbf56353779957` |
-| `scripts/wpcg-staging-next-path-transition-1_0.py` | `84ae27a8b725d17160716740cc31e2749fe4638e944a4b2ab4d3b1b9cbe2b9f2` |
+| `scripts/wpcg_staging_next_runtime_layout.py` | `61042c51c88996568a180b66f461695198d2ed48a5c8a118d4deebcebe484daa` |
+| `scripts/wpcg-staging-next-path-transition-1_0.py` | `199f2489aeebbb4dd00285edbd263d9a56db642e9e5e5d966d8f2bacb2cd0c12` |
 
 They and the installer are sent to the separate deploy-owned operations folder,
 then executed as root only after a same-open-file hash, ownership, mode, link-count

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -134,6 +136,7 @@ class ReceiverTests(unittest.TestCase):
     def test_hp_adapter_is_pinned_to_manifest_receiver_and_both_root_tools(self):
         adapter = (ROOT / "scripts/stage-staging-next-helper.ps1").read_text(encoding="utf-8")
         manifest_path = ROOT / "deploy/release-manifests/staging-next-helper-1.4.12.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
         receiver_digest = hashlib.sha256(RECEIVER.read_bytes()).hexdigest()
         self.assertIn("$PinnedHelperVersion = '1.4.12'", adapter)
@@ -148,6 +151,28 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn("publish-all", adapter)
         self.assertIn("StrictHostKeyChecking=yes", adapter)
         self.assertIn("$ExpectedPrimarySHA", adapter)
+
+    def test_hp_adapter_uses_the_exact_manifest_artifact_digest_and_preflight_identity(self):
+        adapter = (ROOT / "scripts/stage-staging-next-helper.ps1").read_text(encoding="utf-8")
+        manifest = json.loads((ROOT / "deploy/release-manifests/staging-next-helper-1.4.12.json")
+                              .read_text(encoding="utf-8"))
+        match = re.search(r"\$artifactPayload = \[ordered\]@\{(.*?)\n\s*\}", adapter, re.S)
+        self.assertIsNotNone(match)
+        fields = re.findall(r"^\s*([a-z0-9_]+)\s*=", match.group(1), re.M)
+        expected = ["backend_sha256", "compatibility_contract", "entrypoint_sha256",
+                    "environment_contract_sha256", "helper_version", "schema",
+                    "target_binding_sha256", "transaction_module_sha256"]
+        self.assertEqual(fields, expected)
+        payload = {key: manifest[key] for key in expected if key != "schema"}
+        payload["schema"] = 1
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+        self.assertEqual(hashlib.sha256(canonical).hexdigest(), manifest["helper_artifact_sha256"])
+        self.assertIn('Invoke-SshCommand "preflight $version $nonce"', adapter)
+        self.assertIn("$global:LASTEXITCODE = 0", adapter)
+        self.assertNotIn("exit 0", adapter)
+        runbook = (ROOT / "docs/STAGING_NEXT_HELPER_1_4_12_RUNBOOK.md").read_text(encoding="utf-8")
+        self.assertIn(hashlib.sha256((ROOT / "scripts/stage-staging-next-helper.ps1").read_bytes()).hexdigest(),
+                      runbook)
 
 
 if __name__ == "__main__":

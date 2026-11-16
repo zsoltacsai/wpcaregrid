@@ -60,7 +60,7 @@ Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 `
 Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 `
   -Uri "$Base/scripts/wpcg-staging-next-helper-transfer-receiver.sh" -OutFile $Receiver
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Adapter).Hash.ToLowerInvariant() -ne
-    'a9b82c84be9b111a5b1034dd8b28e19b3523b6097e0f917f4385df142ab1b3a6') { throw 'TRANSFER=STOP;CODE=adapter_hash_mismatch' }
+    '24f5d31e940965503693627f0a675f6edb8c909c19ba3acabab6de5738eada93') { throw 'TRANSFER=STOP;CODE=adapter_hash_mismatch' }
 & $Adapter -ExpectedPrimarySHA $Primary -Mode check
 if ($LASTEXITCODE -ne 0) { throw 'TRANSFER=STOP;CODE=check_failed' }
 & $Adapter -ExpectedPrimarySHA $Primary -Mode stage
@@ -87,10 +87,12 @@ TRANSFER=PASS;VERSION=1.4.12;SOURCE_COMMIT=<same full SHA>;FILES=8
 ```
 
 Any different output, host-key prompt/change, missing binary, existing version
-destination, hash mismatch, timeout, or SSH/SCP failure is STOP. A partial
-upload is left inert in its nonce-named workspace for review; do not delete or
-retry it by pathname. The root installer later verifies its own exact input
-bytes and the five helper files independently.
+destination, hash mismatch, timeout, or SSH/SCP failure is STOP. A failed partial
+upload or publication is inert but may leave its nonce workspace and/or one of
+the no-overwrite destination directories. Do not delete by pathname or retry
+into those names; preserve them for an exact, inode-checked cleanup review. The
+root installer later verifies its own exact input bytes and the five helper
+files independently.
 
 The adapter and receiver have not been executed on Windows or on the staging
 host. CI tests the receiver and statically checks the PowerShell adapter pins;
@@ -167,8 +169,8 @@ PY
 
   layout="$ops/wpcg_staging_next_runtime_layout.py"
   transition="$ops/wpcg-staging-next-path-transition-1_0.py"
-  layout_sha='a37b3346d354350a239e83b39253f48edf1f4f42fa201c714fdbf56353779957'
-  transition_sha='84ae27a8b725d17160716740cc31e2749fe4638e944a4b2ab4d3b1b9cbe2b9f2'
+  layout_sha='61042c51c88996568a180b66f461695198d2ed48a5c8a118d4deebcebe484daa'
+  transition_sha='199f2489aeebbb4dd00285edbd263d9a56db642e9e5e5d966d8f2bacb2cd0c12'
   installer_sha='a6126bd9f43d53f69dc213b466b66a15402e21adbbe3c88ab95590dab890aecc'
 
   set +e
@@ -195,13 +197,19 @@ file descriptor, then executes only those authenticated bytes in memory as
 root. This prevents replacing a deploy-owned script between `sha256sum` and
 execution.
 
-The runtime-layout provisioner creates only the documented empty directory
-skeleton with identity and ownership checks, receipt, and inode-bound rollback
-on partial failure. It does not create the activation link, environment file,
-vendor tree, release, database backup, or deployment marker. The path utility
-requires the pre-provisioned root-only state directory and refuses an ambiguous
-or nonmatching Nginx source. Capture its `complete_receipt_path` from PASS; if a
-later reviewed rollback is needed, run the same pinned wrapper with
+The runtime-layout provisioner creates only the documented directory skeleton
+with identity and ownership checks and inode-bound rollback on partial failure.
+It prints a structured JSON receipt to stdout but does not persist it; save the
+sanitized output with the operation evidence. It creates the controller's
+`source` directory as `deploy-staging-next` mode 0700 and the root-owned helper
+base path, and validates the existing profile directory. It does not create the
+activation link, environment file, vendor tree, release, database backup, or
+deployment marker. The path utility requires the provisioned root-only state
+directory and refuses an ambiguous or nonmatching Nginx source. Capture its
+durable `complete_receipt_path` from PASS. For a rollback in a later shell, start
+a fresh root subshell and re-paste the `run_pinned_py` definition and its exact
+pins from the block above; shell functions do not persist across the subshell.
+Then run the same pinned wrapper with
 `--mode rollback --receipt <complete_receipt_path>`. Rollback refuses changed
 Nginx bytes, a changed symlink, or a mismatched backup. It restores only the
 original staging-next vhost and removes only the recorded sibling symlink.
