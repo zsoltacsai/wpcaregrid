@@ -17,9 +17,11 @@ unchanged. GO-13 changes only the production privilege and isolation model:
   private inbox. Nothing deploy-owned is executed as root.
 * PHP-FPM: production keeps the shared ``www-data`` 33/33 identity only with
   the exact confinement binding of ``deployment_environment_contract_2_1_3``
-  and a passing root-collected schema-3 observation before preflight, stage
-  and deploy. Application PHP launched by this helper runs as ``www-data``
-  under the production AppArmor profile (``aa-exec``).
+  and a passing root-collected schema-3 observation before every operation,
+  after every application-PHP command and after release activation.
+  Application PHP launched by this helper is limited to exact command lines and
+  runs as ``www-data`` under the dedicated ``wpcaregrid-php-cli-production-deploy``
+  profile (``aa-exec``), never the FPM profile.
 
 See docs/PRODUCTION_HELPER_INSTALL_2_1_3.md.
 """
@@ -127,7 +129,7 @@ MAX_CONFINEMENT_FILE_BYTES = 1_000_000
 CONFINEMENT_CRONTAB = Path("/var/spool/cron/crontabs/www-data")
 CONFINEMENT_SYSTEM_CRONTAB = Path("/etc/crontab")
 CONFINEMENT_CRON_D = Path("/etc/cron.d")
-CONFINEMENT_CRON_WRAPPER = Path("/usr/local/bin/wpcaregrid-scheduler")
+CONFINEMENT_AT_SPOOL = Path("/var/spool/cron/atjobs")
 SUPERVISOR_CONFIG = Path("/etc/supervisor/supervisord.conf")
 SUPERVISOR_CONF_D = Path("/etc/supervisor/conf.d")
 # Prefix for fence marker paths (patched only by synthetic tests).
@@ -2177,58 +2179,9 @@ def _runtime_failure_code(stdout: bytes, stderr: bytes, returncode: int) -> str:
     return f"runtime_probe_failed_{returncode}"
 
 
-def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
-                    timeout: float, maximum: int = 4096,
-                    extra_env: Mapping[str, str] | None = None,
-                    classify_failure: bool = False) -> bytes:
-    """Run application-controlled PHP only as the fixed, unprivileged FPM identity."""
-    _require(type(profile.php_fpm_uid) is int and profile.php_fpm_uid >= 0
-             and type(profile.php_fpm_gid) is int and profile.php_fpm_gid >= 0,
-             "php_fpm_identity_policy_invalid")
-    home = profile.shared_storage_dir
-    if os.geteuid() == 0:
-        try:
-            fpm_user = pwd.getpwuid(profile.php_fpm_uid).pw_name
-            fpm_group = grp.getgrgid(profile.php_fpm_gid).gr_name
-        except KeyError:
-            raise DeployRefused("php_fpm_identity_unavailable") from None
-        _require(bool(fpm_user) and bool(fpm_group), "php_fpm_identity_unavailable")
-        prefix = ["/usr/sbin/runuser", "--user", fpm_user,
-                  "--group", fpm_group, "--"]
-        if not profile.test_only:
-            # Shared www-data identity: application PHP started by root must run
-            # under the production AppArmor profile, never unconfined.
-            confinement = getattr(BOUND_ENVIRONMENT, "php_fpm_confinement", None)
-            _require(profile.name == "production" and confinement is not None,
-                     "php_fpm_confinement_unbound")
-            prefix += [AA_EXEC, "-p", _ENVIRONMENT_MODULE.CONFINEMENT_SERVICES["production"].apparmor_profile,
-                       "--"]
-        return _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
-                          extra_env=extra_env, home=home, classify_failure=classify_failure)
-    _require(os.geteuid() == profile.php_fpm_uid, "runtime_probe_identity_mismatch")
-    return _run_fixed(argv, cwd=cwd, timeout=timeout, maximum=maximum,
-                      extra_env=extra_env, home=home, classify_failure=classify_failure)
-
-
-def _execute_exact_migration(profile: StagingProfile, release_path: Path, *,
-                             migration: Mapping[str, str], database: str,
-                             isolated: bool, operation: str, policy) -> str:
-    """Run one hash-pinned Laravel migration against one fixed-profile database."""
-    name = migration.get("name")
-    digest = migration.get("sha256")
-    _require(isinstance(name, str) and _TRANSACTION_MODULE.MIGRATION_RE.fullmatch(name) is not None
-             and _sha(digest, SHA256_RE), "release_migration_identity_invalid")
-    _require(operation in {"rehearsal", "target"}, "phase_b_migration_operation_invalid")
-    _require(re.fullmatch(re.escape(DATABASE) + r"(?:_(?:restore|rehearsal)_[0-9a-f]{32})?", database)
-             is not None, "phase_b_database_name_invalid")
-    migration_path = release_path / "database" / "migrations" / f"{name}.php"
-    raw = _read_regular_nofollow(migration_path, max_bytes=4_000_000,
-                                 expected_uid=profile.expected_owner_uid, expected_mode=0o644)
-    _require(hashlib.sha256(raw).hexdigest() == digest, "release_migration_identity_mismatch")
-    database_policy = policy.credentials["isolated"] if isolated else policy.credentials["target"]
-    host = policy.restore_host if isolated else policy.target_host
-    port = policy.restore_port if isolated else policy.target_port
-    script = r'''$wpcgOutputLevel=ob_get_level(); ob_start();
+# Fixed application-PHP programs the root helper runs (hoisted unchanged from the
+# 2.1.2 function bodies so the deploy-CLI peer class can bind their exact command lines).
+_MIGRATION_RUNNER_SCRIPT = r'''$wpcgOutputLevel=ob_get_level(); ob_start();
 try {
 $releasePath=getenv("WPCG_RELEASE_PATH");
 if (!is_string($releasePath) || $releasePath === "") { throw new \RuntimeException("release_path_unavailable"); }
@@ -2354,6 +2307,97 @@ $status=Illuminate\Support\Facades\Artisan::call("migrate",[
   while (ob_get_level() > $wpcgOutputLevel) { ob_end_clean(); }
 }
 echo json_encode($response,JSON_UNESCAPED_SLASHES);'''
+_RUNTIME_PROBE_SCRIPT = (
+    "require 'vendor/autoload.php'; $app=require 'bootstrap/app.php'; "
+    "$kernel=$app->make('Illuminate\\\\Contracts\\\\Console\\\\Kernel'); $kernel->bootstrap(); "
+    "$c=$app['db']->connection(); $r=$c->selectOne('SELECT DATABASE() AS db, VERSION() AS version, @@server_uuid AS uuid'); "
+    "echo json_encode(['database'=>$r->db,'version'=>$r->version,'uuid_sha256'=>hash('sha256',$r->uuid),"
+    "'application_environment'=>config('app.env'),'deployment_environment'=>config('app.deployment_environment'),"
+    "'application_url'=>config('app.url'),'debug'=>config('app.debug'),"
+    "'marketing_profile'=>config('marketing_release.profile'),"
+    "'marketing_enforcement'=>config('marketing_release.enforcement_mode'),"
+    "'staging_admin_qa_enabled'=>config('marketing_release.staging_admin_qa_enabled')]);"
+)
+
+
+def _deploy_cli_commands() -> tuple[tuple[str, ...], ...]:
+    """Every exact argv the helper may run as www-data under the deploy-CLI profile."""
+    php = _ENVIRONMENT_MODULE.DEPLOY_CLI_EXECUTABLE
+    return (
+        (php, "-r", _RUNTIME_PROBE_SCRIPT),
+        (php, "artisan", "package:discover", "--ansi", "--no-interaction"),
+        (php, "artisan", "config:cache", "--no-interaction"),
+        (php, "-r", _MIGRATION_RUNNER_SCRIPT),  # Phase B only; Phase B stays disabled
+    )
+
+
+def deploy_cli_cmdline_sha256() -> list[str]:
+    """SHA-256 of each /proc/<pid>/cmdline the deploy-CLI commands produce."""
+    return [hashlib.sha256(b"".join(arg.encode("utf-8") + b"\0" for arg in argv)).hexdigest()
+            for argv in _deploy_cli_commands()]
+
+
+def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
+                    timeout: float, maximum: int = 4096,
+                    extra_env: Mapping[str, str] | None = None,
+                    classify_failure: bool = False) -> bytes:
+    """Run application-controlled PHP only as the fixed, unprivileged FPM identity."""
+    _require(type(profile.php_fpm_uid) is int and profile.php_fpm_uid >= 0
+             and type(profile.php_fpm_gid) is int and profile.php_fpm_gid >= 0,
+             "php_fpm_identity_policy_invalid")
+    home = profile.shared_storage_dir
+    if os.geteuid() == 0:
+        try:
+            fpm_user = pwd.getpwuid(profile.php_fpm_uid).pw_name
+            fpm_group = grp.getgrgid(profile.php_fpm_gid).gr_name
+        except KeyError:
+            raise DeployRefused("php_fpm_identity_unavailable") from None
+        _require(bool(fpm_user) and bool(fpm_group), "php_fpm_identity_unavailable")
+        prefix = ["/usr/sbin/runuser", "--user", fpm_user,
+                  "--group", fpm_group, "--"]
+        if profile.test_only:
+            return _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
+                              extra_env=extra_env, home=home, classify_failure=classify_failure)
+        # Shared www-data identity: application PHP started by root runs only as one
+        # of the exact deploy-CLI commands, under the dedicated production deploy-CLI
+        # profile (never the FPM profile, never unconfined).
+        confinement = getattr(BOUND_ENVIRONMENT, "php_fpm_confinement", None)
+        _require(profile.name == "production" and confinement is not None, "php_fpm_confinement_unbound")
+        _require(tuple(argv) in _deploy_cli_commands(), "deploy_cli_command_not_allowed")
+        prefix += [AA_EXEC, "-p", _ENVIRONMENT_MODULE.DEPLOY_CLI_PROFILE, "--"]
+        try:
+            output = _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
+                                extra_env=extra_env, home=home, classify_failure=classify_failure)
+        except DeployRefused:
+            _verify_php_fpm_confinement(profile)  # a confinement refusal takes precedence
+            raise
+        # Re-check the whole same-UID inventory after every application-PHP operation.
+        _verify_php_fpm_confinement(profile)
+        return output
+    _require(os.geteuid() == profile.php_fpm_uid, "runtime_probe_identity_mismatch")
+    return _run_fixed(argv, cwd=cwd, timeout=timeout, maximum=maximum,
+                      extra_env=extra_env, home=home, classify_failure=classify_failure)
+
+
+def _execute_exact_migration(profile: StagingProfile, release_path: Path, *,
+                             migration: Mapping[str, str], database: str,
+                             isolated: bool, operation: str, policy) -> str:
+    """Run one hash-pinned Laravel migration against one fixed-profile database."""
+    name = migration.get("name")
+    digest = migration.get("sha256")
+    _require(isinstance(name, str) and _TRANSACTION_MODULE.MIGRATION_RE.fullmatch(name) is not None
+             and _sha(digest, SHA256_RE), "release_migration_identity_invalid")
+    _require(operation in {"rehearsal", "target"}, "phase_b_migration_operation_invalid")
+    _require(re.fullmatch(re.escape(DATABASE) + r"(?:_(?:restore|rehearsal)_[0-9a-f]{32})?", database)
+             is not None, "phase_b_database_name_invalid")
+    migration_path = release_path / "database" / "migrations" / f"{name}.php"
+    raw = _read_regular_nofollow(migration_path, max_bytes=4_000_000,
+                                 expected_uid=profile.expected_owner_uid, expected_mode=0o644)
+    _require(hashlib.sha256(raw).hexdigest() == digest, "release_migration_identity_mismatch")
+    database_policy = policy.credentials["isolated"] if isolated else policy.credentials["target"]
+    host = policy.restore_host if isolated else policy.target_host
+    port = policy.restore_port if isolated else policy.target_port
+    script = _MIGRATION_RUNNER_SCRIPT
     env = {
         "WPCG_MYSQL_HOST": host,
         "WPCG_MYSQL_PORT": str(port),
@@ -2364,7 +2408,8 @@ echo json_encode($response,JSON_UNESCAPED_SLASHES);'''
         "WPCG_RELEASE_PATH": str(release_path),
     }
     try:
-        output = _run_as_php_fpm(profile, ["/usr/local/bin/php", "-r", script],
+        runner = "/usr/local/bin/php" if profile.test_only else PHP_BINARY
+        output = _run_as_php_fpm(profile, [runner, "-r", script],
                                  cwd=release_path, timeout=900, maximum=16_384,
                                  extra_env=env, classify_failure=True)
         response = _strict_json(output.strip())
@@ -2916,17 +2961,7 @@ def _verify_runtime(profile: StagingProfile, active_path: Path) -> Mapping[str, 
     _run_fixed(["/usr/sbin/nginx", "-t"], timeout=15)
     nginx_dump = _run_fixed(["/usr/sbin/nginx", "-T"], timeout=15, maximum=2_000_000)
     _verify_environment_nginx_route(nginx_dump, hostname=APPLICATION_HOST, socket_path=EXPECTED_FPM_SOCKET)
-    php_probe = (
-        "require 'vendor/autoload.php'; $app=require 'bootstrap/app.php'; "
-        "$kernel=$app->make('Illuminate\\\\Contracts\\\\Console\\\\Kernel'); $kernel->bootstrap(); "
-        "$c=$app['db']->connection(); $r=$c->selectOne('SELECT DATABASE() AS db, VERSION() AS version, @@server_uuid AS uuid'); "
-        "echo json_encode(['database'=>$r->db,'version'=>$r->version,'uuid_sha256'=>hash('sha256',$r->uuid),"
-        "'application_environment'=>config('app.env'),'deployment_environment'=>config('app.deployment_environment'),"
-        "'application_url'=>config('app.url'),'debug'=>config('app.debug'),"
-        "'marketing_profile'=>config('marketing_release.profile'),"
-        "'marketing_enforcement'=>config('marketing_release.enforcement_mode'),"
-        "'staging_admin_qa_enabled'=>config('marketing_release.staging_admin_qa_enabled')]);"
-    )
+    php_probe = _RUNTIME_PROBE_SCRIPT
     raw = _run_as_php_fpm(profile, [PHP_BINARY, "-r", php_probe],
                           cwd=active_path, timeout=20, maximum=4096)
     try:
@@ -3323,38 +3358,67 @@ def _cron_entries_for_www_data(text: str) -> int:
     return count
 
 
-def _observe_www_data_cron(loaded: Mapping[str, str]) -> Mapping[str, object]:
-    module = _ENVIRONMENT_MODULE
+def _observe_www_data_scheduled_jobs() -> Mapping[str, object]:
+    """Shim-free model evidence: www-data crontab, system cron lines and at jobs (all must be absent)."""
+    complete = True
     try:
-        raw = _read_proc_bytes(CONFINEMENT_CRONTAB, maximum=1_000_000)
-        crontab = hashlib.sha256(raw).hexdigest()
+        os.lstat(CONFINEMENT_CRONTAB)
+        crontab_present = True
     except FileNotFoundError:
-        crontab = None
-    except (OSError, _PeerUnreadable):
-        raise DeployRefused("confinement_cron_state_unavailable") from None
+        crontab_present = False
+    except OSError:
+        crontab_present, complete = False, False
     entries = 0
     try:
         sources = [CONFINEMENT_SYSTEM_CRONTAB] + sorted(
             CONFINEMENT_CRON_D / name for name in os.listdir(CONFINEMENT_CRON_D))
-        for source in sources:
-            try:
-                entries += _cron_entries_for_www_data(
-                    _read_proc_bytes(source, maximum=1_000_000).decode("utf-8"))
-            except FileNotFoundError:
-                if source != CONFINEMENT_SYSTEM_CRONTAB:
-                    raise
-    except (OSError, UnicodeError, _PeerUnreadable):
-        raise DeployRefused("confinement_cron_state_unavailable") from None
-    try:
-        info = os.lstat(CONFINEMENT_CRON_WRAPPER)
-        wrapper = {"uid": info.st_uid, "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode),
-                   "type": "regular" if stat.S_ISREG(info.st_mode) else "other", "nlink": info.st_nlink}
     except FileNotFoundError:
-        wrapper = None
+        sources = [CONFINEMENT_SYSTEM_CRONTAB]
     except OSError:
-        raise DeployRefused("confinement_cron_state_unavailable") from None
-    return {"crontab_sha256": crontab, "cron_d_entries": entries, "wrapper": wrapper,
-            "profile_mode": loaded.get(module.JOBS_PROFILE, "unloaded")}
+        sources, complete = [], False
+    for source in sources:
+        try:
+            entries += _cron_entries_for_www_data(_read_proc_bytes(source, maximum=1_000_000).decode("utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError, _PeerUnreadable):
+            complete = False
+    at_jobs = 0
+    try:
+        names = os.listdir(CONFINEMENT_AT_SPOOL)
+    except FileNotFoundError:
+        names = []
+    except OSError:
+        names, complete = [], False
+    for name in names:
+        if name == ".SEQ":
+            continue  # at's sequence counter, owned by daemon
+        try:
+            info = os.lstat(CONFINEMENT_AT_SPOOL / name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            complete = False
+            continue
+        if info.st_uid == 33 or info.st_gid == 33:
+            at_jobs += 1
+    return {"complete": complete, "crontab_present": crontab_present, "system_cron_entries": entries,
+            "at_jobs": at_jobs}
+
+
+def _observe_helper(loaded: Mapping[str, str]) -> Mapping[str, object]:
+    """This root helper process: its session cgroup bounds the production deploy-CLI peer class."""
+    pid = os.getpid()
+    try:
+        text = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "cgroup", maximum=65536).decode("utf-8")
+    except (OSError, UnicodeError, _PeerUnreadable):
+        raise DeployRefused("confinement_helper_cgroup_unavailable") from None
+    unified = [line[3:] for line in text.splitlines() if line.startswith("0::")]
+    _require(len(unified) == 1, "confinement_helper_cgroup_unavailable")
+    module = _ENVIRONMENT_MODULE
+    return {"pid": pid, "cgroup": unified[0],
+            "deploy_cli_profile_mode": loaded.get(module.DEPLOY_CLI_PROFILE, "unloaded"),
+            "deploy_cli_cmdline_sha256": deploy_cli_cmdline_sha256()}
 
 
 def _systemd_unit_state(unit: str) -> Mapping[str, str]:
@@ -3508,8 +3572,8 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
     states, Supervisor configuration and ``supervisorctl status``, fence
     markers), the compiled confinement file paths, fixed
     ``systemctl show`` properties of the bound units, every ``/proc/<pid>``
-    whose UID or GID is www-data, the loaded AppArmor profile list and the
-    www-data cron state. It never loads a profile or changes a unit.
+    whose UID or GID is www-data, the loaded AppArmor profile list, this
+    helper's own session cgroup and the www-data crontab/system cron/at state. It never loads a profile or changes a unit.
     """
     module = _ENVIRONMENT_MODULE
     module.confinement_pin()
@@ -3547,7 +3611,8 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
     return {"schema": 3, "apparmor_enabled": enabled,
             "production_jobs_fence": _observe_production_jobs_fence(contract, supervisor_active),
             "files": files, "services": services,
-            "www_data_cron": _observe_www_data_cron(loaded), "same_uid_peers": _inventory_same_uid_peers()}
+            "www_data_scheduled_jobs": _observe_www_data_scheduled_jobs(), "helper": _observe_helper(loaded),
+            "same_uid_peers": _inventory_same_uid_peers()}
 
 
 def _verify_php_fpm_confinement(profile: StagingProfile) -> None:
@@ -3989,6 +4054,8 @@ def deploy_release(profile: StagingProfile, *, invoking_uid: int, application_sh
         healthy, observed_statuses, unauthenticated_statuses = _bounded_acceptance(profile)
         if not healthy:
             raise DeployRefused("post_deploy_acceptance_failed")
+        # Post-activation peer gate: a refusal here rolls the release back.
+        _verify_php_fpm_confinement(profile)
         if phase_b is not None:
             fences_sha256 = _verify_phase_b_fences(profile, phase_b["policy"])
             acceptance_sha = hashlib.sha256(json.dumps({
