@@ -275,19 +275,39 @@
     "ns/mnt",
     "auxv"
   ],
-  "permitted_unconfined_classes": [
-    {
-      "class": "cron-shim",
-      "comm": [
-        "cron",
-        "CRON",
-        "dash",
-        "sh"
-      ],
-      "condition": "only with the pinned www-data crontab (contract check); the shim only execs the exact-path attached wrapper",
-      "unit": "cron.service"
+  "permitted_group33_holders": [],
+  "permitted_group33_holders_note": "uids of trusted operator identities allowed to hold gid/supplementary group 33 unconfined; empty on purpose (a reviewed decision, never a default)",
+  "phases": {
+    "post": {
+      "description": "after the production unit starts (unrouted): every role present",
+      "excluded_roles": []
+    },
+    "pre": {
+      "description": "before the production unit exists: production absent, no real production file",
+      "excluded_roles": [
+        "production"
+      ]
     }
-  ],
+  },
+  "production_fence": {
+    "keep_traversable": [
+      "/var/www/wpcaregrid-production",
+      "/var/www/wpcaregrid-production/releases"
+    ],
+    "named_secret_paths": [
+      "/var/lib/wpcaregrid-deploy/production/shared/.env",
+      "/var/lib/wpcaregrid-deploy/production/shared/storage",
+      "/var/www/wpcaregrid-production/releases/*/.env",
+      "/var/www/wpcaregrid-production/releases/*/bootstrap/cache",
+      "/var/log/wpcaregrid-production"
+    ],
+    "public_exempt": "/var/www/wpcaregrid-production/releases/*/public",
+    "roots": [
+      "/var/www/wpcaregrid-production",
+      "/var/lib/wpcaregrid-deploy/production",
+      "/var/log/wpcaregrid-production"
+    ]
+  },
   "profiles": {
     "wpcaregrid-nginx": {
       "checks": [
@@ -1889,7 +1909,7 @@
     }
   },
   "role_profiles": {
-    "jobs-cron": "wpcaregrid-php-cli-staging",
+    "jobs-legacy-scheduler": "wpcaregrid-php-cli-staging",
     "jobs-scheduler": "wpcaregrid-php-cli-staging",
     "jobs-supervisor": "wpcaregrid-php-cli-staging",
     "nginx": "wpcaregrid-nginx",
@@ -1898,7 +1918,7 @@
     "staging-next": "wpcaregrid-php-fpm-staging-next"
   },
   "role_required": {
-    "jobs-cron": false,
+    "jobs-legacy-scheduler": false,
     "jobs-scheduler": false,
     "jobs-supervisor": false,
     "nginx": true,
@@ -1907,7 +1927,7 @@
     "staging-next": true
   },
   "role_units": {
-    "jobs-cron": "cron.service",
+    "jobs-legacy-scheduler": "wpcaregrid-staging-legacy-scheduler.service",
     "jobs-scheduler": "wpcaregrid-staging-next-scheduler.service",
     "jobs-supervisor": "supervisor.service",
     "nginx": "nginx.service",
@@ -1916,5 +1936,8 @@
     "staging-next": "php8.5-fpm.service"
   },
   "schema": 1,
+  "scm": {
+    "canary": "/home/wpcg-fixture/canary"
+  },
   "version": "1.0.1"
 }

@@ -1,9 +1,10 @@
 # wpcaregrid-php-fpm-confinement 1.0.1 -- staging queue workers and scheduler CLI (PHP CLI as www-data)
-# Install as /etc/apparmor.d/wpcaregrid-php-cli-staging. Used three ways, always the same rules:
-#  * supervisor.service  (AppArmorProfile= drop-in; every Supervisor-started queue worker inherits it)
-#  * wpcaregrid-staging-next-scheduler.service (AppArmorProfile= drop-in)
-#  * the legacy www-data cron entry, by exact-path attachment on the root-owned wrapper
-#    /usr/local/bin/wpcaregrid-scheduler (the cron/sh shim itself stays a pinned unconfined class)
+# Install as /etc/apparmor.d/wpcaregrid-php-cli-staging. Selected only by AppArmorProfile= in the
+# unit drop-ins for supervisor.service (every Supervisor-started queue worker inherits it),
+# wpcaregrid-staging-next-scheduler.service and wpcaregrid-staging-legacy-scheduler.service.
+# There is NO exec-path attachment and NO cron path: a www-data cron child would be an
+# unconfined same-UID shell, so www-data cron is not permitted at all (the legacy scheduler runs
+# from the systemd service above instead).
 # Allowlist: STAGING only. Production secrets, storage, code, state and sockets are denied, so a
 # worker or scheduler started against production by mistake or abuse cannot read them.
 # Production has no jobs (marketing release): its queue/scheduler units are fenced, see the runbook.
@@ -11,7 +12,7 @@
 # in complain mode; anything else fails closed. Source artifact: not installed or loaded.
 #include <tunables/global>
 
-profile wpcaregrid-php-cli-staging /usr/local/bin/wpcaregrid-scheduler flags=(attach_disconnected) {
+profile wpcaregrid-php-cli-staging flags=(attach_disconnected) {
   #include <abstractions/base>
   #include <abstractions/nameservice>
   #include <abstractions/ssl_certs>

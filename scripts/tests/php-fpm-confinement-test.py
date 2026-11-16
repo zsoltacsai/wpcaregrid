@@ -21,13 +21,16 @@ make a missing parser a failure instead of a skip.
 
 from __future__ import annotations
 
+import ast
 import copy
+import glob
 import hashlib
 import importlib.util
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,12 +47,15 @@ EXTERNAL_INCLUDES = {"tunables/global", "abstractions/base", "abstractions/names
 
 EXPECTED_FILES = {
     "SHA256SUMS",
+    "binding.json",
     "acceptance/collect-peers.py",
     "acceptance/derive-probe-profile.py",
     "acceptance/fd-sender.py",
+    "acceptance/fence-production.py",
     "acceptance/fixtures.py",
     "acceptance/matrix.json",
     "acceptance/probe.py",
+    "acceptance/rollback-order.py",
     "acceptance/verify-acceptance.py",
     "apparmor/abstractions/wpcaregrid-php-fpm-common",
     "apparmor/wpcaregrid-nginx",
@@ -62,6 +68,7 @@ EXPECTED_FILES = {
     "systemd/nginx.service.d/90-wpcaregrid-confinement.conf",
     "systemd/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf",
     "systemd/supervisor.service.d/90-wpcaregrid-confinement.conf",
+    "systemd/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf",
     "systemd/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf",
     "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf",
     "systemd/wpcaregrid-production-php8.4-fpm.service",
@@ -73,7 +80,7 @@ PROFILES = {
     "wpcaregrid-nginx": "apparmor/wpcaregrid-nginx",
     "wpcaregrid-php-cli-staging": "apparmor/wpcaregrid-php-cli-staging",
 }
-ATTACHMENT = {"wpcaregrid-php-cli-staging": "/usr/local/bin/wpcaregrid-scheduler"}
+ATTACHMENT: dict = {}  # no profile has an exec-path attachment: www-data cron is not permitted, so nothing attaches by path
 NO_COMMON = {"wpcaregrid-nginx"}  # nginx needs TLS keys, so it carries its own complete deny set
 # Exact per-profile grants beyond plain reads. Anything else is a finding.
 EXEC_ALLOW = {
@@ -354,6 +361,9 @@ REQUIRED_DROPIN = {
     "wpcaregrid-staging-next-scheduler.service.d": {
         "AppArmorProfile": ["wpcaregrid-php-cli-staging"], "NoNewPrivileges": ["yes"], "PrivateTmp": ["yes"],
         "ProtectHome": ["yes"], "ProtectProc": ["invisible"], "StandardInput": ["null"], "FileDescriptorStoreMax": ["0"]},
+    "wpcaregrid-staging-legacy-scheduler.service.d": {
+        "AppArmorProfile": ["wpcaregrid-php-cli-staging"], "NoNewPrivileges": ["yes"], "PrivateTmp": ["yes"],
+        "ProtectHome": ["yes"], "ProtectProc": ["invisible"], "StandardInput": ["null"], "FileDescriptorStoreMax": ["0"]},
 }
 MASKS_PRODUCTION = {"/var/www/wpcaregrid-staging-new", "/var/www/wpcaregrid", "/var/lib/wpcaregrid-deploy/staging-next",
                     "/var/lib/wpcaregrid", "/etc/wpcaregrid-deploy"}
@@ -370,7 +380,8 @@ MASKS_NGINX = {"/etc/wpcaregrid-deploy", "/var/lib/wpcaregrid-deploy/production/
 MASKS_JOBS = {"/var/www/wpcaregrid-production", "/var/lib/wpcaregrid-deploy/production", "/etc/wpcaregrid-deploy"}
 DROPIN_MASKS = {"php8.5-fpm.service.d": MASKS_STAGING_NEXT, "php8.4-fpm.service.d": MASKS_LEGACY,
                 "nginx.service.d": MASKS_NGINX, "supervisor.service.d": MASKS_JOBS,
-                "wpcaregrid-staging-next-scheduler.service.d": MASKS_JOBS}
+                "wpcaregrid-staging-next-scheduler.service.d": MASKS_JOBS,
+                "wpcaregrid-staging-legacy-scheduler.service.d": MASKS_JOBS}
 
 
 def masks(entries) -> set[str]:
@@ -911,7 +922,8 @@ class FailClosedMutations(unittest.TestCase):
         self.assertCaught(self.mutate(jobs, "  audit deny /var/www/wpcaregrid-production/{,**} rwklm,\n"
                                       "  audit deny /var/www/wpcaregrid-production/{,**} x,\n", ""),
                           "lacks audited deny of /var/www/wpcaregrid-production/{,**}")
-        self.assertCaught(self.mutate(jobs, "/usr/local/bin/wpcaregrid-scheduler flags=", "/usr/local/bin/other flags="), "header")
+        self.assertCaught(self.mutate(jobs, "profile wpcaregrid-php-cli-staging flags=",
+                                      "profile wpcaregrid-php-cli-staging /usr/local/bin/wpcaregrid-scheduler flags="), "header")
         self.assertCaught(self.mutate("systemd/supervisor.service.d/90-wpcaregrid-confinement.conf",
                                       "AppArmorProfile=wpcaregrid-php-cli-staging", "AppArmorProfile=-wpcaregrid-php-cli-staging"),
                           "AppArmorProfile")
@@ -1063,7 +1075,9 @@ class AcceptanceTooling(unittest.TestCase):
         with open(canary, "rb") as handle:
             result = subprocess.run([sys.executable, "-I", "-B", "-c", driver], stdin=handle, capture_output=True,
                                     text=True, timeout=30, check=False)
-        self.assertEqual(json.loads(result.stdout), {"errno": 0, "marker_ok": True, "state": "read"})
+        doc = json.loads(result.stdout)
+        self.assertEqual({k: doc[k] for k in ("errno", "marker_ok", "state")}, {"errno": 0, "marker_ok": True, "state": "read"})
+        self.assertTrue(doc["t0"] <= doc["t1"])
         other = Path(tempfile.mkdtemp(prefix="wpcg-notcanary-")) / "f"
         other.write_text("x" * 40)
         self.addCleanup(shutil.rmtree, other.parent, True)
@@ -1081,7 +1095,9 @@ class AcceptanceTooling(unittest.TestCase):
             self.assertTrue(sender.stdout.readline().startswith("READY"))
             self.assertEqual(self.probe.connect("\0wpcg-probe-scmtest"), 0)  # baseline: abstract socket reachable
             outcome = self.probe.scm("/tmp/wpcg-probe-scmtest/scm.sock")
-            self.assertEqual(outcome, {"state": "received", "errno": 0, "read_ok": True})
+            self.assertEqual({k: outcome[k] for k in ("state", "stage", "errno", "read_ok")},
+                             {"state": "received", "stage": "read", "errno": 0, "read_ok": True})
+            self.assertTrue(outcome["t0"] <= outcome["t1"])
             self.assertEqual(sender.wait(timeout=30), 0)
         finally:
             sender.kill()
@@ -1189,15 +1205,19 @@ class FixturesTool(unittest.TestCase):
         self.assertEqual(result.returncode, 2 if os.geteuid() != 0 else result.returncode)
 
 
-def fake_proc(base: Path, processes: list[dict], units: dict[str, list[int]]) -> tuple[str, str]:
+def fake_proc(base: Path, processes: list[dict], units: dict[str, list[int]], boot: str = "0123abcd-0000-4000-8000-000000000001") -> tuple[str, str]:
     proc, cgroup = base / "proc", base / "cgroup"
+    (proc / "sys/kernel/random").mkdir(parents=True, exist_ok=True)
+    (proc / "sys/kernel/random/boot_id").write_text(boot + "\n")
     for p in processes:
         d = proc / str(p["pid"])
         (d / "attr").mkdir(parents=True)
         (d / "fd").mkdir()
-        (d / "status").write_text(f"Name:\t{p['comm']}\nUid:\t{p['uid']}\t{p['uid']}\t{p['uid']}\t{p['uid']}\n")
+        uids = p.get("uids") or [p["uid"]] * 4
+        (d / "status").write_text(f"Name:\t{p['comm']}\nUid:\t" + "\t".join(map(str, uids)) + "\nGid:\t" + "\t".join(map(str, p.get("gids", uids)))
+                                  + "\nGroups:\t" + " ".join(map(str, p.get("groups", []))) + "\n")
         (d / "comm").write_text(p["comm"] + "\n")
-        (d / "stat").write_text(f"{p['pid']} ({p['comm']}) S " + " ".join(["0"] * 18) + f" {p['start']} 0\n")
+        (d / "stat").write_text(f"{p['pid']} ({p['comm']}) S {p.get('ppid', 1)} " + " ".join(["0"] * 17) + f" {p['start']} 0\n")
         (d / "attr" / "current").write_text(p["label"] + "\n")
         (d / "cgroup").write_text(f"0::/system.slice/{p['unit']}\n" if p.get("unit") else "0::/user.slice\n")
         os.symlink("/usr/sbin/php-fpm8.4", d / "exe")
@@ -1217,166 +1237,449 @@ class CollectPeers(unittest.TestCase):
         cls.tool = load_script(ACCEPTANCE / "collect-peers.py", "wpcg_collect")
         cls.units = json.loads(MATRIX_TEXT)["role_units"]
 
-    def run_collect(self, processes, units):
+    PROD = "wpcaregrid-production-php8.4-fpm.service"
+
+    def tree(self, processes, units):
         base = Path(tempfile.mkdtemp(prefix="wpcg-fakeproc-"))
         self.addCleanup(shutil.rmtree, base, True)
         proc, cgroup = fake_proc(base, processes, units)
-        return base, self.tool.collect(self.units, proc, cgroup)
+        return base, proc, cgroup
 
-    def test_inventory_lists_only_uid_33_with_label_unit_and_start_time(self) -> None:
-        _, inv = self.run_collect([
-            {"pid": 10, "uid": 33, "comm": "php-fpm8.4", "label": "wpcaregrid-php-fpm-production (enforce)", "start": 555,
-             "unit": "wpcaregrid-production-php8.4-fpm.service", "fds": ["socket:[1]"]},
+    def run_collect(self, processes, units, **kw):
+        base, proc, cgroup = self.tree(processes, units)
+        return base, self.tool.collect(self.units, proc, cgroup, pause=0, matrix_sha256="m" * 64, **kw)
+
+    def base_processes(self):
+        return [
+            {"pid": 10, "uid": 33, "comm": "php-fpm8.4", "label": "wpcaregrid-php-fpm-production (enforce)", "start": 555, "unit": self.PROD,
+             "fds": ["socket:[1]"]},
             {"pid": 11, "uid": 0, "comm": "root-thing", "label": "unconfined", "start": 1, "unit": "x.service"},
-            {"pid": 12, "uid": 33, "comm": "nginx", "label": "unconfined", "start": 7, "unit": "nginx.service"}],
-            {"wpcaregrid-production-php8.4-fpm.service": [10]})
+            {"pid": 12, "uid": 33, "comm": "nginx", "label": "unconfined", "start": 7, "unit": "nginx.service"},
+            {"pid": 20, "uid": 0, "comm": "php-fpm8.5", "label": "wpcaregrid-php-fpm-staging-next (enforce)", "start": 90, "unit": "php8.5-fpm.service"},
+            {"pid": 21, "uids": [33, 33, 33, 33], "ppid": 20, "comm": "php-fpm8.5", "label": "wpcaregrid-php-fpm-staging-next (enforce)", "start": 91,
+             "unit": "php8.5-fpm.service"},
+        ]
+
+    UNITS = {PROD: [10], "nginx.service": [12], "php8.5-fpm.service": [20, 21]}
+
+    def test_inventory_includes_root_masters_every_uid33_worker_and_two_stable_scans(self) -> None:
+        _, inv = self.run_collect(self.base_processes(), self.UNITS)
         self.assertTrue(inv["complete"], inv["reasons"])
-        self.assertEqual([p["pid"] for p in inv["processes"]], [10, 12])
-        self.assertEqual(inv["processes"][0]["starttime"], 555)
-        self.assertEqual(inv["processes"][0]["unit"], "wpcaregrid-production-php8.4-fpm.service")
-        self.assertEqual(inv["processes"][1]["label"], "unconfined")
-        self.assertFalse(inv["units"]["php8.5-fpm.service"]["present"])
+        self.assertEqual([p["pid"] for p in inv["processes"]], [10, 12, 20, 21])  # pid 11 is unrelated root: not inventoried
+        master = next(p for p in inv["processes"] if p["pid"] == 20)
+        self.assertEqual((master["uids"], master["label"], master["unit"], master["starttime"], master["ppid"]),
+                         ([0, 0, 0, 0], "wpcaregrid-php-fpm-staging-next (enforce)", "php8.5-fpm.service", 90, 1))
+        self.assertEqual(inv["scans"], 2)
+        self.assertEqual(inv["matrix_sha256"], "m" * 64)
+        self.assertEqual(inv["boot_id"], "0123abcd-0000-4000-8000-000000000001")
+        self.assertTrue(inv["collected_start_ns"] <= inv["collected_end_ns"])
+        self.assertEqual(next(p for p in inv["processes"] if p["pid"] == 10)["fds"], ["socket:[1]"])
+        self.assertEqual(sorted(inv["units"]), sorted(set(self.units.values())))
+        self.assertFalse(inv["units"]["php8.4-fpm.service"]["present"])
+
+    def test_a_process_holding_gid_33_or_supplementary_group_33_is_a_peer(self) -> None:
+        """The secrets are root:33 0640: a deploy shell in the www-data group reads them without being uid 33."""
+        procs = self.base_processes() + [
+            {"pid": 40, "uids": [1001, 1001, 1001, 1001], "gids": [1001, 33, 1001, 33], "comm": "bash", "label": "unconfined", "start": 6, "unit": None},
+            {"pid": 41, "uids": [1002, 1002, 1002, 1002], "gids": [1002] * 4, "groups": [4, 33], "comm": "make", "label": "unconfined", "start": 8, "unit": None},
+            {"pid": 42, "uids": [1003] * 4, "gids": [1003] * 4, "groups": [4, 100], "comm": "vim", "label": "unconfined", "start": 9, "unit": None}]
+        _, inv = self.run_collect(procs, self.UNITS)
+        listed = {p["pid"]: p for p in inv["processes"]}
+        self.assertIn(40, listed)
+        self.assertIn(41, listed)
+        self.assertEqual(listed[41]["groups"], [4, 33])
+        self.assertNotIn(42, listed)
+
+    def test_a_process_with_any_uid_field_33_is_a_peer(self) -> None:
+        procs = self.base_processes() + [{"pid": 30, "uids": [0, 0, 33, 0], "comm": "sudo", "label": "unconfined", "start": 5, "unit": None}]
+        _, inv = self.run_collect(procs, self.UNITS)
+        self.assertIn(30, [p["pid"] for p in inv["processes"]])
+
+    def test_churn_between_scans_is_incomplete_but_a_single_blip_is_retried(self) -> None:
+        state = {"calls": 0}
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+
+        def spawn(attempt):
+            state["calls"] += 1
+            extra = Path(proc) / "99"
+            if not extra.exists():
+                (extra / "attr").mkdir(parents=True)
+                (extra / "fd").mkdir()
+                (extra / "status").write_text("Name:\tphp\nUid:\t33\t33\t33\t33\nGid:\t33\t33\t33\t33\n")
+                (extra / "comm").write_text("php\n")
+                (extra / "stat").write_text("99 (php) S 1 " + " ".join(["0"] * 17) + " 4242 0\n")
+                (extra / "attr/current").write_text("unconfined\n")
+                (extra / "cgroup").write_text("0::/user.slice\n")
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, between=spawn)
+        self.assertTrue(inv["complete"], inv["reasons"])  # attempt 1 saw churn, attempt 2 was stable (pid 99 now permanent)
+        self.assertIn(99, [p["pid"] for p in inv["processes"]])
+        self.assertEqual(state["calls"], 2)
+
+    def test_persistent_churn_or_pid_reuse_makes_the_inventory_incomplete(self) -> None:
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+        counter = {"n": 0}
+
+        def reuse(attempt):
+            counter["n"] += 1
+            Path(proc, "10", "stat").write_text(f"10 (php-fpm8.4) S 1 " + " ".join(["0"] * 17) + f" {9000 + counter['n']} 0\n")
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, between=reuse, attempts=3)
+        self.assertFalse(inv["complete"])
+        self.assertTrue(any("churn" in r for r in inv["reasons"]), inv["reasons"])
+        self.assertEqual(counter["n"], 3)
+
+    def test_boot_change_between_scans_is_incomplete(self) -> None:
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+        flip = lambda attempt: Path(proc, "sys/kernel/random/boot_id").write_text(f"flip-{attempt}\n")  # noqa: E731
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, between=flip, attempts=2)
+        self.assertFalse(inv["complete"])
+        self.assertTrue(any("boot id" in r for r in inv["reasons"]))
 
     @unittest.skipIf(os.geteuid() == 0, "root can read mode-000 files")
     def test_unreadable_process_data_makes_the_inventory_incomplete(self) -> None:
-        base, _ = self.run_collect([{"pid": 20, "uid": 33, "comm": "php-fpm", "label": "unconfined", "start": 1}], {})
-        (base / "proc/20/attr/current").chmod(0)
-        proc, cgroup = str(base / "proc"), str(base / "cgroup")
-        self.assertFalse(self.tool.collect(self.units, proc, cgroup)["complete"])
-        (base / "proc/20/attr/current").chmod(0o644)
-        (base / "proc/20/status").chmod(0)
-        inv = self.tool.collect(self.units, proc, cgroup)
-        self.assertFalse(inv["complete"])
-        self.assertTrue(any("unreadable status" in r for r in inv["reasons"]))
+        for victim in ("attr/current", "status", "stat", "cgroup"):
+            base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+            Path(proc, "21", victim).chmod(0)
+            inv = self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)
+            self.assertFalse(inv["complete"], victim)
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+        Path(proc, "20", "fd").chmod(0)  # an unreadable root MASTER's descriptors
+        self.assertFalse(self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)["complete"])
 
-    def test_vanished_process_is_benign_but_missing_unit_member_is_not(self) -> None:
-        base, _ = self.run_collect([{"pid": 30, "uid": 33, "comm": "php-fpm", "label": "x", "start": 1, "unit": "u.service"}], {})
-        shutil.rmtree(base / "proc/30/fd")
-        inv = self.tool.collect(self.units, str(base / "proc"), str(base / "cgroup"))
-        self.assertFalse(inv["complete"])  # fd list unreadable for a live process
-        shutil.rmtree(base / "proc/30")
-        self.assertTrue(self.tool.collect(self.units, str(base / "proc"), str(base / "cgroup"))["complete"])
+    def test_cgroup_membership_must_agree_with_the_scan_in_both_directions(self) -> None:
+        # cgroup.procs lists a pid whose own cgroup file names another unit
+        base, proc, cgroup = self.tree(self.base_processes(), {**self.UNITS, "supervisor.service": [12]})
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)
+        self.assertFalse(inv["complete"])
+        # a process claims a known unit but is absent from that unit's cgroup.procs
+        base, proc, cgroup = self.tree(self.base_processes(), {self.PROD: [10], "nginx.service": [12], "php8.5-fpm.service": [20]})
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)
+        self.assertFalse(inv["complete"])
+        self.assertTrue(any("not in its cgroup.procs" in r for r in inv["reasons"]))
+        # a cgroup.procs member the scan never saw
+        base, proc, cgroup = self.tree(self.base_processes(), {**self.UNITS, "php8.5-fpm.service": [20, 21, 22]})
+        Path(proc, "22").mkdir()
+        self.assertFalse(self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)["complete"])
+
+    def test_vanished_process_is_benign_only_when_both_scans_agree(self) -> None:
+        base, proc, cgroup = self.tree(self.base_processes(), self.UNITS)
+        shutil.rmtree(Path(proc, "21", "fd"))
+        self.assertFalse(self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2)["complete"])  # live process, fd dir gone
+        shutil.rmtree(Path(proc, "21"))
+        inv = self.tool.collect(self.units, proc, cgroup, pause=0, attempts=2, matrix_sha256="m" * 64)
+        self.assertFalse(inv["complete"])  # but it is still named by cgroup.procs: not silently dropped
+
+    def test_unit_list_comes_from_the_matrix_not_from_a_caller(self) -> None:
+        source = (ACCEPTANCE / "collect-peers.py").read_text()
+        self.assertIn('collect(matrix["role_units"]', source)
+        self.assertIn("matrix_sha256=hashlib.sha256(text.encode()).hexdigest()", source)
+
+    def test_production_surface_distinguishes_fixture_from_real_files(self) -> None:
+        canary = json.loads(MATRIX_TEXT)["canary"]
+        root = Path(tempfile.mkdtemp(prefix="wpcg-surface-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "releases/r1/public").mkdir(parents=True)
+        (root / "releases/r1/bootstrap/cache").mkdir(parents=True)
+        (root / "releases/r1/public/index.php").write_text("<?php // public, exempt\n")
+        (root / "releases/r1/bootstrap/cache/config.php").write_text(canary)
+        glob = str(root / "releases/*/public")
+        none = self.tool.production_surface([str(root)], canary, glob)
+        self.assertEqual((none["real_files"], none["fixture_files"], none["roots_present"]), ([], 1, True))
+        (root / "releases/r1/bootstrap/cache/config.php").write_text("APP_KEY=base64:real\n")
+        real = self.tool.production_surface([str(root)], canary, glob)
+        self.assertEqual(real["real_files"], [str(root / "releases/r1/bootstrap/cache/config.php")])
+        absent = self.tool.production_surface([str(root / "nope")], canary, glob)
+        self.assertFalse(absent["roots_present"])
 
     def test_script_is_read_only(self) -> None:
         source = (ACCEPTANCE / "collect-peers.py").read_text()
-        for needle in ("os.kill", "ptrace", "os.remove", "os.unlink", "os.rename", "open(path, \"w", "subprocess", "chmod"):
+        for needle in ("os.kill", "ptrace", "os.remove", "os.unlink", "os.rename", "os.chmod", "os.chown", "subprocess", 'open(path, "w'):
             self.assertNotIn(needle, source)
 
 
-def synthetic_run(profile: str):
+T0 = 1_760_000_000 * 10**9
+BOOT_UUID = "0123abcd-0000-4000-8000-0000000000aa"
+PIDS = {"production": 2101, "staging-next": 2201, "staging-legacy": 2301, "nginx": 2401, "jobs-supervisor": 2501}
+MASTERS = {"staging-next": 2200, "staging-legacy": 2300, "nginx": 2400, "jobs-supervisor": 2500}
+
+
+def audit_json(ts_ns: int, serial: int, boot: str = BOOT_UUID, journal_skew_ns: int = 3_000_000, **fields) -> str:
+    sec, nsec = divmod(ts_ns, 10**9)
+    body = " ".join(f'{k}="{v}"' if isinstance(v, str) else f"{k}={v}" for k, v in fields.items())
+    message = f'audit: type=1400 audit({sec}.{nsec // 1_000_000:03d}:{serial}): apparmor="DENIED" {body}'
+    return json.dumps({"_BOOT_ID": boot.replace("-", ""), "__REALTIME_TIMESTAMP": str((ts_ns + journal_skew_ns) // 1000), "MESSAGE": message})
+
+
+def synthetic_run(profile: str, phase: str = "post"):
     """A coherent baseline/confined/inventory/audit set built from the verifier's own expectations."""
     verifier = load_script(ACCEPTANCE / "verify-acceptance.py", "wpcg_verify_synth")
     matrix = json.loads(MATRIX_TEXT)
     spec = matrix["profiles"][profile]
-    pids = {"production": 2101, "staging-next": 2201, "staging-legacy": 2301, "nginx": 2401, "jobs-supervisor": 2501}
-    peers = {role: [pids[role]] for role in spec["peer_roles"]}
+    excluded = set(matrix["phases"][phase]["excluded_roles"])
+    peers = {role: [PIDS[role]] for role in spec["peer_roles"] if role not in excluded}
     processes = []
-    for role, pid in pids.items():
-        processes.append({"pid": pid, "uids": [33, 33, 33, 33], "comm": "php-fpm", "starttime": 900 + pid,
-                          "label": f"{matrix['role_profiles'][role]} (enforce)", "unit": matrix["role_units"][role],
-                          "exe": "/usr/sbin/php-fpm", "fds": ["socket:[1]", "pipe:[2]", "/dev/null"]})
-    inventory = {"schema": 1, "complete": True, "reasons": [], "processes": processes,
-                 "units": {u: {"present": r in pids, "pids": [pids[r]] if r in pids else []}
-                           for r, u in matrix["role_units"].items()}}
-    expected, _ = verifier.expected_checks(matrix, profile, peers)
-    probe, child, digest = f"{profile}-probe", 777, hashlib.sha256(MATRIX_TEXT.encode()).hexdigest()
-    base_results, conf_results, audit = [], [], []
-
-    def line(**kw):
-        audit.append('audit: type=1400 apparmor="DENIED" ' + " ".join(
-            f'{k}="{v}"' if isinstance(v, str) else f"{k}={v}" for k, v in kw.items()))
-
-    for ident, (kind, item) in expected.items():
-        extra = {"child": child} if ident.startswith(("calibration:child", "control:self")) else {}
-        allow = kind == "control" or (kind in ("file", "socket") and item["expect"] == "allow")
-        base_results.append({"id": ident, "kind": kind, "target": "", "errno": 0, **extra})
-        conf_results.append({"id": ident, "kind": kind, "target": "", "errno": 0 if allow else EACCES, **extra})
-        if allow:
+    for role, pid in PIDS.items():
+        if role in excluded:
             continue
-        common = {"profile": probe, "pid": 200, "comm": "python3"}
-        if kind == "file":
-            op = "exec" if item["access"] == "x" else "open"
-            line(operation=op, class_="file", name=item["path"], **common)
-        elif kind == "socket":
-            line(operation="connect", name=item["path"], **common)
-        elif kind == "symlink":
-            line(operation="open", name=item["path"], **common)
-        elif kind == "abstract":
-            line(operation="connect", addr="@wpcg-probe-x", **common)
-        elif kind == "peer":
-            line(operation="ptrace", peer=matrix["role_profiles"][item["role"]], **common)
-        elif kind == "peer-signal":
-            line(operation="signal", peer=matrix["role_profiles"][item["role"]], **common)
-        elif kind == "peer-vm":
-            line(operation="ptrace", peer=matrix["role_profiles"][item["role"]], **common)
-        elif ident == "calibration:child-environ":
-            line(operation="open", name=f"/proc/{child}/environ", **common)
+        label = f"{matrix['role_profiles'][role]} (enforce)"
+        processes.append({"pid": pid, "ppid": MASTERS.get(role, 1), "uids": [33] * 4, "gids": [33] * 4, "comm": "php-fpm", "starttime": 900 + pid,
+                          "label": label, "unit": matrix["role_units"][role], "exe": "/usr/sbin/php-fpm",
+                          "fds": ["socket:[1]", "pipe:[2]", "/dev/null"]})
+        if role in MASTERS:
+            processes.append({"pid": MASTERS[role], "ppid": 1, "uids": [0] * 4, "gids": [0] * 4, "comm": "master", "starttime": 800 + pid,
+                              "label": label, "unit": matrix["role_units"][role], "exe": "/usr/sbin/master", "fds": ["socket:[3]", "/dev/null"]})
+    units = {u: {"present": False, "pids": []} for u in matrix["role_units"].values()}
+    for p in processes:
+        units[p["unit"]] = {"present": True, "pids": sorted(units[p["unit"]]["pids"] + [p["pid"]])}
+
+    def inventory(start: int):
+        return {"schema": 2, "complete": True, "reasons": [], "matrix_sha256": hashlib.sha256(MATRIX_TEXT.encode()).hexdigest(),
+                "boot_id": BOOT_UUID, "collected_start_ns": start, "collected_end_ns": start + 500_000_000, "scans": 2,
+                "processes": copy.deepcopy(processes), "units": copy.deepcopy(units),
+                "production_surface": {"roots_present": True, "real_files": [], "fixture_files": 14}}
+    inv_before, inv_after = inventory(T0), inventory(T0 + 7 * 10**9)
+    expected, _ = verifier.expected_checks(matrix, profile, peers, phase)
+    probe = f"{profile}-probe"
+    audit: list = []
+    serial = [1000]
+
+    def event(ts: int, **fields) -> None:
+        serial[0] += 1
+        audit.append(audit_json(ts, serial[0], profile=probe, comm="python3", **fields))
+
+    def doc(mode: str, pid: int, start: int, label: str) -> dict:
+        return {"schema": 2, "mode": mode, "profile": profile, "label": label, "pid": pid, "starttime_ticks": 123456,
+                "kernel_start_ns": start, "started_ns": start, "ended_ns": start + 10**9, "boot_id": BOOT_UUID,
+                "matrix_sha256": hashlib.sha256(MATRIX_TEXT.encode()).hexdigest(), "peers": peers,
+                "scm_socket": "/tmp/wpcg-probe-n/scm.sock", "results": []}
+    baseline = doc("baseline", 100, T0 + 2 * 10**9, "unconfined")
+    confined = doc("confined", 200, T0 + 4 * 10**9, f"{probe} (enforce)")
+    child, exec_pid = 777, 3000
+    for run, run_doc in (("baseline", baseline), ("confined", confined)):
+        cursor = run_doc["started_ns"] + 10_000_000
+        for ident, (kind, item) in expected.items():
+            t0, t1 = cursor, cursor + 5_000_000
+            cursor += 10_000_000
+            allow = kind == "control" or (kind in ("file", "socket") and item["expect"] == "allow")
+            if run == "baseline":
+                errno_value = EFAULT_ if kind == "peer-vm" else 0
+            else:
+                errno_value = 0 if allow else (EPERM if kind == "peer-vm" else EACCES)
+            actor = 200 if run == "confined" else 100
+            if kind == "file" and item["access"] == "x":
+                exec_pid += 1
+                actor = exec_pid
+            entry = {"id": ident, "kind": kind, "target": "", "errno": errno_value, "pid": actor, "t0": t0, "t1": t1}
+            if ident.startswith(("calibration:child", "control:self")):
+                entry["child"] = child
+            run_doc["results"].append(entry)
+            if run == "confined" and not allow:
+                mid = (t0 + t1) // 2
+                if kind == "file":
+                    event(mid, operation="exec" if item["access"] == "x" else "open", name=item["path"], pid=actor)
+                elif kind == "socket":
+                    event(mid, operation="connect", name=item["path"], pid=actor)
+                elif kind == "symlink":
+                    event(mid, operation="open", name=item["path"], pid=actor)
+                elif kind == "abstract":
+                    event(mid, operation="connect", addr="@wpcg-probe-x", pid=actor)
+                elif kind in ("peer", "peer-vm"):
+                    event(mid, operation="ptrace", peer=matrix["role_profiles"][item["role"]], pid=actor)
+                elif kind == "peer-signal":
+                    event(mid, operation="signal", peer=matrix["role_profiles"][item["role"]], pid=actor)
+                elif ident == "calibration:child-environ":
+                    event(mid, operation="open", name=f"/proc/{child}/environ", pid=actor)
+                else:
+                    event(mid, operation="ptrace", peer=probe, pid=actor)
+        scm_t0 = cursor + 10_000_000
+        run_doc["fd0"] = {"state": "read", "errno": 0 if run == "baseline" else EACCES, "marker_ok": run == "baseline",
+                          "t0": scm_t0 - 2_000_000, "t1": scm_t0 - 1_000_000}
+        if run == "baseline":
+            run_doc["scm"] = {"state": "received", "stage": "read", "errno": 0, "read_ok": True, "t0": scm_t0, "t1": scm_t0 + 5_000_000}
         else:
-            line(operation="ptrace", peer=probe, **common)
-    header = {"schema": 1, "profile": profile, "matrix_sha256": digest, "peers": peers}
-    baseline = {**header, "mode": "baseline", "label": "unconfined", "pid": 100, "results": base_results,
-                "fd0": {"state": "read", "errno": 0, "marker_ok": True},
-                "scm": {"state": "received", "errno": 0, "read_ok": True}}
-    confined = {**header, "mode": "confined", "label": f"{probe} (enforce)", "pid": 200, "results": conf_results,
-                "fd0": {"state": "read", "errno": EACCES, "marker_ok": False},
-                "scm": {"state": "received", "errno": EACCES, "read_ok": False}}
-    return verifier, matrix, baseline, confined, inventory, "\n".join(audit).replace("class_=", "class=")
+            run_doc["scm"] = {"state": "received", "stage": "read", "errno": EACCES, "read_ok": False, "t0": scm_t0, "t1": scm_t0 + 5_000_000}
+            event(scm_t0 + 2_000_000, operation="file_receive", name=matrix["scm"]["canary"], pid=200)
+        run_doc["ended_ns"] = scm_t0 + 6_000_000
+    ctx = {"probe": probe, "serial": serial, "events": audit}
+    return verifier, matrix, baseline, confined, inv_before, inv_after, "\n".join(audit), ctx
+
+
+EACCES, EPERM, EFAULT_ = 13, 1, 14
 
 
 class VerifyAcceptance(unittest.TestCase):
     profile = "wpcaregrid-php-fpm-production"
 
-    def run_verify(self, mutate=None, profile=None, ack=False):
+    def run_verify(self, mutate=None, profile=None, phase="post", ack=False, verify_phase=None):
         profile = profile or self.profile
-        verifier, matrix, baseline, confined, inventory, audit = synthetic_run(profile)
-        state = {"baseline": copy.deepcopy(baseline), "confined": copy.deepcopy(confined),
-                 "before": copy.deepcopy(inventory), "after": copy.deepcopy(inventory), "audit": audit}
+        verifier, matrix, baseline, confined, before, after, audit, ctx = synthetic_run(profile, phase)
+        phase = verify_phase or phase
+        state = {"baseline": copy.deepcopy(baseline), "confined": copy.deepcopy(confined), "before": copy.deepcopy(before),
+                 "after": copy.deepcopy(after), "audit": audit, "ctx": ctx, "matrix": MATRIX_TEXT}
         if mutate:
             mutate(state)
-        return verifier.verify(MATRIX_TEXT, profile, state["baseline"], state["confined"], state["before"],
-                               state["after"], state["audit"], ack)
+        return verifier.verify(state["matrix"], profile, phase, state["baseline"], state["confined"], state["before"], state["after"],
+                               state["audit"], ack)
 
     def assertFails(self, verdict, needle: str) -> None:
-        self.assertTrue(any(needle in f for f in verdict.failures), verdict.failures[:5])
+        self.assertTrue(any(needle in f for f in verdict.failures), verdict.failures[:6])
 
     def result(self, state, which, ident):
         return next(r for r in state[which]["results"] if r["id"] == ident)
 
-    def test_coherent_run_passes_for_every_profile(self) -> None:
+    def lines(self, state):
+        return state["audit"].split("\n")
+
+    # ---- coherent runs -------------------------------------------------------------------------------
+    def test_coherent_run_passes_for_every_profile_post_production(self) -> None:
         for profile in PROFILES:
             verdict = self.run_verify(profile=profile)
             self.assertEqual(verdict.failures, [], profile)
             self.assertTrue(verdict.passes)
 
+    def test_pre_production_phase_has_no_production_peer_and_still_passes(self) -> None:
+        """QA (A): the acceptance gate must not need the production unit that is only allowed to start afterwards."""
+        for profile in PROFILES:
+            if profile == "wpcaregrid-php-fpm-production":
+                continue
+            verdict = self.run_verify(profile=profile, phase="pre")
+            self.assertEqual(verdict.failures, [], profile)
+        pre_ids = synthetic_run("wpcaregrid-nginx", "pre")[2]["results"]
+        self.assertFalse([r for r in pre_ids if ":production:" in r["id"]])
+
+    def test_pre_phase_blocks_if_production_already_exists(self) -> None:
+        def production_running(s):
+            for key in ("before", "after"):
+                s[key]["processes"].append({"pid": 2101, "ppid": 1, "uids": [33] * 4, "gids": [33] * 4, "comm": "php-fpm", "starttime": 3001,
+                                            "label": "wpcaregrid-php-fpm-production (enforce)", "unit": "wpcaregrid-production-php8.4-fpm.service",
+                                            "exe": "x", "fds": []})
+                s[key]["units"]["wpcaregrid-production-php8.4-fpm.service"] = {"present": True, "pids": [2101]}
+        self.assertFails(self.run_verify(production_running, profile="wpcaregrid-nginx", phase="pre"), "production unit already has processes")
+
+        def secrets(s):
+            s["before"]["production_surface"]["real_files"] = ["/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php"]
+        self.assertFails(self.run_verify(secrets, profile="wpcaregrid-nginx", phase="pre"), "real (non-fixture) production files exist")
+
+        def no_scan(s):
+            s["before"]["production_surface"] = None
+        self.assertFails(self.run_verify(no_scan, profile="wpcaregrid-nginx", phase="pre"), "scan is missing")
+        self.assertFails(self.run_verify(profile="wpcaregrid-php-fpm-production", phase="pre"), "phase post")
+        self.assertFails(self.run_verify(profile="wpcaregrid-nginx", verify_phase="nope"), "unknown phase")
+
+    def test_post_phase_requires_the_production_peer(self) -> None:
+        def drop(s):
+            s["confined"]["peers"].pop("production", None)
+            s["baseline"]["peers"].pop("production", None)
+        self.assertFails(self.run_verify(drop, profile="wpcaregrid-nginx"), "no worker pid")
+
+    # ---- review (4)/(E): errno alone never passes -----------------------------------------------------
     def test_errno_alone_is_never_a_pass(self) -> None:
-        # Confined errno is EACCES everywhere, but with no audit text nothing may pass as a denial.
         verdict = self.run_verify(lambda s: s.update(audit=""))
-        self.assertFails(verdict, "no matching AppArmor DENIED audit record")
+        self.assertFails(verdict, "no AppArmor DENIED record binds to this call")
         self.assertFalse([p for p in verdict.passes if "audit=DENIED" in p])
 
     def test_audit_must_match_profile_pid_operation_and_target(self) -> None:
-        wrong = {"profile": lambda a: a.replace(f'profile="{self.profile}-probe"', 'profile="other"'),
-                 "pid": lambda a: a.replace("pid=200", "pid=999"),
-                 "operation": lambda a: a.replace('operation="open"', 'operation="unlink"'),
-                 "name": lambda a: a.replace('name="/var/lib/wpcaregrid-deploy/staging-next/shared/.env"', 'name="/other"')}
-        for what, edit in wrong.items():
+        for what, edit in {
+                "profile": lambda a: a.replace(f'profile=\\"{self.profile}-probe\\"', 'profile=\\"other\\"'),
+                "pid": lambda a: a.replace("pid=200", "pid=999"),
+                "operation": lambda a: a.replace('operation=\\"open\\"', 'operation=\\"unlink\\"'),
+                "name": lambda a: a.replace('name=\\"/var/lib/wpcaregrid-deploy/staging-next/shared/.env\\"', 'name=\\"/other\\"')}.items():
             with self.subTest(what=what):
                 verdict = self.run_verify(lambda s, edit=edit: s.update(audit=edit(s["audit"])))
-                self.assertFails(verdict, "staging-env-read" if what == "name" else "no matching AppArmor DENIED")
+                self.assertFails(verdict, "staging-env-read" if what == "name" else "no AppArmor DENIED record binds")
 
+    # ---- review (5)/(H): boot, interval, lifetime, serial, window -------------------------------------
+    def test_stale_audit_event_outside_the_run_is_rejected(self) -> None:
+        stale = audit_json(T0 - 3600 * 10**9, 5, profile=f"{self.profile}-probe", operation="open", name="/etc/hosts", pid=200, comm="python3")
+        self.assertFails(self.run_verify(lambda s: s.update(audit=stale + "\n" + s["audit"])), "stale record")
+        late = audit_json(T0 + 3600 * 10**9, 6, profile=f"{self.profile}-probe", operation="open", name="/etc/hosts", pid=200, comm="python3")
+        self.assertFails(self.run_verify(lambda s: s.update(audit=s["audit"] + "\n" + late)), "stale record")
+
+    def test_a_replayed_old_run_cannot_satisfy_this_run(self) -> None:
+        """Every event moved an hour back (a captured earlier run) must not pass for this run."""
+        def replay(s):
+            moved = []
+            for line in s["audit"].split("\n"):
+                entry = json.loads(line)
+                entry["__REALTIME_TIMESTAMP"] = str(int(entry["__REALTIME_TIMESTAMP"]) - 3600 * 10**6)
+                entry["MESSAGE"] = re.sub(r"audit\((\d+)\.", lambda m: f"audit({int(m.group(1)) - 3600}.", entry["MESSAGE"])
+                moved.append(json.dumps(entry))
+            s["audit"] = "\n".join(moved)
+        verdict = self.run_verify(replay)
+        self.assertFails(verdict, "stale record")
+        self.assertFalse([p for p in verdict.passes if "audit=DENIED" in p])
+
+    def test_events_from_another_boot_are_rejected(self) -> None:
+        def reboot(s):
+            s["audit"] = s["audit"].replace(BOOT_UUID.replace("-", ""), "f" * 32)
+        verdict = self.run_verify(reboot)
+        self.assertFails(verdict, "another boot")
+        self.assertFails(self.run_verify(lambda s: s["confined"].update(boot_id="feedface-0000-4000-8000-000000000000")), "one boot")
+
+    def test_repeated_audit_serial_or_stamp_skew_is_rejected(self) -> None:
+        self.assertFails(self.run_verify(lambda s: s.update(audit=s["audit"] + "\n" + s["audit"].split("\n")[0])), "repeated audit serial")
+        skew = lambda s: s.update(audit="\n".join(json.dumps({**json.loads(l), "__REALTIME_TIMESTAMP": str(int(json.loads(l)["__REALTIME_TIMESTAMP"]) + 120 * 10**6)}) for l in s["audit"].split("\n")))  # noqa: E731
+        self.assertFails(self.run_verify(skew), "disagree")
+
+    def test_plain_text_or_malformed_audit_is_not_accepted(self) -> None:
+        plain = lambda s: s.update(audit="\n".join(json.loads(l)["MESSAGE"] for l in s["audit"].split("\n")))  # noqa: E731
+        self.assertFails(self.run_verify(plain), "not a journalctl -o json record")
+        self.assertFails(self.run_verify(lambda s: s.update(audit=s["audit"] + "\n{broken")), "not a journalctl -o json record")
+        nostamp = lambda s: s.update(audit=s["audit"].replace("audit(", "au("))  # noqa: E731
+        self.assertFails(self.run_verify(nostamp), "without pid or audit stamp")
+
+    def test_an_event_in_another_checks_window_does_not_satisfy_this_check(self) -> None:
+        """Reused pid/target in a different moment: one denied open of the same name cannot stand for two checks."""
+        def shift(s):
+            target = next(l for l in s["audit"].split("\n") if "staging-next/shared/.env" in l and "operation=\\\"open\\\"" in l)
+            entry = json.loads(target)
+            entry["MESSAGE"] = re.sub(r"audit\((\d+)\.\d+:", lambda m: f"audit({int(m.group(1)) + 2}.000:", entry["MESSAGE"])
+            entry["__REALTIME_TIMESTAMP"] = str(int(entry["__REALTIME_TIMESTAMP"]) + 2 * 10**6 * 1000)
+            s["audit"] = s["audit"].replace(target, json.dumps(entry))
+        self.assertTrue(self.run_verify(shift).failures)
+
+    def test_one_event_cannot_satisfy_two_checks(self) -> None:
+        def collapse(s):
+            for ident in ("staging-env-read", "symlink-escape:0"):  # both name the same target
+                pass
+            first = self.result(s, "confined", "staging-env-read")
+            second = self.result(s, "confined", "symlink-escape:0")
+            second["t0"], second["t1"] = first["t0"], first["t1"]
+        verdict = self.run_verify(collapse)
+        self.assertTrue(verdict.failures)
+
+    def test_probe_lifetime_is_bound_to_its_kernel_start_time_and_pid(self) -> None:
+        self.assertFails(self.run_verify(lambda s: s["confined"].update(kernel_start_ns=s["confined"]["started_ns"] + 3600 * 10**9)), "kernel start time")
+        self.assertFails(self.run_verify(lambda s: s["confined"].update(started_ns=s["confined"]["ended_ns"] + 1)), "kernel start time")
+        self.assertFails(self.run_verify(lambda s: s["confined"].update(pid=100, starttime_ticks=s["baseline"]["starttime_ticks"])), "same process")
+
+    def test_denials_by_a_pid_that_is_not_the_probe_or_its_child_are_rejected(self) -> None:
+        extra = lambda s: s.update(audit=s["audit"] + "\n" + audit_json(T0 + 4 * 10**9 + 100_000_000, 9001, profile=f"{self.profile}-probe",  # noqa: E731
+                                                                          operation="open", name="/x", pid=424242, comm="python3"))
+        self.assertFails(self.run_verify(extra), "not the probe or one of its children")
+
+    # ---- QA (C): exec child identity -------------------------------------------------------------------
+    def test_exec_denial_is_attributed_to_the_child_pid(self) -> None:
+        verdict = self.run_verify()
+        self.assertEqual(verdict.failures, [])
+        run = synthetic_run(self.profile)[3]
+        exec_results = [r for r in run["results"] if r["id"].startswith("exec-")]
+        self.assertTrue(exec_results)
+        self.assertTrue(all(r["pid"] > 3000 for r in exec_results))  # the child, not the probe (200)
+
+        def parent_pid(s):  # the false-PASS the review described: event pid = parent while the call was a child's
+            s["audit"] = re.sub(r'(operation=\\"exec\\".*?)pid=\d+', r"\1pid=200", s["audit"])
+        self.assertFails(self.run_verify(parent_pid), "exec-shell")
+
+    # ---- baseline / confined / masking -----------------------------------------------------------------
     def test_baseline_must_reach_the_target(self) -> None:
-        verdict = self.run_verify(lambda s: self.result(s, "baseline", "staging-env-read").update(errno=EACCES))
-        self.assertFails(verdict, "baseline could not reach the target")
-        verdict = self.run_verify(lambda s: self.result(s, "baseline", "symlink-escape:0").update(errno=2))
-        self.assertFails(verdict, "baseline could not reach the target")
+        self.assertFails(self.run_verify(lambda s: self.result(s, "baseline", "staging-env-read").update(errno=EACCES)), "baseline could not reach")
+        self.assertFails(self.run_verify(lambda s: self.result(s, "baseline", "symlink-escape:0").update(errno=2)), "baseline could not reach")
 
     def test_confined_success_on_a_denied_target_fails(self) -> None:
-        verdict = self.run_verify(lambda s: self.result(s, "confined", "staging-env-read").update(errno=0))
-        self.assertFails(verdict, "confined access not refused")
+        self.assertFails(self.run_verify(lambda s: self.result(s, "confined", "staging-env-read").update(errno=0)), "confined access not refused")
 
     def test_allowed_access_must_work_in_both_runs(self) -> None:
-        verdict = self.run_verify(lambda s: self.result(s, "confined", "own-env-read").update(errno=EACCES))
-        self.assertFails(verdict, "allowed access failed")
+        self.assertFails(self.run_verify(lambda s: self.result(s, "confined", "own-env-read").update(errno=EACCES)), "allowed access failed")
 
     def test_dac_masked_optional_fixture_is_unproven_not_pass_and_never_allowed(self) -> None:
         verdict = self.run_verify(lambda s: self.result(s, "baseline", "fixture-control-plane").update(errno=EACCES))
@@ -1386,98 +1689,225 @@ class VerifyAcceptance(unittest.TestCase):
                                              self.result(s, "confined", "fixture-control-plane").update(errno=0)))
         self.assertFails(verdict, "confined access succeeded")
 
-    def test_wrong_label_mode_or_matrix_hash_rejects_the_whole_run(self) -> None:
+    def test_wrong_label_mode_schema_or_matrix_hash_rejects_the_whole_run(self) -> None:
         for edit in (lambda s: s["confined"].update(label="unconfined"), lambda s: s["baseline"].update(label="x (enforce)"),
                      lambda s: s["confined"].update(matrix_sha256="0" * 64), lambda s: s["confined"].update(mode="baseline"),
-                     lambda s: s["confined"].update(label=f"{self.profile}-probe (complain)")):
+                     lambda s: s["confined"].update(schema=1), lambda s: s["confined"].update(label=f"{self.profile}-probe (complain)")):
             self.assertFails(self.run_verify(edit), "run:")
 
-    def test_incomplete_peer_inventory_fails_closed(self) -> None:
+    # ---- peers, inventories, masters (G / AppSec 3) ----------------------------------------------------
+    def test_incomplete_unstable_or_foreign_inventories_fail_closed(self) -> None:
         for edit in (lambda s: s["before"].update(complete=False), lambda s: s["after"].update(complete=False),
-                     lambda s: s["before"].pop("complete")):
-            self.assertFails(self.run_verify(edit), "incomplete")
+                     lambda s: s["before"].pop("complete"), lambda s: s["before"].update(scans=1), lambda s: s["after"].update(schema=1),
+                     lambda s: s["before"].update(matrix_sha256="0" * 64),
+                     lambda s: s["after"].update(boot_id="feedface-0000-4000-8000-000000000000")):
+            self.assertFails(self.run_verify(edit), "inventory")
 
-    def test_unconfined_same_uid_peer_in_either_inventory_fails(self) -> None:
-        stray = {"pid": 4000, "uids": [33, 33, 33, 33], "comm": "php", "starttime": 1, "label": "unconfined",
-                 "unit": "supervisor.service", "exe": None, "fds": []}
-        for phase in ("before", "after"):
-            verdict = self.run_verify(lambda s, phase=phase: s[phase]["processes"].append(copy.deepcopy(stray)))
+    def test_inventory_must_cover_the_package_unit_list_not_a_caller_list(self) -> None:
+        def subset(s):
+            for key in ("before", "after"):
+                s[key]["units"].pop("nginx.service")
+        self.assertFails(self.run_verify(subset), "exactly the package's service cgroups")
+
+    def test_an_unconfined_service_master_blocks_even_though_it_is_root(self) -> None:
+        for phase_key in ("before", "after"):
+            def edit(s, key=phase_key):
+                next(p for p in s[key]["processes"] if p["pid"] == MASTERS["staging-next"]).update(label="unconfined")
+            verdict = self.run_verify(edit)
+            self.assertFails(verdict, "service master or worker is not enforce-attached")
+        def wrong_unit(s):
+            next(p for p in s["before"]["processes"] if p["pid"] == MASTERS["nginx"]).update(label="wpcaregrid-nginx (complain)")
+        self.assertFails(self.run_verify(wrong_unit), "not enforce-attached")
+
+    def test_unknown_uid33_process_blocks_including_cron_and_shells(self) -> None:
+        for comm, unit in (("php", "supervisor.service"), ("CRON", "cron.service"), ("sh", "cron.service"), ("dash", "cron.service"),
+                           ("nginx", "nginx.service"), ("bash", None), ("sleep", "user@1000.service")):
+            stray = {"pid": 4000, "ppid": 1, "uids": [33, 33, 33, 33], "gids": [33] * 4, "comm": comm, "starttime": 1,
+                     "label": "unconfined", "unit": unit, "exe": None, "fds": []}
+            for phase_key in ("before", "after"):
+                verdict = self.run_verify(lambda s, k=phase_key, st=stray: s[k]["processes"].append(copy.deepcopy(st)))
+                known = unit in json.loads(MATRIX_TEXT)["role_units"].values()
+                self.assertFails(verdict, "carries label" if known else "maps to no permitted class")
+        # a pinned crontab is irrelevant: the label rule has no cron/sh exception to pin
+        verifier = load_script(ACCEPTANCE / "verify-acceptance.py", "wpcg_verify_nocron")
+        self.assertEqual(verifier.ACCEPTED_UNCONFINED_SAME_UID_COMM, frozenset())
+        self.assertNotIn("permitted_unconfined_classes", json.loads(MATRIX_TEXT))
+        self.assertNotIn("cron", " ".join(json.loads(MATRIX_TEXT)["role_units"].values()))
+
+    def test_gid_or_supplementary_group_33_holders_block_unless_explicitly_permitted(self) -> None:
+        for gids, groups in (([1001, 33, 1001, 33], []), ([1001] * 4, [4, 33])):
+            stray = {"pid": 4100, "ppid": 1, "uids": [1001] * 4, "gids": gids, "groups": groups, "comm": "bash", "starttime": 3,
+                     "label": "unconfined", "unit": None, "exe": None, "fds": []}
+            verdict = self.run_verify(lambda s, st=stray: [s[k]["processes"].append(copy.deepcopy(st)) for k in ("before", "after")])
             self.assertFails(verdict, "maps to no permitted class")
-        nginx = dict(stray, comm="nginx", unit="nginx.service")
-        self.assertFails(self.run_verify(lambda s: s["before"]["processes"].append(nginx)), "maps to no permitted class")
-        cron_other = dict(stray, comm="php", unit="cron.service")
-        self.assertFails(self.run_verify(lambda s: s["before"]["processes"].append(cron_other)), "maps to no permitted class")
+            self.assertFails(verdict, "holds")
+        allow = json.loads(MATRIX_TEXT)
+        allow["permitted_group33_holders"] = [1001]
+        text = json.dumps(allow, indent=2, sort_keys=True) + "\n"
+        verifier, matrix, baseline, confined, before, after, audit, ctx = synthetic_run(self.profile)
+        for inv in (before, after):
+            inv["processes"].append({"pid": 4100, "ppid": 1, "uids": [1001] * 4, "gids": [1001, 33, 1001, 33], "groups": [], "comm": "bash",
+                                     "starttime": 3, "label": "unconfined", "unit": None, "exe": None, "fds": []})
+        for doc in (baseline, confined):
+            doc["matrix_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+        for inv in (before, after):
+            inv["matrix_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+        verdict = verifier.verify(text, self.profile, "post", baseline, confined, before, after, audit)
+        self.assertEqual(verdict.failures, [])
+        self.assertTrue(any("trusted group-33 holder" in n for n in verdict.notes))
+        self.assertEqual(json.loads(MATRIX_TEXT)["permitted_group33_holders"], [])
+
+    def test_pid_reuse_or_churn_between_the_two_inventories_is_rejected(self) -> None:
+        self.assertFails(self.run_verify(lambda s: s["after"]["processes"][1].update(starttime=1)), "churn or pid reuse")
+        self.assertFails(self.run_verify(lambda s: s["after"].update(processes=[p for p in s["after"]["processes"] if p["pid"] != 2201])),
+                         "churn or pid reuse")
+        self.assertFails(self.run_verify(lambda s: s["after"]["processes"].append(
+            {**copy.deepcopy(s["after"]["processes"][0]), "pid": 9999, "starttime": 77})), "churn or pid reuse")
+        self.assertFails(self.run_verify(lambda s: s["after"]["processes"].append(copy.deepcopy(s["after"]["processes"][0]))), "duplicate pid")
+
+    def test_inventory_timing_is_bound_around_the_probe_runs(self) -> None:
+        self.assertFails(self.run_verify(lambda s: s["before"].update(collected_end_ns=s["confined"]["started_ns"] + 1)), "before inventory was not finished")
+        self.assertFails(self.run_verify(lambda s: s["after"].update(collected_start_ns=s["confined"]["ended_ns"] - 1)), "after inventory started before")
 
     def test_missing_peer_role_or_unit_fails_enumeration(self) -> None:
-        def drop(role_unit):
-            return lambda s: s["before"].update(processes=[p for p in s["before"]["processes"] if p["unit"] != role_unit])
         for unit in ("php8.5-fpm.service", "php8.4-fpm.service", "wpcaregrid-production-php8.4-fpm.service", "nginx.service"):
-            self.assertFails(self.run_verify(drop(unit)), "peer enumeration incomplete")
-        self.assertFails(self.run_verify(lambda s: s["before"]["units"][ "php8.5-fpm.service"].update(present=False)),
-                         "peer enumeration incomplete")
+            self.assertFails(self.run_verify(lambda s, u=unit: s["before"].update(processes=[p for p in s["before"]["processes"] if p["unit"] != u])),
+                             "enumeration incomplete")
+        self.assertFails(self.run_verify(lambda s: s["before"]["units"]["php8.5-fpm.service"].update(present=False)), "enumeration incomplete")
 
-    def test_peer_pid_reuse_or_absence_fails(self) -> None:
+    def test_peer_pids_must_be_identified_workers_with_stable_start_times(self) -> None:
         self.assertFails(self.run_verify(lambda s: s["after"]["processes"][1].update(starttime=1)), "start time changed")
-        self.assertFails(self.run_verify(lambda s: s["after"].update(processes=[p for p in s["after"]["processes"] if p["pid"] != 2201])),
-                         "peer-identity")
-        self.assertFails(self.run_verify(lambda s: s["confined"].update(peers={"staging-next": [2201], "staging-legacy": []})),
-                         "identical, non-empty")
-        self.assertFails(self.run_verify(lambda s: s["before"]["processes"][1].update(label="unconfined")), "peer")
+        self.assertFails(self.run_verify(lambda s: s["confined"].update(peers={"staging-next": [2201], "staging-legacy": []})), "identical peer pids")
+        master = MASTERS["staging-next"]
+        self.assertFails(self.run_verify(lambda s: (s["confined"]["peers"].update({"staging-next": [master]}),
+                                                    s["baseline"]["peers"].update({"staging-next": [master]}))), "not an enforced uid-33")
 
-    def test_unit_fd_inventory_rejects_other_environment_descriptors(self) -> None:
-        for target in ("/var/lib/wpcaregrid-deploy/staging-next/shared/.env", "/etc/wpcaregrid-deploy/profiles/x",
-                       "/home/deploy/x", "/var/www/wpcaregrid-staging-new/artisan (deleted)"):
-            verdict = self.run_verify(lambda s, t=target: s["before"]["processes"][0]["fds"].append(t))
-            self.assertFails(verdict, "fd-inventory")
-        verdict = self.run_verify(lambda s: s["before"]["processes"][1]["fds"].append(
+    def test_unit_fd_inventory_covers_masters_and_rejects_other_environment_descriptors(self) -> None:
+        for target in ("/var/lib/wpcaregrid-deploy/staging-next/shared/.env", "/etc/wpcaregrid-deploy/profiles/x", "/home/deploy/x",
+                       "/var/www/wpcaregrid-staging-new/artisan (deleted)"):
+            self.assertFails(self.run_verify(lambda s, t=target: s["before"]["processes"][0]["fds"].append(t)), "fd-inventory")
+            master = lambda s, t=target: next(p for p in s["before"]["processes"] if p["pid"] == MASTERS["nginx"]).__setitem__("fds", [t])  # noqa: E731
+            self.assertFails(self.run_verify(master), "fd-inventory")
+        verdict = self.run_verify(lambda s: next(p for p in s["before"]["processes"] if p["pid"] == PIDS["staging-next"])["fds"].append(
             "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"), profile="wpcaregrid-php-fpm-staging-next")
         self.assertFails(verdict, "fd-inventory")
-        verdict = self.run_verify(lambda s: s["before"]["processes"][0]["fds"].append(
-            "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"))
-        self.assertEqual(verdict.failures, [])  # own storage is fine
+        self.assertEqual(self.run_verify(lambda s: s["before"]["processes"][0]["fds"].append(
+            "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log")).failures, [])
 
+    # ---- fd0 / SCM_RIGHTS (4)/(E) ----------------------------------------------------------------------
     def test_inherited_fd0_is_read_and_judged(self) -> None:
         self.assertFails(self.run_verify(lambda s: s["baseline"].update(fd0={"state": "not-canary-file"})), "fd0")
         self.assertFails(self.run_verify(lambda s: s["confined"].update(fd0={"state": "not-canary-file"})), "fd0")
-        verdict = self.run_verify(lambda s: s["confined"].update(fd0={"state": "read", "errno": 0, "marker_ok": True}))
+        verdict = self.run_verify(lambda s: s["confined"].update(fd0={"state": "read", "errno": 0, "marker_ok": True, "t0": 1, "t1": 2}))
         self.assertEqual(verdict.failures, [])
         self.assertTrue(any("INHERITED-FD-READABLE" in n for n in verdict.notes))
 
-    def test_descriptor_transfer_bypass_fails_unless_explicitly_acknowledged(self) -> None:
-        bypass = lambda s: s["confined"].update(scm={"state": "received", "errno": 0, "read_ok": True})  # noqa: E731
-        self.assertFails(self.run_verify(bypass), "scm-rights")
-        self.assertEqual(self.run_verify(bypass, ack=True).failures, [])
-        self.assertFails(self.run_verify(lambda s: s["confined"].update(scm={"state": "channel-failed", "errno": 2})), "scm-rights")
-        self.assertFails(self.run_verify(lambda s: s["baseline"].update(scm={"state": "channel-failed", "errno": 2})), "scm-rights")
+    def scm(self, st, **fields):
+        st["confined"]["scm"] = {**st["confined"]["scm"], **fields}
 
-    def test_proc_fd_root_cwd_exe_are_in_the_peer_matrix_and_enforced(self) -> None:
+    def test_scm_enoent_eio_and_nothing_received_are_inconclusive_failures_not_passes(self) -> None:
+        """The review's false-PASS: errno ENOENT / read_ok=false with no denial was treated as 'refused'."""
+        for fields in ({"state": "received", "stage": "read", "errno": errno_.ENOENT, "read_ok": False},
+                       {"state": "received", "stage": "read", "errno": errno_.EIO, "read_ok": False},
+                       {"state": "received", "stage": "read", "errno": 0, "read_ok": False},
+                       {"state": "no-descriptor"}, {"state": "not-canary-file", "size": 4},
+                       {"state": "channel-failed", "stage": "connect", "errno": errno_.ENOENT},
+                       {"state": "channel-failed", "stage": "recv", "errno": errno_.EIO},
+                       {"state": "channel-failed", "stage": "recv", "errno": errno_.ECONNRESET}):
+            verdict = self.run_verify(lambda s, f=fields: self.scm(s, **f))
+            self.assertFails(verdict, "scm-rights")
+            self.assertFalse([p for p in verdict.passes if p.startswith("PASS scm-rights")], fields)
+
+    def test_scm_denial_needs_its_own_exact_event(self) -> None:
+        canary = json.loads(MATRIX_TEXT)["scm"]["canary"]
+        no_event = lambda s: s.update(audit="\n".join(l for l in s["audit"].split("\n") if "file_receive" not in l))  # noqa: E731
+        self.assertFails(self.run_verify(no_event), "scm-rights")
+        unrelated = lambda s: s.update(audit=s["audit"].replace(f'name=\\"{canary}\\"', 'name=\\"/etc/hostname\\"'))  # noqa: E731
+        self.assertFails(self.run_verify(unrelated), "scm-rights")
+        wrong_op = lambda s: s.update(audit=s["audit"].replace('operation=\\"file_receive\\"', 'operation=\\"ptrace\\"'))  # noqa: E731
+        self.assertFails(self.run_verify(wrong_op), "scm-rights")
+        wrong_pid = lambda s: s.update(audit=re.sub(r'(file_receive.*?)pid=200', r"\1pid=201", s["audit"]))  # noqa: E731
+        self.assertFails(self.run_verify(wrong_pid), "scm-rights")
+
+    def retarget(self, st, operation, name):
+        """Rewrite only the descriptor-transfer event (the one with operation file_receive)."""
+        st["audit"] = "\n".join(
+            line.replace('operation=\\"file_receive\\"', f'operation=\\"{operation}\\"').replace(
+                f'name=\\"{json.loads(MATRIX_TEXT)["scm"]["canary"]}\\"', f'name=\\"{name}\\"') if "file_receive" in line else line
+            for line in st["audit"].split("\n"))
+
+    def test_scm_channel_failure_requires_the_event_of_the_stage_that_failed(self) -> None:
+        sock = "/tmp/wpcg-probe-n/scm.sock"
+        # recv refused: needs file_receive on the canary; a connect event for the socket does not count
+        recv = lambda s: self.scm(s, state="channel-failed", stage="recv", errno=EACCES)  # noqa: E731
+        self.assertEqual(self.run_verify(recv).failures, [])
+        self.assertFails(self.run_verify(lambda s: (recv(s), self.retarget(s, "connect", sock))), "scm-rights")
+        # connect refused: needs connect on the exact socket path
+        connect = lambda s: (self.scm(s, state="channel-failed", stage="connect", errno=EACCES), self.retarget(s, "connect", sock))  # noqa: E731
+        self.assertEqual(self.run_verify(connect).failures, [])
+        self.assertFails(self.run_verify(lambda s: (self.scm(s, state="channel-failed", stage="connect", errno=EACCES),
+                                                    self.retarget(s, "connect", "/tmp/other.sock"))), "scm-rights")
+        # a file_receive event for the canary does not explain a failed connect
+        self.assertFails(self.run_verify(lambda s: (self.scm(s, state="channel-failed", stage="connect", errno=EACCES))), "scm-rights")
+
+    def test_descriptor_transfer_bypass_fails_unless_explicitly_acknowledged(self) -> None:
+        bypass = lambda s: self.scm(s, state="received", stage="read", errno=0, read_ok=True)  # noqa: E731
+        self.assertFails(self.run_verify(bypass), "a confined process read a descriptor")
+        self.assertTrue(any("acknowledged" in n for n in self.run_verify(bypass, ack=True).notes))
+        self.assertFails(self.run_verify(lambda s: s["baseline"].update(scm={"state": "channel-failed", "stage": "connect", "errno": 2, "t0": 1, "t1": 2})), "scm-rights")
+
+    # ---- /proc exactness (F) ----------------------------------------------------------------------------
+    def test_each_proc_check_binds_to_its_exact_target_and_window(self) -> None:
         entries = json.loads(MATRIX_TEXT)["peer_entries"]
         for needed in ("fd/", "fdinfo/", "root/", "cwd/", "exe", "environ", "mem", "maps", "cmdline"):
             self.assertIn(needed, entries)
-        verdict = self.run_verify(lambda s: self.result(s, "confined", "peer:staging-next:2201:root/").update(errno=0))
-        self.assertFails(verdict, "peer:staging-next:2201:root/")
-        verdict = self.run_verify(lambda s: self.result(s, "confined", "peer:staging-legacy:2301:fd/").update(errno=0))
-        self.assertFails(verdict, "peer:staging-legacy:2301:fd/")
+        pid = PIDS["staging-next"]
 
-    def test_ptrace_and_process_vm_readv_need_a_calibrated_baseline(self) -> None:
-        # Yama refuses even unconfined: AppArmor attribution is only allowed via the descendant calibration.
-        def yama(s):
-            for who in ("baseline", "confined"):
-                self.result(s, who, "peer:staging-next:2201:process_vm_readv").update(errno=EPERM)
-        self.assertEqual(self.run_verify(yama).failures, [])
-        def yama_without_calibration(s):
-            yama(s)
-            self.result(s, "confined", "calibration:child-process_vm_readv").update(errno=0)
-        self.assertTrue(self.run_verify(yama_without_calibration).failures)
-        def yama_and_uncorrelated_calibration(s):
-            yama(s)
-            s["audit"] = "\n".join(l for l in s["audit"].splitlines() if f'peer="{self.profile}-probe"' not in l)
-        self.assertFails(self.run_verify(yama_and_uncorrelated_calibration), "calibration")
-        self.assertFails(self.run_verify(lambda s: self.result(s, "baseline", "calibration:child-ptrace-seize").update(errno=1)),
+        def only_name_events(s):
+            """Replace the ptrace events with open events for a DIFFERENT /proc entry of the same pid."""
+            s["audit"] = s["audit"].replace('operation=\\"ptrace\\" peer=\\"wpcaregrid-php-fpm-staging-next\\"',
+                                            f'operation=\\"open\\" name=\\"/proc/{pid}/status\\"')
+        verdict = self.run_verify(only_name_events)
+        self.assertFails(verdict, f"peer:staging-next:{pid}:root/")
+        exact = lambda s: s.update(audit=s["audit"].replace('operation=\\"ptrace\\" peer=\\"wpcaregrid-php-fpm-staging-next\\"',  # noqa: E731
+                                                            'operation=\\"open\\" name=\\"/proc/x\\"'))
+        self.assertFails(self.run_verify(exact), "peer:")
+        # right operation and peer, but a window that belongs to another call
+        other_window = lambda s: self.result(s, "confined", f"peer:staging-next:{pid}:fd/").update(t0=T0, t1=T0 + 10)  # noqa: E731
+        self.assertFails(self.run_verify(other_window), f"peer:staging-next:{pid}:fd/")
+        self.assertFails(self.run_verify(lambda s: self.result(s, "confined", f"peer:staging-next:{pid}:root/").update(errno=0)),
+                         f"peer:staging-next:{pid}:root/")
+
+    # ---- ptrace / process_vm_readv calibration (D) -----------------------------------------------------
+    def test_efault_baseline_means_permitted_and_the_calibration_target_must_be_mapped(self) -> None:
+        pid = PIDS["staging-next"]
+        self.assertEqual(self.result({"baseline": synthetic_run(self.profile)[2]}, "baseline", f"peer:staging-next:{pid}:process_vm_readv")["errno"], EFAULT_)
+        self.assertEqual(self.run_verify().failures, [])
+        # calibration read of an UNMAPPED address would also return EFAULT: that proves nothing and must fail
+        unmapped = lambda s: self.result(s, "baseline", "calibration:child-process_vm_readv").update(errno=EFAULT_)  # noqa: E731
+        self.assertFails(self.run_verify(unmapped), "calibration read of a mapped byte did not succeed")
+        # a refusal in the baseline is never "reached"
+        self.assertFails(self.run_verify(lambda s: self.result(s, "baseline", "calibration:child-ptrace-seize").update(errno=1)), "baseline could not reach")
+        # a peer baseline that is neither success, EFAULT nor a refusal is unreached
+        self.assertFails(self.run_verify(lambda s: self.result(s, "baseline", f"peer:staging-next:{pid}:process_vm_readv").update(errno=errno_.ESRCH)),
                          "baseline could not reach")
 
+    def test_yama_masked_peer_results_are_void_without_an_apparmor_calibration(self) -> None:
+        pid = PIDS["staging-next"]
+
+        def yama(s):
+            for who in ("baseline", "confined"):
+                self.result(s, who, f"peer:staging-next:{pid}:process_vm_readv").update(errno=EPERM)
+        self.assertEqual(self.run_verify(yama).failures, [])
+
+        def yama_uncalibrated(s):
+            yama(s)
+            s["audit"] = "\n".join(l for l in s["audit"].split("\n") if f'peer=\\"{self.profile}-probe\\"' not in l)
+        verdict = self.run_verify(yama_uncalibrated)
+        self.assertFails(verdict, "calibration")
+
     def test_unexpected_denials_and_missing_results_fail(self) -> None:
-        extra = f'audit: apparmor="DENIED" operation="open" profile="{self.profile}-probe" name="/etc/hosts" pid=200 comm="python3"'
+        extra = audit_json(T0 + 4 * 10**9 + 50_000_000, 9002, profile=f"{self.profile}-probe", operation="open", name="/etc/hosts", pid=200, comm="python3")
         self.assertFails(self.run_verify(lambda s: s.update(audit=s["audit"] + "\n" + extra)), "unexplained-denial")
         self.assertFails(self.run_verify(lambda s: s["confined"].update(results=s["confined"]["results"][1:])), "missing")
         self.assertFails(self.run_verify(lambda s: s["confined"]["results"].append(dict(s["confined"]["results"][0]))), "duplicate")
@@ -1487,13 +1917,85 @@ class VerifyAcceptance(unittest.TestCase):
         self.assertIn("kernel enforcement is shown by the PASS lines above, not by this tool", source)
         self.assertIn("record, not a standing guarantee", source)
 
-    def test_audit_parser_handles_quoted_and_bare_values(self) -> None:
+    def test_audit_parser_reads_journal_json_and_rejects_everything_else(self) -> None:
         verifier = load_script(ACCEPTANCE / "verify-acceptance.py", "wpcg_verify_parse")
-        records = verifier.parse_audit('type=1400 audit(1:2): apparmor="DENIED" operation="open" class="file" '
-                                       'profile="p-probe" name="/a b" pid=12 comm="python3" requested_mask="r"\n'
-                                       'apparmor="ALLOWED" operation="open" pid=3\nnoise\n')
+        good = audit_json(T0, 1, profile="p-probe", operation="open", name="/a b", pid=12, comm="python3", requested_mask="r")
+        allowed = json.dumps({"_BOOT_ID": "a" * 32, "__REALTIME_TIMESTAMP": "1", "MESSAGE": 'audit: apparmor="ALLOWED" operation="open" pid=3'})
+        records, problems = verifier.parse_audit(good + "\n" + allowed + "\n")
+        self.assertEqual(problems, [])
         self.assertEqual(len(records), 1)
-        self.assertEqual((records[0]["pid"], records[0]["name"], records[0]["profile"]), (12, "/a b", "p-probe"))
+        self.assertEqual((records[0]["pid"], records[0]["name"], records[0]["profile"], records[0]["_boot"]), (12, "/a b", "p-probe", BOOT_UUID.replace("-", "")))
+        self.assertEqual(records[0]["_ts_ns"], T0)
+        self.assertTrue(verifier.parse_audit("noise\n")[1])
+
+
+class ProbeContracts(unittest.TestCase):
+    """The probe-side fixes: child output, child identity, mapped vm_readv calibration, stage-aware SCM, timing."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.probe = load_script(ACCEPTANCE / "probe.py", "wpcg_probe_contracts")
+
+    def test_exec_child_output_never_reaches_the_json_stream_and_the_child_pid_is_reported(self) -> None:
+        driver = ("import importlib.util,sys,json\n"
+                  f"s=importlib.util.spec_from_file_location('p',{str(ACCEPTANCE / 'probe.py')!r})\n"
+                  "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+                  f"r=m.exec_path({sys.executable!r})\n"
+                  "missing=m.exec_path('/nonexistent/wpcg')\n"
+                  "print(json.dumps([r, missing]))\n")
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", driver], capture_output=True, text=True, timeout=30, check=False)
+        lines = result.stdout.strip().splitlines()
+        self.assertEqual(len(lines), 1, f"the exec'd python must not write its --version output into the probe's stdout: {result.stdout!r}")
+        (ok, missing) = json.loads(lines[0])
+        self.assertEqual(ok[0], 0)
+        self.assertGreater(ok[1], 0)
+        self.assertEqual(missing[0], errno_.ENOENT)
+        self.assertGreater(missing[1], 0)
+        self.assertNotEqual(ok[1], os.getpid())
+
+    def test_vm_readv_distinguishes_permitted_unmapped_from_permitted_mapped(self) -> None:
+        self.assertEqual(self.probe.vm_readv(os.getpid(), 0x1000), EFAULT_)  # allowed, but nothing mapped there
+        results: list = []
+        self.probe.descendant_calibration(results)
+        by_id = {r["id"]: r for r in results}
+        self.assertEqual(by_id["calibration:child-process_vm_readv"]["errno"], 0, "a mapped byte of the child must really be read")
+        for r in results:
+            self.assertTrue(r["t0"] <= r["t1"])
+            self.assertIsInstance(r["pid"], int)
+
+    def test_every_result_is_timed_and_attributed(self) -> None:
+        results: list = []
+        self.probe.timed(results, "x", "file", "/nonexistent", lambda: self.probe.open_path("/nonexistent/wpcg", "r"))
+        (entry,) = results
+        self.assertEqual((entry["errno"], entry["pid"]), (errno_.ENOENT, os.getpid()))
+        self.assertTrue(0 < entry["t0"] <= entry["t1"])
+
+    def test_scm_reports_the_stage_and_its_window(self) -> None:
+        outcome = self.probe.scm("/tmp/wpcg-probe-absent/scm.sock")
+        self.assertEqual((outcome["state"], outcome["stage"], outcome["errno"]), ("channel-failed", "connect", errno_.ENOENT))
+        self.assertTrue(outcome["t0"] <= outcome["t1"])
+
+    def test_probe_document_binds_boot_pid_start_time_and_lifetime(self) -> None:
+        driver = ("import importlib.util,sys,json\n"
+                  f"s=importlib.util.spec_from_file_location('p',{str(ACCEPTANCE / 'probe.py')!r})\n"
+                  "m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+                  "m.label=lambda: 'unconfined'\n"
+                  "m.exec_path=lambda p: (2, 4242)\n"
+                  "m.open_path=lambda p,a: 2\n"
+                  "m.connect=lambda a: 2\n"
+                  f"sys.exit(m.main(['baseline',{MATRIX_TEXT!r},'wpcaregrid-nginx',{json.dumps({'peers': {}, 'scm_socket': '/tmp/none/s', 'abstract': 'a'})!r}]))\n")
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        doc = json.loads(result.stdout)
+        self.assertEqual(doc["schema"], 2)
+        self.assertEqual(doc["boot_id"], Path("/proc/sys/kernel/random/boot_id").read_text().strip())
+        self.assertGreater(doc["starttime_ticks"], 0)
+        self.assertLessEqual(doc["started_ns"], doc["ended_ns"])
+        self.assertLess(abs(doc["kernel_start_ns"] - doc["started_ns"]), 10 * 10**9)
+        self.assertEqual(doc["scm_socket"], "/tmp/none/s")
+
+
+import errno as errno_  # noqa: E402
 
 
 class EdgeAndJobPeers(unittest.TestCase):
@@ -1588,15 +2090,16 @@ class EdgeAndJobPeers(unittest.TestCase):
                              (f"{self.SS}/state/other", "r")):
             self.assertFalse(decide(rules, self.resolve("wpcaregrid-php-cli-staging", path), access), f"{path} {access}")
 
-    def test_job_profile_is_selected_by_unit_and_by_exact_wrapper_path_only(self) -> None:
-        text = (ARTIFACTS / PROFILES["wpcaregrid-php-cli-staging"]).read_text()
-        self.assertIn("profile wpcaregrid-php-cli-staging /usr/local/bin/wpcaregrid-scheduler flags=(attach_disconnected) {", text)
-        for other in ("wpcaregrid-nginx", "wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next",
-                      "wpcaregrid-php-fpm-staging-legacy"):
-            self.assertNotRegex((ARTIFACTS / PROFILES[other]).read_text(), r"(?m)^profile \S+ /\S+ flags=")  # no other attachment
-        for drop in ("supervisor.service.d", "wpcaregrid-staging-next-scheduler.service.d"):
+    def test_job_profile_is_selected_by_unit_only_with_no_path_attachment_and_no_cron(self) -> None:
+        for name in PROFILES:
+            text = (ARTIFACTS / PROFILES[name]).read_text()
+            self.assertNotRegex(text, r"(?m)^profile \S+ /\S+ flags=", name)  # an exec-path attachment would reach a cron child
+            self.assertRegex(text, rf"(?m)^profile {name} flags=\(attach_disconnected\) \{{$")
+        for drop in ("supervisor.service.d", "wpcaregrid-staging-next-scheduler.service.d", "wpcaregrid-staging-legacy-scheduler.service.d"):
             self.assertIn("AppArmorProfile=wpcaregrid-php-cli-staging",
                           (ARTIFACTS / "systemd" / drop / "90-wpcaregrid-confinement.conf").read_text())
+        self.assertFalse(list((ARTIFACTS / "systemd").glob("cron*")))
+        self.assertIn("www-data cron is not permitted", (ARTIFACTS / PROFILES["wpcaregrid-php-cli-staging"]).read_text())
 
     def test_every_peer_profile_denies_signalling_every_other_class(self) -> None:
         names = {"wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next", "wpcaregrid-php-fpm-staging-legacy",
@@ -1607,11 +2110,385 @@ class EdgeAndJobPeers(unittest.TestCase):
                 self.assertIn(f"audit deny signal (send) peer={other},", text, f"{name} -> {other}")
 
 
+def make_production_tree(root: Path) -> None:
+    """A production tree whose secret-bearing paths are group/other readable, as the deploy tooling leaves them."""
+    web = root / "var/www/wpcaregrid-production/releases/r1"
+    shared = root / "var/lib/wpcaregrid-deploy/production"
+    for directory, mode in ((web / "bootstrap/cache", 0o750), (web / "public/build", 0o755), (shared / "shared/storage/logs", 0o2770),
+                            (shared / "shared/vendor", 0o755), (shared / "state", 0o750), (shared / "database-backups", 0o750),
+                            (root / "var/log/wpcaregrid-production", 0o750)):
+        directory.mkdir(parents=True, exist_ok=True)
+    files = {web / "bootstrap/cache/config.php": 0o640, web / "artisan": 0o644, web / "public/index.php": 0o644,
+             web / "public/build/app.js": 0o644, shared / "shared/.env": 0o640, shared / "shared/storage/logs/laravel.log": 0o660,
+             shared / "shared/vendor/autoload.php": 0o644, shared / "state/maintenance": 0o640,
+             shared / "database-backups/x.sql.gz": 0o640, root / "var/log/wpcaregrid-production/php-fpm.log": 0o640}
+    for path, mode in files.items():
+        path.write_text("x")
+        path.chmod(mode)
+    os.symlink(str(shared / "shared/.env"), web / ".env")
+    for directory, mode in ((web / "bootstrap/cache", 0o750), (shared / "shared/storage/logs", 0o770), (shared / "state", 0o750),
+                            (root / "var/log/wpcaregrid-production", 0o750), (web, 0o755), (web.parent, 0o755)):
+        directory.chmod(mode)
+
+
+class FenceProduction(unittest.TestCase):
+    """Review (1)/(I): fence EVERY uid-33-readable production secret-bearing path, not just .env and storage."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tool = load_script(ACCEPTANCE / "fence-production.py", "wpcg_fence")
+        cls.matrix = json.loads(MATRIX_TEXT)
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="wpcg-fence-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        make_production_tree(self.root)
+        self.receipt = str(self.root / "receipt.json")
+        # The test user's group plays www-data's group; the owner is a different uid, so only group/other bits expose.
+        self.kw = {"uid": 999999, "gid": os.getgid()}
+
+    def status(self):
+        return self.tool.status(self.matrix, str(self.root), require_root_owner=False, **self.kw)
+
+    def test_before_fencing_the_review_listed_paths_are_exposed_and_public_is_not_in_scope(self) -> None:
+        exposed = self.status()
+        for needed in ("/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php",
+                       "/var/www/wpcaregrid-production/releases/r1/bootstrap/cache",
+                       "/var/log/wpcaregrid-production/php-fpm.log", "/var/log/wpcaregrid-production",
+                       "/var/lib/wpcaregrid-deploy/production/shared/.env",
+                       "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
+                       "/var/lib/wpcaregrid-deploy/production/state/maintenance",
+                       "/var/lib/wpcaregrid-deploy/production/database-backups/x.sql.gz",
+                       "/var/www/wpcaregrid-production/releases/r1/artisan"):
+            self.assertIn(needed, exposed)
+        self.assertFalse([p for p in exposed if "/public/" in p or p.endswith("/public")], "public web roots are out of scope")
+
+    def test_fence_closes_every_path_and_keeps_only_public_and_traversal(self) -> None:
+        self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)
+        self.assertEqual(self.status(), [])
+        web = self.root / "var/www/wpcaregrid-production/releases/r1"
+        self.assertEqual(oct((web / "public/index.php").stat().st_mode & 0o7777), "0o644")  # public untouched
+        self.assertEqual(oct(web.stat().st_mode & 0o7777), "0o755")  # nginx can still reach releases/*/public
+        self.assertEqual(oct((web / "bootstrap/cache/config.php").stat().st_mode & 0o7777), "0o600")
+        self.assertEqual(oct((web / "bootstrap/cache").stat().st_mode & 0o7777), "0o700")
+        self.assertEqual(oct((self.root / "var/log/wpcaregrid-production/php-fpm.log").stat().st_mode & 0o7777), "0o600")
+
+    def test_fence_is_reversible_from_the_receipt(self) -> None:
+        before = {p: (p.lstat().st_mode & 0o7777) for p in self.root.rglob("*") if not p.is_symlink() and p.name != "receipt.json"}
+        self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)
+        self.tool.restore(str(self.root), self.receipt, chown=False)
+        after = {p: (p.lstat().st_mode & 0o7777) for p in before}
+        self.assertEqual(after, before)
+
+    def test_interrupted_fence_is_still_reversible_and_still_reported_exposed(self) -> None:
+        calls = {"n": 0}
+        real = os.chmod
+
+        def flaky(path, mode, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 4:
+                raise OSError("injected fault")
+            return real(path, mode, *a, **k)
+        original = {p: (p.lstat().st_mode & 0o7777) for p in self.root.rglob("*") if not p.is_symlink()}
+        self.tool.os.chmod = flaky
+        try:
+            with self.assertRaises(OSError):
+                self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)
+        finally:
+            self.tool.os.chmod = real
+        self.assertTrue(self.status(), "a half-applied fence must not look fenced")
+        self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)  # re-run completes it
+        self.assertEqual(self.status(), [])
+        self.tool.restore(str(self.root), self.receipt, chown=False)
+        restored = {p: (p.lstat().st_mode & 0o7777) for p in original if p.name != "receipt.json" and p.exists()}
+        self.assertEqual(restored, {p: m for p, m in original.items() if p.name != "receipt.json" and p.exists()})
+
+    def test_symlinks_are_never_followed(self) -> None:
+        outside = self.root / "outside-secret"
+        outside.write_text("x")
+        outside.chmod(0o644)
+        os.symlink(str(outside), self.root / "var/www/wpcaregrid-production/releases/r1/leak")
+        self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)
+        self.assertEqual(oct(outside.stat().st_mode & 0o7777), "0o644")
+
+    def test_a_reexposed_path_is_detected_after_a_fence(self) -> None:
+        self.tool.fence(self.matrix, str(self.root), self.receipt, chown=False)
+        config = self.root / "var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php"
+        config.chmod(0o644)  # a deploy re-creating a world-readable config cache
+        self.assertEqual(self.status(), ["/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php"])
+        (self.root / "var/log/wpcaregrid-production").chmod(0o750)
+        self.assertIn("/var/log/wpcaregrid-production", self.status())
+
+    def test_every_named_secret_location_in_the_matrix_is_inside_the_fenced_walk(self) -> None:
+        walked = {v for v, _, _, _ in self.tool.entries(self.matrix, str(self.root))}
+        for pattern in self.matrix["production_fence"]["named_secret_paths"]:
+            real_pattern = str(self.root) + pattern
+            matches = [str(Path(m)) for m in glob.glob(real_pattern)]
+            if "*" in pattern or pattern.startswith("/var/lib") or pattern.startswith("/var/log"):
+                virtual = ["/" + os.path.relpath(m, self.root) for m in matches]
+                for item in virtual:
+                    self.assertIn(item, walked, pattern)
+        self.assertTrue({"/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php",
+                         "/var/log/wpcaregrid-production/php-fpm.log"} <= walked)
+
+    def test_matrix_names_the_review_locations(self) -> None:
+        fence = self.matrix["production_fence"]
+        joined = " ".join(fence["named_secret_paths"] + fence["roots"])
+        for needed in ("bootstrap/cache", "/var/log/wpcaregrid-production", "shared/.env", "shared/storage", "releases/*/.env"):
+            self.assertIn(needed, joined)
+        self.assertEqual(fence["public_exempt"], "/var/www/wpcaregrid-production/releases/*/public")
+
+    def test_exposure_rules(self) -> None:
+        mk = lambda mode, uid=1, gid=1, kind=stat.S_IFREG: os.stat_result((kind | mode, 0, 0, 1, uid, gid, 0, 0, 0, 0))  # noqa: E731
+        self.assertTrue(self.tool.exposed(mk(0o640, gid=33)))
+        self.assertTrue(self.tool.exposed(mk(0o600, uid=33)))
+        self.assertTrue(self.tool.exposed(mk(0o604)))
+        self.assertTrue(self.tool.exposed(mk(0o701, kind=stat.S_IFDIR)))
+        self.assertFalse(self.tool.exposed(mk(0o600, uid=0, gid=0)))
+        self.assertFalse(self.tool.exposed(mk(0o640, uid=0, gid=1000)))
+        self.assertFalse(self.tool.exposed(mk(0o777, kind=stat.S_IFLNK)))
+
+    @unittest.skipIf(os.geteuid() == 0, "root is allowed to fence")
+    def test_cli_refuses_fence_and_restore_without_root_but_status_is_read_only(self) -> None:
+        for command in ("fence", "restore"):
+            result = subprocess.run([sys.executable, "-B", str(ACCEPTANCE / "fence-production.py"), command, str(ACCEPTANCE / "matrix.json"),
+                                     "--root", str(self.root)], capture_output=True, text=True, timeout=30, check=False,
+                                    env={"PATH": os.environ.get("PATH", "")})
+            self.assertEqual(result.returncode, 2)
+        before = (self.root / "var/log/wpcaregrid-production/php-fpm.log").stat().st_mode
+        subprocess.run([sys.executable, "-B", str(ACCEPTANCE / "fence-production.py"), "status", str(ACCEPTANCE / "matrix.json"), "--root", str(self.root)],
+                       capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual((self.root / "var/log/wpcaregrid-production/php-fpm.log").stat().st_mode, before)
+
+
+class FakeRollbackHost:
+    """Simulates the host state the rollback order protects; asserts Invariant I at the moment of every unconfine."""
+
+    def __init__(self, peers, faults=None, reexpose_after=None, jobs_masked=True, service_stays_running=False, route_reopens=False):
+        self.route, self.service, self.masked = True, True, jobs_masked
+        self.exposed = {"/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php", "/var/log/wpcaregrid-production/php-fpm.log",
+                        "/var/lib/wpcaregrid-deploy/production/shared/.env", "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"}
+        self.confined, self.unconfined = set(peers), []
+        self.faults, self.counts, self.violations, self.calls = dict(faults or {}), {}, [], []
+        self.reexpose_after, self.service_stays_running, self.route_reopens = reexpose_after, service_stays_running, route_reopens
+
+    def _fault(self, name):
+        self.counts[name] = self.counts.get(name, 0) + 1
+        self.calls.append(name)
+        if self.faults.get(name) == self.counts[name]:
+            raise RuntimeError(f"injected fault in {name} #{self.counts[name]}")
+
+    def close_route(self):
+        self._fault("close_route")
+        self.route = False
+
+    def stop_production_service(self):
+        self._fault("stop_production_service")
+        self.service = self.service_stays_running
+
+    def jobs_masked(self):  # replaced by attribute below
+        return self.masked
+
+    def fence_secrets(self):
+        self._fault("fence_secrets")
+        if self.faults.get("fence_partial") == 1:
+            self.exposed.discard(sorted(self.exposed)[0])
+            self.faults.pop("fence_partial")
+            raise RuntimeError("injected partial fence")
+        self.exposed.clear()
+
+    def exposed_paths(self):
+        self._fault("exposed_paths")
+        return sorted(self.exposed)
+
+    def route_open(self):
+        return self.route
+
+    def production_service_running(self):
+        return self.service
+
+    def unconfine(self, peer):
+        self._fault("unconfine")
+        if self.exposed or self.route or self.service or not self.masked:
+            self.violations.append((peer, sorted(self.exposed), self.route, self.service, self.masked))
+        self.confined.discard(peer)
+        self.unconfined.append(peer)
+
+    def restart(self, peer):
+        self._fault("restart")
+        if self.reexpose_after == peer:
+            self.exposed.add("/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php")
+        if self.route_reopens == peer:
+            self.route = True
+
+    def remove_artifacts(self):
+        self._fault("remove_artifacts")
+
+
+class RollbackOrder(unittest.TestCase):
+    """Review (1)/(I): fault-order proof that production is fenced before ANY peer is returned to unconfined."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = load_script(ACCEPTANCE / "rollback-order.py", "wpcg_rollback")
+        cls.peers = cls.mod.PEERS_NEWEST_FIRST
+
+    def host(self, **kw):
+        host = FakeRollbackHost(self.peers, **kw)
+        host.jobs_masked = lambda masked=host.masked: masked  # the protocol method
+        host.masked = kw.get("jobs_masked", True)
+        host.jobs_masked = lambda: host.masked
+        return host
+
+    def test_peer_list_is_every_non_production_role_newest_stage_first(self) -> None:
+        matrix = json.loads(MATRIX_TEXT)
+        self.assertEqual(set(self.peers), set(matrix["role_units"]) - {"production"})
+        self.assertEqual(self.peers[-2:], ("staging-next", "staging-legacy"))
+        self.assertLess(self.peers.index("nginx"), self.peers.index("staging-next"))
+
+    def test_happy_path_orders_fence_before_every_unconfine_and_never_violates_the_invariant(self) -> None:
+        host = self.host()
+        log = self.mod.run_rollback(host)
+        self.assertEqual(host.violations, [])
+        self.assertEqual(host.unconfined, list(self.peers))
+        order = [log.index(x) for x in ("R1:close_route", "R1:stop_production_service", "R1:assert_jobs_masked", "R2:fence_secrets")]
+        self.assertEqual(order, sorted(order))
+        self.assertLess(log.index("R2:fence_secrets"), log.index(f"R3:unconfine:{self.peers[0]}"))
+        for peer in self.peers:  # re-proven immediately before EVERY unconfine, and again after its restart
+            self.assertEqual(log.index(f"R3:unconfine:{peer}") - 1, log.index(f"R3:require_fenced_before:{peer}"))
+            self.assertEqual(log.index(f"R3:restart:{peer}") + 1, log.index(f"R3:require_fenced_after:{peer}"))
+
+    def test_a_fault_at_any_point_aborts_before_any_unsafe_unconfine_and_resumes_safely(self) -> None:
+        points = ["close_route", "stop_production_service", "fence_secrets", "fence_partial", "exposed_paths", "unconfine", "restart"]
+        for name in points:
+            for occurrence in (1, 2, 3, 5):
+                faults = {name: occurrence}
+                host = self.host(faults=faults)
+                try:
+                    self.mod.run_rollback(host)
+                    completed = True
+                except self.mod.RollbackAborted as aborted:
+                    completed = False
+                    self.assertTrue(aborted.log)
+                if name in ("exposed_paths", "unconfine", "restart") and occurrence > 20:
+                    continue
+                self.assertEqual(host.violations, [], f"{name}#{occurrence}")
+                if not completed:
+                    # nothing past the failing step ran; peers not yet unconfined stay confined
+                    self.assertTrue(set(self.peers) - set(host.unconfined) or set(host.unconfined) == set(self.peers))
+                    host.faults.clear()
+                    log = self.mod.run_rollback(host)  # resume: every precondition is re-proven from the start
+                    self.assertEqual(host.violations, [], f"resume after {name}#{occurrence}")
+                    self.assertEqual(set(host.unconfined), set(self.peers))
+                    self.assertTrue(log)
+
+    def test_a_fault_before_the_fence_is_verified_leaves_every_peer_confined(self) -> None:
+        for name in ("close_route", "stop_production_service", "fence_secrets", "fence_partial"):
+            host = self.host(faults={name: 1})
+            with self.assertRaises(self.mod.RollbackAborted):
+                self.mod.run_rollback(host)
+            self.assertEqual(host.unconfined, [], name)
+            self.assertEqual(host.confined, set(self.peers), name)
+
+    def test_a_partial_fence_never_unconfines_anything(self) -> None:
+        host = self.host(faults={"fence_partial": 1})
+        with self.assertRaises(self.mod.RollbackAborted) as caught:
+            self.mod.run_rollback(host)
+        self.assertEqual(caught.exception.step, "R2:fence_secrets")
+        self.assertTrue(host.exposed)
+        self.assertEqual(host.unconfined, [])
+
+    def test_reexposure_after_one_peers_restart_stops_the_remaining_peers(self) -> None:
+        for victim in self.peers[:-1]:
+            host = self.host(reexpose_after=victim)
+            with self.assertRaises(self.mod.RollbackAborted) as caught:
+                self.mod.run_rollback(host)
+            self.assertTrue(caught.exception.step.startswith("R3:require_fenced_after:"), caught.exception.step)
+            self.assertEqual(host.unconfined, list(self.peers[:self.peers.index(victim) + 1]))
+            self.assertEqual(host.violations, [])  # the victim itself was unconfined while fenced; no later peer was
+
+    def test_route_reopening_or_a_running_production_service_blocks_every_unconfine(self) -> None:
+        for kw in ({"service_stays_running": True}, {"route_reopens": self.peers[0]}):
+            host = self.host(**kw)
+            with self.assertRaises(self.mod.RollbackAborted):
+                self.mod.run_rollback(host)
+            self.assertEqual(host.violations, [])
+            self.assertLessEqual(len(host.unconfined), 1)
+
+    def test_unmasked_production_jobs_abort_before_anything_and_are_never_unmasked_by_rollback(self) -> None:
+        host = self.host(jobs_masked=False)
+        with self.assertRaises(self.mod.RollbackAborted) as caught:
+            self.mod.run_rollback(host)
+        self.assertEqual(caught.exception.step, "R1:assert_jobs_masked")
+        self.assertEqual(host.unconfined, [])
+        source = (ACCEPTANCE / "rollback-order.py").read_text()
+        self.assertNotIn("unmask(", source)
+        self.assertNotIn("def unmask", source)
+
+    def test_without_fencing_the_guard_itself_would_have_allowed_a_violation(self) -> None:
+        """Control: prove the fake host can detect the review's bug (peers unconfined while paths are still readable)."""
+        host = self.host()
+        host.unconfine(self.peers[0])
+        self.assertTrue(host.violations)
+
+
 class OriginalProfileHarness(unittest.TestCase):
     def test_runbook_tests_the_original_profile_for_exec_denial(self) -> None:
         doc = DOC.read_text(encoding="utf-8")
         self.assertIn("-p AppArmorProfile=wpcaregrid-php-fpm-production /usr/bin/python3", doc)
         self.assertIn("exec-python", doc)
+
+
+class BindingManifest(unittest.TestCase):
+    """binding.json is what workstream A's canonical contract binds; it must agree with the matrix and the files."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.binding = json.loads((ARTIFACTS / "binding.json").read_text())
+        cls.matrix = json.loads(MATRIX_TEXT)
+
+    def test_installed_files_map_exactly_to_the_non_acceptance_artifacts(self) -> None:
+        artifacts = {rel for rel in EXPECTED_FILES if not rel.startswith("acceptance/") and rel not in ("SHA256SUMS", "binding.json")}
+        self.assertEqual(set(self.binding["installed_files"].values()), artifacts)
+        self.assertEqual(len(set(self.binding["installed_files"])), len(artifacts))
+        for installed in self.binding["installed_files"]:
+            self.assertTrue(installed.startswith(("/etc/apparmor.d/", "/etc/systemd/system/", "/etc/php/8.4/fpm-wpcaregrid-production/")), installed)
+            self.assertEqual(installed, os.path.normpath(installed))
+
+    def test_services_agree_with_the_matrix_units_and_profiles(self) -> None:
+        self.assertEqual(set(self.binding["services"]), set(self.matrix["role_units"]))
+        for role, entry in self.binding["services"].items():
+            self.assertEqual(entry["unit"], self.matrix["role_units"][role])
+            self.assertEqual(entry["apparmor_profile"], self.matrix["role_profiles"][role])
+            self.assertTrue(set(entry["files"]) <= set(self.binding["installed_files"]), role)
+            self.assertIn(entry["profile_path"], entry["files"])
+            self.assertIn(entry["attachment_path"], entry["files"])
+            profile_file = ARTIFACTS / self.binding["installed_files"][entry["profile_path"]]
+            self.assertRegex(profile_file.read_text(), rf"(?m)^profile {entry['apparmor_profile']} flags=")
+            attachment = (ARTIFACTS / self.binding["installed_files"][entry["attachment_path"]]).read_text()
+            self.assertIn(f"AppArmorProfile={entry['apparmor_profile']}", attachment)
+            self.assertEqual(entry["profile_path"], "/etc/apparmor.d/" + entry["apparmor_profile"] if "jobs" not in role else "/etc/apparmor.d/wpcaregrid-php-cli-staging")
+            self.assertEqual(("/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common" in entry["files"]), role != "nginx")
+
+    def test_rules_state_the_review_decisions(self) -> None:
+        rules = self.binding["rules"]
+        self.assertEqual(rules["exec_path_attachments"], [])
+        self.assertIs(rules["www_data_cron_permitted"], False)
+        self.assertEqual(rules["unconfined_same_uid_classes"], [])
+        self.assertEqual(rules["permitted_group33_holders"], self.matrix["permitted_group33_holders"])
+        self.assertEqual(rules["package_owner_mode"], {"uid": 0, "gid": 0, "mode": "0644", "type": "regular", "nlink": 1})
+        for name in PROFILES:  # the statement is true of the artifacts: nothing attaches by exec path
+            self.assertNotRegex((ARTIFACTS / PROFILES[name]).read_text(), r"(?m)^profile \S+ /\S+ flags=")
+        self.assertEqual(self.binding["inventory_schema"]["units"], sorted(set(self.matrix["role_units"].values())))
+        self.assertEqual(self.binding["package_version"], ARTIFACTS.name)
+        self.assertEqual(self.binding["schema"], 1)
+
+    def test_contract_module_is_not_carried_in_this_branch(self) -> None:
+        self.assertFalse((ROOT / "scripts/deployment_environment_contract_2_1_3.py").exists())
+        self.assertFalse((ROOT / "scripts/tests/deployment-environment-contract-2-1-3-test.py").exists())
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("deployment-environment-contract-2-1-3-test", ci)
+        self.assertIn("php-fpm-confinement-test.py", ci)
 
 
 class AbstractSocketDenial(unittest.TestCase):
@@ -1638,8 +2515,9 @@ class DocumentationContract(unittest.TestCase):
         for needed in (
             "Source tests cannot prove kernel enforcement", "NOT PROVEN", "fail closed",
             "No new users, groups or FPM UID", "complain", "Rollback", "STOP", "Inherited descriptors",
-            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.1 does not separate TCP ports", "php_fpm_uid",
-            "production_unix_identity_not_isolated", "derive-probe-profile.py", "sha256sum -c --strict SHA256SUMS",
+            "/proc/<pid>/attr/current", "/proc/<pid>/fd", "AppArmor 1.0.1 does not separate TCP ports",
+            "derive-probe-profile.py", "sha256sum -c --strict SHA256SUMS", "binding.json", "fence-production.py",
+            "pre-production peer gate", "supplementary group 33", "workstream A", "wpcaregrid-php-fpm-harness",
             "systemd 255", "PrivatePIDs", "never rely on exec-time revocation", "StandardInput=file:",
             "is not sufficient on its own", "exec-python", "Invariant I",
             "-p AppArmorProfile=wpcaregrid-php-fpm-production /usr/bin/python3",
@@ -1684,7 +2562,7 @@ class DocumentationContract(unittest.TestCase):
         self.assertIn("staging-legacy", self.section("**Stage 1", "**Stage 2"))
         self.assertIn("staging-next", self.section("**Stage 2", "**Stage 3"))
         edge = self.section("**Stage 3", "**Stage 4")
-        for needed in ("nginx", "queue workers and scheduler", "legacy cron", "fence production jobs", "systemctl mask"):
+        for needed in ("nginx", "queue workers and schedulers", "no www-data cron", "fence production jobs", "systemctl mask"):
             self.assertIn(needed, edge)
         gate = self.section("**Stage 4", "**Stage 5")
         self.assertIn("STOP", gate)
@@ -1709,9 +2587,13 @@ class DocumentationContract(unittest.TestCase):
         self.assertIn("never unmask", rollback[r1:r2])
         self.assertIn("fence production secrets", rollback[r2:r3])
         self.assertIn("restore peers", rollback[r3:r4])
-        for peer in ("nginx", "supervisor", "scheduler", "php8.5-fpm.service.d", "php8.4-fpm.service.d"):
+        for peer in ("nginx", "jobs-supervisor", "jobs-scheduler", "jobs-legacy-scheduler", "staging-next", "staging-legacy"):
             self.assertIn(peer, rollback[r3:r4])
-        self.assertIn("the production fence (R1–R2) must still hold", rollback[r3:r4])
+        for secret_location in ("bootstrap/cache/config.php", "production logs", "every path", "release `.env` files", "ACL xattrs"):
+            self.assertIn(secret_location, rollback[r2:r3])
+        self.assertIn("immediately before removing that peer's drop-in", rollback[r3:r4])
+        self.assertIn("stops the remaining peers", rollback[r3:r4])
+        self.assertLess(rollback.index("`jobs-legacy-scheduler`"), rollback.index("`staging-next`"))
         self.assertIn("production is fenced before any same-UID peer is returned to unconfined", rollback)
         self.assertIn("Partial rollback", rollback)
         self.assertIn("a production job unit that is no longer masked", rollback)
@@ -1720,11 +2602,46 @@ class DocumentationContract(unittest.TestCase):
     def test_every_uid33_class_is_documented_and_production_jobs_are_fenced(self) -> None:
         doc = self.doc()
         for needed in ("exactly one explicitly permitted class; an unknown process blocks", "`nginx`", "`jobs-supervisor`",
-                       "`jobs-scheduler`", "`jobs-cron`", "cron-shim", "masked", "fail-closed start policy",
+                       "`jobs-scheduler`", "`jobs-legacy-scheduler`", "masked", "fail-closed start policy",
                        "ACCEPTED_UNCONFINED_SAME_UID_COMM", "systemctl mask wpcaregrid-production-scheduler.timer",
-                       "no `wpcaregrid-production-*` Supervisor program", "zero `/etc/cron.d` entries"):
+                       "no active or autostarting `wpcaregrid-production-*` Supervisor program", "There is no `cron`/`sh` class",
+                       "unconfined same-UID shell", "permitted_group33_holders", "any GID 33, or supplementary group 33"):
             self.assertIn(needed, doc, needed)
-        self.assertNotIn("fails on a real host today", doc)
+        for gone in ("cron-shim", "`jobs-cron`", "pinned crontab hash", "exact-path attachment on", "fails on a real host today"):
+            self.assertNotIn(gone, doc, gone)
+
+    def test_the_acceptance_gate_is_split_so_production_is_not_required_before_it_may_start(self) -> None:
+        """QA (A): a gate that needs the production unit, which may only start after the gate, is circular."""
+        doc = self.doc()
+        pre = self.section("**Stage 4", "**Stage 5")
+        post = self.section("**Stage 5", "**Stage 6")
+        self.assertIn("pre-production peer gate", pre)
+        self.assertIn("verify-acceptance.py ... pre", pre)
+        self.assertIn("production role is excluded", pre)
+        self.assertIn("**no** process", pre)
+        self.assertIn("no non-fixture file may exist in the production tree", pre)
+        self.assertIn("post", post)
+        self.assertIn("can only be accepted in this phase", post)
+        self.assertLess(doc.index("**Stage 4"), doc.index("start `wpcaregrid-production-php8.4-fpm.service`"))
+        matrix = json.loads(MATRIX_TEXT)
+        self.assertEqual(matrix["phases"]["pre"]["excluded_roles"], ["production"])
+        self.assertEqual(matrix["phases"]["post"]["excluded_roles"], [])
+
+    def test_harness_is_published_readably_and_hash_verified_instead_of_run_from_the_root_only_package(self) -> None:
+        """QA (B): a root:root 0700 package directory cannot be executed by www-data."""
+        stage0 = self.section("**Stage 0", "**Stage 1")
+        for needed in ("install -d -o root -g root -m 0755 /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.1",
+                       "install -o root -g root -m 0644", "fd-sender.py", "sha256sum -c --strict -", "stdlib-only"):
+            self.assertIn(needed, stage0)
+        doc = self.doc()
+        self.assertIn("/usr/bin/python3 -I -B /usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.1/fd-sender.py", doc)
+        self.assertNotIn('"$PKG/acceptance/fd-sender.py" "$N"', doc)  # never executed from the 0700 package directory
+        tree = ast.parse((ACCEPTANCE / "fd-sender.py").read_text())
+        imports = {n.names[0].name for n in ast.walk(tree) if isinstance(n, ast.Import)} | {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        self.assertLessEqual(imports, {"os", "socket", "sys", "time", "__future__"})
+        source = (ACCEPTANCE / "fd-sender.py").read_text()
+        self.assertIn("os.geteuid() == 0", source)
+        self.assertNotRegex(source, r"(?i)(password|token|api[_-]?key)")
 
     def test_no_secret_values_in_artifacts(self) -> None:
         pattern = re.compile(r"(?i)(password|secret|token|api[_-]?key)\s*[:=]\s*\S+")
@@ -1738,7 +2655,7 @@ class RealParser(unittest.TestCase):
     """Compile with the real apparmor_parser when present. No kernel load, no cache."""
 
     def test_profiles_and_probe_profiles_compile(self) -> None:
-        parser = shutil.which("apparmor_parser")
+        parser = os.environ.get("APPARMOR_PARSER_BIN") or shutil.which("apparmor_parser")  # APPARMOR_PARSER_BASE: -b dir of abstractions
         if parser is None:
             if os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_PARSER") == "1":
                 self.fail("apparmor_parser is required but unavailable")
@@ -1751,7 +2668,8 @@ class RealParser(unittest.TestCase):
                 probe.write_text(derive.derive(source.read_text()))
                 for target in (source, probe):
                     result = subprocess.run(
-                        [parser, "-Q", "-K", "-I", str(ARTIFACTS / "apparmor"), str(target)],
+                        [parser, "-Q", "-K", *(["-b", os.environ["APPARMOR_PARSER_BASE"]] if os.environ.get("APPARMOR_PARSER_BASE") else []),
+                         "-I", str(ARTIFACTS / "apparmor"), str(target)],
                         capture_output=True, text=True, timeout=120, check=False)
                     self.assertEqual(result.returncode, 0, f"{target.name}: {result.stderr}")
 

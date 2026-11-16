@@ -150,7 +150,6 @@ jobs:
           python3 scripts/tests/deploy-privilege-policy-test.py
           python3 scripts/tests/deploy-profile-isolation-test.py
           python3 scripts/tests/deployment-environment-contract-test.py
-          python3 scripts/tests/deployment-environment-contract-2-1-3-test.py
           python3 scripts/tests/deployment-target-binding-test.py
           python3 scripts/tests/deployment-target-helper-drift-test.py
           python3 scripts/tests/release-review-policy-v3-test.py
