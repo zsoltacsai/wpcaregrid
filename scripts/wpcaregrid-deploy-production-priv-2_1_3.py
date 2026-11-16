@@ -266,6 +266,12 @@ def main(argv=None) -> int:
                               egid=os.getegid(), isolated=sys.flags.isolated)
         backend, profile, operation, app_sha, artifact_sha = _load_profile(args)
         uid = 0
+        # Every operation, including authorize and verify-install, first requires the
+        # production jobs fence and the full same-UID confinement observation.
+        try:
+            backend._verify_php_fpm_confinement(profile)
+        except backend.DeployRefused as error:
+            raise Refused(str(error)) from None
         if operation in {"preflight", "verify-install"}:
             try:
                 result = (backend.preflight(profile, invoking_uid=uid) if operation == "preflight"

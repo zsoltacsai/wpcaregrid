@@ -32,6 +32,7 @@ service. Observation data is collected as root by the helper backend.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -474,8 +475,49 @@ def resolve_environment(name: str, *, production_config: Mapping[str, object] | 
 # Schema-3 observation (collected as root by the helper backend).
 # --------------------------------------------------------------------------
 
-_OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "files", "services", "www_data_cron",
-                               "same_uid_peers"})
+_OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "production_jobs_fence", "files", "services",
+                               "www_data_cron", "same_uid_peers"})
+_FENCE_KEYS = frozenset({"units", "supervisor", "markers"})
+_FENCE_UNIT_KEYS = frozenset({"load_state", "active_state", "unit_file_state"})
+_FENCE_SUPERVISOR_KEYS = frozenset({"config_complete", "runtime_available", "programs"})
+_FENCE_PROGRAM_KEYS = frozenset({"name", "state", "autostart"})
+_FENCE_MARKER_KEYS = frozenset({"type", "uid", "gid", "mode", "nlink", "sha256"})
+# Program states the collector may report. Only STOPPED (runtime) or SUPERVISOR_INACTIVE
+# (supervisor.service observed inactive) can be fenced; NOT_LOADED and every other state refuse.
+_FENCE_PROGRAM_STATES = frozenset({"STOPPED", "STARTING", "RUNNING", "BACKOFF", "STOPPING", "EXITED", "FATAL",
+                                   "UNKNOWN", "NOT_LOADED", "SUPERVISOR_INACTIVE"})
+PRODUCTION_PRIVATE_ROOTS = ("/var/www/wpcaregrid-production", "/var/lib/wpcaregrid-deploy/production")
+
+
+def fence_marker_bytes(kind: str) -> bytes:
+    """Exact Phase B fence marker content (deployment_transaction_v2.verify_background_fences)."""
+    if kind == "worker_fence_marker":
+        return b"schema=1;profile=production;workers=disabled\n"
+    if kind == "scheduler_fence_marker":
+        return b"schema=1;profile=production;scheduler=paused\n"
+    raise EnvironmentRefused("confinement_observation_invalid")
+
+
+def production_job_fence_scope(contract: EnvironmentContract) -> Mapping[str, object]:
+    """The exact units, Supervisor program scope and marker paths the production fence covers."""
+    timer = contract.scheduler_unit
+    if not isinstance(timer, str) or not timer.endswith(".timer") or not contract.worker_programs \
+            or not contract.worker_fence_marker or not contract.scheduler_fence_marker:
+        raise EnvironmentRefused("confinement_not_bound")
+    return MappingProxyType({
+        "units": (timer, timer.removesuffix(".timer") + ".service"),
+        "worker_programs": tuple(contract.worker_programs),
+        "program_prefix": "wpcaregrid-production-",
+        "markers": MappingProxyType({"worker_fence_marker": contract.worker_fence_marker,
+                                     "scheduler_fence_marker": contract.scheduler_fence_marker}),
+    })
+
+
+def production_program_scoped(name: str, scope: Mapping[str, object]) -> bool:
+    base = name.split(":", 1)[-1]
+    stem = re.sub(r"_[0-9]+\Z", "", base)  # numprocs instances: <name>_00, <name>_01, ...
+    return any(item in scope["worker_programs"] or item.startswith(scope["program_prefix"])
+               for item in (base, stem))
 _OBSERVED_FILE_KEYS = frozenset({"sha256", "uid", "gid", "mode", "type", "nlink", "parents_trusted"})
 _OBSERVED_SERVICE_KEYS = frozenset({"unit", "load_state", "active_state", "main_pid", "main_label",
                                     "apparmor_profile_property", "loaded_profile_mode"})
@@ -660,12 +702,75 @@ def _verify_peers(peers: object, services: Mapping, cron_pinned: bool) -> None:
             raise EnvironmentRefused("confinement_observation_invalid")  # masters are root, never www-data
 
 
+def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object, services: object) -> None:
+    """Production queue workers and scheduler must be provably unable to run."""
+    scope = production_job_fence_scope(contract)
+    if not isinstance(fence, Mapping) or set(fence) != _FENCE_KEYS or not isinstance(fence["units"], Mapping) \
+            or not isinstance(fence["supervisor"], Mapping) or not isinstance(fence["markers"], Mapping) \
+            or not isinstance(services, Mapping):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    units = fence["units"]
+    if set(units) != set(scope["units"]):
+        raise EnvironmentRefused("confinement_production_jobs_unverifiable")
+    for unit in scope["units"]:
+        state = units[unit]
+        if not isinstance(state, Mapping) or set(state) != _FENCE_UNIT_KEYS \
+                or not all(isinstance(state[key], str) for key in _FENCE_UNIT_KEYS):
+            raise EnvironmentRefused("confinement_observation_invalid")
+        # masked = linked to /dev/null: nothing (timer, dependency, systemctl start) can start it.
+        if state["load_state"] != "masked" or state["unit_file_state"] != "masked" \
+                or state["active_state"] != "inactive":
+            raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+    supervisor = fence["supervisor"]
+    if set(supervisor) != _FENCE_SUPERVISOR_KEYS or type(supervisor["config_complete"]) is not bool \
+            or type(supervisor["runtime_available"]) is not bool \
+            or not isinstance(supervisor["programs"], (list, tuple)):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    supervisor_service = services.get("jobs-supervisor")
+    supervisor_active = isinstance(supervisor_service, Mapping) and supervisor_service.get("active_state") != "inactive"
+    if supervisor["config_complete"] is not True or (supervisor_active and supervisor["runtime_available"] is not True):
+        raise EnvironmentRefused("confinement_production_jobs_unverifiable")
+    names = set()
+    for program in supervisor["programs"]:
+        if not isinstance(program, Mapping) or set(program) != _FENCE_PROGRAM_KEYS \
+                or not isinstance(program["name"], str) or program["state"] not in _FENCE_PROGRAM_STATES \
+                or type(program["autostart"]) is not bool or program["name"] in names:
+            raise EnvironmentRefused("confinement_observation_invalid")
+        names.add(program["name"])
+        stopped = program["state"] == "STOPPED" or (
+            program["state"] == "SUPERVISOR_INACTIVE" and not supervisor_active
+            and supervisor["runtime_available"] is False)
+        # Absent is preferred; a defined production program must be exactly stopped and never autostart.
+        if not stopped or program["autostart"] is not False:
+            raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+    markers = fence["markers"]
+    if set(markers) != set(scope["markers"]):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    for kind in scope["markers"]:
+        marker = markers[kind]
+        if marker is None:
+            raise EnvironmentRefused("confinement_production_jobs_not_fenced")
+        if not isinstance(marker, Mapping) or set(marker) != _FENCE_MARKER_KEYS \
+                or not all(type(marker[key]) is int for key in ("uid", "gid", "mode", "nlink")):
+            raise EnvironmentRefused("confinement_observation_invalid")
+        if marker["type"] != "regular" or marker["uid"] != 0 or marker["gid"] != 0 or marker["mode"] != 0o600 \
+                or marker["nlink"] != 1 \
+                or marker["sha256"] != hashlib.sha256(fence_marker_bytes(kind)).hexdigest():
+            raise EnvironmentRefused("confinement_production_fence_marker_invalid")
+
+
 def verify_confinement_observation(contract: EnvironmentContract, observation: object) -> None:
     """Refuse unless a root-collected schema-3 observation matches the binding exactly.
 
     ``observation``::
 
         {"schema": 3, "apparmor_enabled": bool,
+         "production_jobs_fence": {
+             "units": {<scheduler .timer>, <twin .service>: {load_state, active_state, unit_file_state}},
+             "supervisor": {config_complete, runtime_available,
+                            programs: [{name, state, autostart}]},   # production-scoped only
+             "markers": {worker_fence_marker, scheduler_fence_marker:
+                         {type, uid, gid, mode, nlink, sha256} | None}},
          "files": {installed_path: {sha256, uid, gid, mode, type, nlink, parents_trusted}},
          "services": {role: {unit, load_state, active_state, main_pid, main_label,
                              apparmor_profile_property, loaded_profile_mode}},
@@ -682,6 +787,12 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     allowed for that class and no descriptor into the other environment's
     private trees. The only unconfined class is the pinned cron shim. Unknown,
     unconfined, complain-mode, mislabelled or incomplete evidence refuses.
+
+    The production jobs fence is checked first: both scheduler units masked and
+    inactive, every production-scoped Supervisor program (by name or by a
+    command/directory under a production tree) exactly STOPPED with
+    ``autostart`` false (or supervisor itself observed inactive), and both
+    root-owned ``0600`` Phase B fence markers with their exact content.
     Passing means the recorded state matches; kernel enforcement is a separate
     live gate.
     """
@@ -697,6 +808,9 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
             or type(observation["schema"]) is not int or observation["schema"] != OBSERVATION_SCHEMA \
             or type(observation["apparmor_enabled"]) is not bool:
         raise EnvironmentRefused("confinement_observation_invalid")
+    # GO-13 keeps background SaaS processing disabled: the production jobs fence is
+    # checked before any confinement evidence and refuses on any missing element.
+    _verify_production_jobs_fenced(contract, observation["production_jobs_fence"], observation["services"])
     if observation["apparmor_enabled"] is not True:
         raise EnvironmentRefused("confinement_apparmor_disabled")
     _verify_files(pin, observation["files"])

@@ -77,6 +77,10 @@ from fixed host interfaces, a schema-3 observation:
 
 ```text
 {schema: 3, apparmor_enabled,
+ production_jobs_fence: {
+   units: {<scheduler_unit .timer>, <twin .service>: {load_state, active_state, unit_file_state}},
+   supervisor: {config_complete, runtime_available, programs: [{name, state, autostart}]},
+   markers: {worker_fence_marker, scheduler_fence_marker: {type, uid, gid, mode, nlink, sha256} | null}},
  files: {path: {sha256, uid, gid, mode, type, nlink, parents_trusted}},
  services: {role: {unit, load_state, active_state, main_pid, main_label,
                    apparmor_profile_property, loaded_profile_mode}},
@@ -85,6 +89,30 @@ from fixed host interfaces, a schema-3 observation:
                   processes: [{pid, starttime, uids, gids, ppid, state, comm, exe, argv0,
                                cmdline_sha256, cgroup, unit, label, fds}]}}
 ```
+
+**Production jobs fence (checked first).** GO-13 keeps background SaaS processing disabled, so
+production queue workers and the scheduler must be provably unable to run. The entrypoint runs
+the whole confinement gate before **every** operation (`preflight`, `verify-install`,
+`authorize`, `stage`, `deploy`), and the fence is the first check inside it; any missing element
+refuses:
+
+* the policy's `scheduler_unit` timer and its twin `.service` both `LoadState=masked`,
+  `UnitFileState=masked`, `ActiveState=inactive` (`systemctl mask` links them to `/dev/null`, so no
+  timer, dependency or `systemctl start` can run them);
+* Supervisor: every production-scoped program — named in `worker_programs`, prefixed
+  `wpcaregrid-production-` (including `group:` and `numprocs` `_NN` instances), or whose
+  configuration mentions `/var/www/wpcaregrid-production` or `/var/lib/wpcaregrid-deploy/production`
+  — is preferably absent; if defined it must be exactly `STOPPED` in `supervisorctl status` with
+  `autostart=false` in its configuration (Supervisor's default `autostart` is true). If
+  `supervisor.service` is inactive, a defined program must still have `autostart=false`. A program
+  defined but not loaded, running without a readable definition, an unreadable/unparseable
+  `/etc/supervisor` configuration, or an unavailable `supervisorctl` while Supervisor runs refuses;
+* both fence markers (`worker_fence_marker`, `scheduler_fence_marker` from the policy) exist as
+  regular, single-link, `root:root 0600` files with the exact Phase B content
+  `schema=1;profile=production;workers=disabled` / `schema=1;profile=production;scheduler=paused`.
+
+Refusal codes: `confinement_production_jobs_not_fenced`, `confinement_production_jobs_unverifiable`,
+`confinement_production_fence_marker_invalid`.
 
 **Same-UID peer inventory.** Every `/proc/<pid>` is read; a process is a peer when any of its
 real, effective, saved or filesystem UID **or GID**, or any supplementary group, is 33, whatever
@@ -137,14 +165,14 @@ holds (fail closed); widen nothing without a reviewed package version.
 <!-- PINS:BEGIN -->
 | Artifact | SHA-256 |
 | --- | --- |
-| `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `b357e2c53ff885ed279803bfd108e3db92078215fda3c256020e1daa92c68768` |
-| `scripts/deployment_backend_v2_1_3.py` | `fc15325123737140179cc921d4874c9543b7c8e5a524d26db3b5341241144cfa` |
+| `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
+| `scripts/deployment_backend_v2_1_3.py` | `52a809d42bb2ead54252053ddd48ae8dcbca756132bcc8d29e863b22ac603b37` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `05d4d12db9705ab2cc42f7b01c78028799fe9d5227e3d7d2342544c56411da66` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `eaf8f73e57f082a32cba1a1d16449f00839f096fb5af9e5baa0bb1e4504772ff` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `dfa4cf86bda8a6626f4341251ea64aa2a199b08c42cce6195f2848816a7ffb44` |
-| `scripts/production_deploy_controller_2_1_3.py` | `40ae01a38040d7561bd4a9ee5e53874085e6a260857c05cf9427b141338f76af` |
-| `scripts/install_production_helper_2_1_3.py` | `2c9d4d91fea66fd62b5dd210757535adc869aa2ccf55b8d5c2637275bb25f53f` |
+| helper artifact digest | `c2ccbf6119bdbb1ff280bb9daadb38c24660040d61d292055c201ccc2c86b2ac` |
+| `scripts/production_deploy_controller_2_1_3.py` | `a91081dbf87864cc13b546097befbefdc6e34207ebeb74523ab9e68ae275fc1b` |
+| `scripts/install_production_helper_2_1_3.py` | `8156481b783001db573c9491a388f05744581a0a0d5c0b9e92295e30be33595b` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.
@@ -236,8 +264,8 @@ by `deploy` is only a claim the helper re-verifies.
   preflight hold while any of its processes run; remove that membership on the host (separate GO).
 * Any transient www-data child outside the class table (for example PHP `mail()` running
   `sendmail` from a legacy pool) makes preflight hold until it exits; retry, do not widen.
-* B's own `deployment_environment_contract_2_1_3.py` (same path, `97b8a4b`) still uses schema-1
-  observations, `deploy_user = "deploy-production"` and a production-jobs fence. The two files
-  must be reconciled into one before either merges; this helper requires the root-console /
-  `deploy` transfer model above. B's production-jobs fence (masked production scheduler, stopped
-  production Supervisor programs, fence markers) is not yet enforced by this helper.
+* Contract convergence: this `scripts/deployment_environment_contract_2_1_3.py` (schema-3
+  observation, production only) is the **canonical single shared module** for the combined
+  GO-13 source integration. Workstream B's same-path file (`97b8a4b`: schema-1 observation,
+  `deploy_user = "deploy-production"`) is superseded by it; B keeps the package, profiles and
+  acceptance tooling and supplies only the final `ConfinementPin`.

@@ -177,10 +177,25 @@ def observation(pin=PIN):
         if active:
             processes += [peer(master + 1, unit=b.unit, label=label, exe=exe),
                           peer(master + 2, unit=b.unit, label=label, exe=exe)]
-    return {"schema": 3, "apparmor_enabled": True, "files": files, "services": services,
+    return {"schema": 3, "apparmor_enabled": True, "production_jobs_fence": fence(),
+            "files": files, "services": services,
             "www_data_cron": {"crontab_sha256": None, "cron_d_entries": 0, "wrapper": None,
                               "profile_mode": "enforce"},
             "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes}}
+
+
+FENCE_UNITS = ("wpcaregrid-production-scheduler.timer", "wpcaregrid-production-scheduler.service")
+MARKER_KINDS = ("worker_fence_marker", "scheduler_fence_marker")
+
+
+def fence():
+    return {
+        "units": {unit: {"load_state": "masked", "active_state": "inactive", "unit_file_state": "masked"}
+                  for unit in FENCE_UNITS},
+        "supervisor": {"config_complete": True, "runtime_available": True, "programs": []},
+        "markers": {kind: {"type": "regular", "uid": 0, "gid": 0, "mode": 0o600, "nlink": 1,
+                           "sha256": sha256(CONTRACT.fence_marker_bytes(kind))} for kind in MARKER_KINDS},
+    }
 
 
 def with_peer(data, item):
@@ -503,6 +518,75 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(self._refusal(lambda d, change=change: pinned_cron(d)["www_data_cron"].update(
                     change), pinned_env), code)
 
+    def test_production_jobs_fence_is_required_and_checked_first(self):
+        fence_of = lambda d: d["production_jobs_fence"]  # noqa: E731
+        stopped = {"name": "wpcaregrid-production-default", "state": "STOPPED", "autostart": False}
+        cases = {
+            "confinement_observation_invalid": lambda d: d.pop("production_jobs_fence"),
+            "confinement_production_jobs_unverifiable": lambda d: fence_of(d)["units"].pop(FENCE_UNITS[1]),
+            "confinement_production_jobs_not_fenced": lambda d: fence_of(d)["units"][FENCE_UNITS[0]].update(
+                load_state="loaded", unit_file_state="enabled"),
+        }
+        for code, mutate in cases.items():
+            with self.subTest(code=code):
+                self.assertEqual(self._refusal(mutate), code)
+        unit_cases = ({"active_state": "active"}, {"unit_file_state": "disabled"}, {"load_state": "not-found"},
+                      {"active_state": "activating"})
+        for unit in FENCE_UNITS:
+            for change in unit_cases:
+                with self.subTest(unit=unit, change=change):
+                    self.assertEqual(self._refusal(lambda d, u=unit, c=change: fence_of(d)["units"][u].update(c)),
+                                     "confinement_production_jobs_not_fenced")
+        program_cases = (
+            (dict(stopped, state="RUNNING"), "confinement_production_jobs_not_fenced"),
+            (dict(stopped, state="BACKOFF"), "confinement_production_jobs_not_fenced"),
+            (dict(stopped, state="NOT_LOADED"), "confinement_production_jobs_not_fenced"),
+            (dict(stopped, autostart=True), "confinement_production_jobs_not_fenced"),
+            (dict(stopped, state="SUPERVISOR_INACTIVE"), "confinement_production_jobs_not_fenced"),
+            (dict(stopped, state="weird"), "confinement_observation_invalid"),
+        )
+        for program, code in program_cases:
+            with self.subTest(program=program):
+                self.assertEqual(self._refusal(lambda d, p=program: fence_of(d)["supervisor"]["programs"].append(p)),
+                                 code)
+        self.assertEqual(self._refusal(lambda d: fence_of(d)["supervisor"].update(config_complete=False)),
+                         "confinement_production_jobs_unverifiable")
+        self.assertEqual(self._refusal(lambda d: fence_of(d)["supervisor"].update(runtime_available=False)),
+                         "confinement_production_jobs_unverifiable")
+        for kind in MARKER_KINDS:
+            for change, code in ((None, "confinement_production_jobs_not_fenced"),
+                                 ({"uid": TRANSFER_UID}, "confinement_production_fence_marker_invalid"),
+                                 ({"gid": 33}, "confinement_production_fence_marker_invalid"),
+                                 ({"mode": 0o644}, "confinement_production_fence_marker_invalid"),
+                                 ({"type": "other"}, "confinement_production_fence_marker_invalid"),
+                                 ({"nlink": 2}, "confinement_production_fence_marker_invalid"),
+                                 ({"sha256": sha256(b"schema=1;profile=staging-next;workers=disabled\n")},
+                                  "confinement_production_fence_marker_invalid")):
+                with self.subTest(kind=kind, change=change):
+                    if change is None:
+                        mutate = lambda d, k=kind: fence_of(d)["markers"].update({k: None})  # noqa: E731
+                    else:
+                        mutate = lambda d, k=kind, c=change: fence_of(d)["markers"][k].update(c)  # noqa: E731
+                    self.assertEqual(self._refusal(mutate), code)
+        # The fence is evaluated before any confinement evidence.
+        self.assertEqual(self._refusal(lambda d: (d.update(apparmor_enabled=False),
+                                                  fence_of(d)["markers"].update(worker_fence_marker=None))),
+                         "confinement_production_jobs_not_fenced")
+
+    def test_exactly_stopped_non_autostarting_programs_and_inactive_supervisor_pass(self):
+        data = observation()
+        data["production_jobs_fence"]["supervisor"]["programs"] = [
+            {"name": "wpcaregrid-production-default", "state": "STOPPED", "autostart": False},
+            {"name": "workers:wpcaregrid-production-backups_00", "state": "STOPPED", "autostart": False}]
+        self._passes(data)
+        data = observation()
+        data["services"]["jobs-supervisor"].update(active_state="inactive", main_pid=0, main_label="")
+        data["same_uid_peers"]["processes"] = [p for p in data["same_uid_peers"]["processes"]
+                                               if p["unit"] != "supervisor.service"]
+        data["production_jobs_fence"]["supervisor"].update(runtime_available=False, programs=[
+            {"name": "wpcaregrid-production-default", "state": "SUPERVISOR_INACTIVE", "autostart": False}])
+        self._passes(data)
+
     def test_unbound_contract_refuses_observation(self):
         env = replace(resolved(), php_fpm_confinement=None)
         with patch.object(CONTRACT, "CONFINEMENT_PIN", PIN), \
@@ -810,6 +894,23 @@ class ConfinementCollectorTests(unittest.TestCase):
         (self.tmp / "cron.d").mkdir()
         (self.tmp / "cron.d" / "php").write_text("09,39 * * * * root [ -x /usr/lib/php/sessionclean ]\n")
         (self.tmp / "crontab").write_text("SHELL=/bin/sh\n17 * * * * root cd / && run-parts --report /etc/cron.hourly\n")
+        for unit in FENCE_UNITS:
+            self.units[unit] = {"Id": unit, "LoadState": "masked", "ActiveState": "inactive", "UnitFileState": "masked"}
+        self.markers = self.tmp / "markers"
+        for kind, path in (("worker_fence_marker", "/var/lib/wpcaregrid-deploy/production/state/workers-disabled"),
+                           ("scheduler_fence_marker", "/var/lib/wpcaregrid-deploy/production/state/scheduler-paused")):
+            target = self.markers / path.lstrip("/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(CONTRACT.fence_marker_bytes(kind))
+            target.chmod(0o600)
+        self.supervisor = self.tmp / "supervisor"
+        (self.supervisor / "conf.d").mkdir(parents=True)
+        (self.supervisor / "supervisord.conf").write_text(
+            "[supervisord]\nlogfile=/var/log/supervisor/supervisord.log\n[include]\nfiles = /etc/supervisor/conf.d/*.conf\n")
+        (self.supervisor / "conf.d" / "staging.conf").write_text(
+            "[program:wpcaregrid-staging-next-default]\ncommand=/usr/bin/php8.5 /var/www/wpcaregrid-staging-new/artisan"
+            " queue:work\nuser=www-data\nautostart=true\n")
+        self.supervisorctl = (3, b"wpcaregrid-staging-next-default   RUNNING   pid 2041, uptime 1:00:00\n")
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -852,14 +953,21 @@ class ConfinementCollectorTests(unittest.TestCase):
                 patch.object(BACKEND, "CONFINEMENT_CRON_D", self.tmp / "cron.d"), \
                 patch.object(BACKEND, "CONFINEMENT_CRON_WRAPPER", self.tmp / "wrapper"), \
                 patch.object(BACKEND, "_run_fixed", side_effect=run_fixed), \
+                patch.object(BACKEND, "FENCE_MARKER_ROOT", self.markers), \
+                patch.object(BACKEND, "SUPERVISOR_CONFIG", self.supervisor / "supervisord.conf"), \
+                patch.object(BACKEND, "SUPERVISOR_CONF_D", self.supervisor / "conf.d"), \
+                patch.object(BACKEND, "_run_status", side_effect=lambda argv: self.supervisorctl), \
                 patch.object(BACKEND, "_observe_confinement_file",
                              side_effect=lambda p: real_observe(self.files_root / str(p).lstrip("/"))):
-            return BACKEND._collect_php_fpm_confinement_observation(None)
+            return BACKEND._collect_php_fpm_confinement_observation(resolved(self.pin))
 
     def verify(self, data, crontab=None):
         # Synthetic files are owned by the test user under /tmp; model root ownership.
         for record in data["files"].values():
             record.update(uid=0, gid=0, parents_trusted=True)
+        for record in data["production_jobs_fence"]["markers"].values():
+            if record is not None:
+                record.update(uid=0, gid=0)
         env = resolved(self.pin, php_fpm_confinement=confinement_policy(self.pin, crontab))
         with patch.object(CONTRACT, "CONFINEMENT_PIN", self.pin):
             CONTRACT.verify_confinement_observation(env, data)
@@ -887,6 +995,74 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.assertEqual(data["www_data_cron"], {"crontab_sha256": None, "cron_d_entries": 0, "wrapper": None,
                                                  "profile_mode": "enforce"})
         self.verify(data)
+
+    def test_collected_production_jobs_fence(self):
+        fence_data = self.collect()["production_jobs_fence"]
+        self.assertEqual(set(fence_data["units"]), set(FENCE_UNITS))
+        self.assertEqual(fence_data["supervisor"], {"config_complete": True, "runtime_available": True,
+                                                    "programs": []})
+        self.assertEqual(fence_data["markers"]["worker_fence_marker"]["sha256"],
+                         sha256(CONTRACT.fence_marker_bytes("worker_fence_marker")))
+
+    def test_unmasked_or_running_scheduler_is_refused(self):
+        self.units[FENCE_UNITS[0]].update(LoadState="loaded", UnitFileState="enabled", ActiveState="active")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")
+        self.units[FENCE_UNITS[0]].update(LoadState="masked", UnitFileState="masked", ActiveState="inactive")
+        self.units[FENCE_UNITS[1]].pop("UnitFileState")
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "confinement_production_jobs_unverifiable"):
+            self.collect()
+
+    def test_missing_or_tampered_fence_markers_are_refused(self):
+        worker = self.markers / "var/lib/wpcaregrid-deploy/production/state/workers-disabled"
+        worker.unlink()
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")
+        worker.symlink_to(self.tmp / "enabled")
+        self.assertEqual(self.refusal(), "confinement_production_fence_marker_invalid")
+        worker.unlink()
+        worker.write_bytes(b"schema=1;profile=production;workers=enabled\n")
+        worker.chmod(0o600)
+        self.assertEqual(self.refusal(), "confinement_production_fence_marker_invalid")
+        worker.write_bytes(CONTRACT.fence_marker_bytes("worker_fence_marker"))
+        worker.chmod(0o644)
+        self.assertEqual(self.refusal(), "confinement_production_fence_marker_invalid")
+
+    def test_production_supervisor_programs_must_be_exactly_stopped_and_not_autostarting(self):
+        conf = self.supervisor / "conf.d" / "production.conf"
+        conf.write_text("[program:wpcaregrid-production-default]\ncommand=/usr/bin/php8.4 artisan queue:work\n"
+                        "autostart=false\nnumprocs=2\nprocess_name=%(program_name)s_%(process_num)02d\n")
+        self.supervisorctl = (3, b"wpcaregrid-production-default_00 STOPPED Not started\n"
+                                 b"wpcaregrid-production-default_01 STOPPED Not started\n")
+        data = self.collect()
+        self.assertEqual([p["name"] for p in data["production_jobs_fence"]["supervisor"]["programs"]],
+                         ["wpcaregrid-production-default_00", "wpcaregrid-production-default_01"])
+        self.verify(data)
+        self.supervisorctl = (0, b"wpcaregrid-production-default_00 RUNNING pid 1, uptime 0:01:00\n"
+                                 b"wpcaregrid-production-default_01 STOPPED Not started\n")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")
+        conf.write_text("[program:wpcaregrid-production-default]\ncommand=/usr/bin/php8.4 artisan queue:work\n")
+        self.supervisorctl = (3, b"wpcaregrid-production-default STOPPED Not started\n")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")  # autostart defaults to true
+        conf.write_text("[program:wpcaregrid-production-default]\ncommand=x\nautostart=false\n")
+        self.supervisorctl = (3, b"")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")  # defined but not loaded
+
+    def test_production_program_is_found_by_command_path_not_only_name(self):
+        (self.supervisor / "conf.d" / "laravel.conf").write_text(
+            "[program:laravel-worker]\ncommand=/usr/bin/php8.4 /var/www/wpcaregrid-production/current/artisan"
+            " queue:work\nautostart=false\n")
+        self.supervisorctl = (0, b"laravel-worker RUNNING pid 9, uptime 0:00:10\n")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")
+
+    def test_runtime_only_production_program_and_unverifiable_supervisor_are_refused(self):
+        self.supervisorctl = (3, b"wpcaregrid-production-backups STOPPED Not started\n")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_not_fenced")  # no definition: autostart unknown
+        self.supervisorctl = None
+        self.assertEqual(self.refusal(), "confinement_production_jobs_unverifiable")
+        self.supervisorctl = (2, b"")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_unverifiable")
+        self.supervisorctl = (3, b"")
+        (self.supervisor / "conf.d" / "broken.conf").write_text("[program:x\ncommand=y\n")
+        self.assertEqual(self.refusal(), "confinement_production_jobs_unverifiable")
 
     def test_reproduced_unconfined_uid33_peers_are_inventoried_and_refused(self):
         cases = {
@@ -1086,6 +1262,24 @@ class EntrypointTests(unittest.TestCase):
             self.assertEqual(ENTRY.main(["preflight"]), 3)
             load.assert_not_called()
         self.assertEqual(stderr, ["DEPLOYMENT=HOLD;CODE=delegated_invocation_refused\n"])
+
+    def test_fence_and_confinement_gate_runs_before_every_operation(self):
+        for argv in (["preflight"], ["verify-install"], ["authorize", "a" * 40], ["stage", "a" * 40, "b" * 64],
+                     ["deploy", "a" * 40, "b" * 64]):
+            backend = SimpleNamespace(
+                DeployRefused=BACKEND.DeployRefused,
+                _verify_php_fpm_confinement=lambda profile: (_ for _ in ()).throw(
+                    BACKEND.DeployRefused("confinement_production_jobs_not_fenced")),
+                preflight=None, verify_helper_installation=None, authorize_release=None,
+                stage_artifact=None, deploy_release=None)
+            stderr = []
+            with self.subTest(argv=argv), \
+                    patch.object(ENTRY, "_require_root_console"), \
+                    patch.object(ENTRY, "_load_profile", return_value=(backend, SimpleNamespace(),
+                                                                       *ENTRY._parse_operation(argv))), \
+                    patch.object(ENTRY.sys.stderr, "write", side_effect=stderr.append):
+                self.assertEqual(ENTRY.main(argv), 3)
+                self.assertEqual(stderr, ["DEPLOYMENT=HOLD;CODE=confinement_production_jobs_not_fenced\n"])
 
     def test_operation_parsing_and_stale_shapes(self):
         self.assertEqual(ENTRY._parse_operation(["authorize", "a" * 40]), ("authorize", "a" * 40, None))

@@ -26,6 +26,7 @@ See docs/PRODUCTION_HELPER_INSTALL_2_1_3.md.
 
 from __future__ import annotations
 
+import configparser
 import fcntl
 import base64
 import fnmatch
@@ -127,6 +128,10 @@ CONFINEMENT_CRONTAB = Path("/var/spool/cron/crontabs/www-data")
 CONFINEMENT_SYSTEM_CRONTAB = Path("/etc/crontab")
 CONFINEMENT_CRON_D = Path("/etc/cron.d")
 CONFINEMENT_CRON_WRAPPER = Path("/usr/local/bin/wpcaregrid-scheduler")
+SUPERVISOR_CONFIG = Path("/etc/supervisor/supervisord.conf")
+SUPERVISOR_CONF_D = Path("/etc/supervisor/conf.d")
+# Prefix for fence marker paths (patched only by synthetic tests).
+FENCE_MARKER_ROOT = Path("/")
 PHASE_B_POLICY_PATH = Path("/etc/wpcaregrid-deploy/profiles/staging-next-phase-b-2.0.0.json")
 PROFILE = "staging-next"
 DATABASE = "wpcg_staging_next"
@@ -3352,10 +3357,156 @@ def _observe_www_data_cron(loaded: Mapping[str, str]) -> Mapping[str, object]:
             "profile_mode": loaded.get(module.JOBS_PROFILE, "unloaded")}
 
 
+def _systemd_unit_state(unit: str) -> Mapping[str, str]:
+    raw = _run_fixed(["/bin/systemctl", "show", "--no-pager",
+                      "--property=Id,LoadState,ActiveState,UnitFileState", "--", unit], timeout=10, maximum=4096)
+    properties: dict[str, str] = {}
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError:
+        raise DeployRefused("confinement_production_jobs_unverifiable") from None
+    for line in lines:
+        if not line:
+            continue
+        _require("=" in line, "confinement_production_jobs_unverifiable")
+        key, value = line.split("=", 1)
+        _require(key not in properties, "confinement_production_jobs_unverifiable")
+        properties[key] = value
+    _require(set(properties) == {"Id", "LoadState", "ActiveState", "UnitFileState"} and properties["Id"] == unit,
+             "confinement_production_jobs_unverifiable")
+    return {"load_state": properties["LoadState"], "active_state": properties["ActiveState"],
+            "unit_file_state": properties["UnitFileState"]}
+
+
+def _run_status(argv: list[str], *, maximum: int = 65536) -> tuple[int, bytes] | None:
+    """Fixed read-only status command whose non-zero exit is meaningful; None if unavailable."""
+    try:
+        result = subprocess.run(argv, env={"PATH": "/usr/bin:/bin", "LANG": "C"}, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if len(result.stdout) > maximum:
+        return None
+    return result.returncode, result.stdout
+
+
+def _supervisor_autostart(value: str | None) -> bool:
+    if value is None:
+        return True  # Supervisor's default
+    normalized = value.strip().lower()
+    if normalized in {"false", "no", "off", "0"}:
+        return False
+    return True  # true or anything unrecognised: never treated as fenced
+
+
+def _observe_supervisor_programs(scope: Mapping[str, object], supervisor_active: bool) -> Mapping[str, object]:
+    module = _ENVIRONMENT_MODULE
+    config_complete = True
+    configured: dict[str, bool] = {}
+    try:
+        sources = [SUPERVISOR_CONFIG] + sorted(SUPERVISOR_CONF_D / name for name in os.listdir(SUPERVISOR_CONF_D))
+    except FileNotFoundError:
+        sources = [SUPERVISOR_CONFIG]
+    except OSError:
+        sources, config_complete = [], False
+    for source in sources:
+        try:
+            text = _read_proc_bytes(source, maximum=1_000_000).decode("utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError, _PeerUnreadable):
+            config_complete = False
+            continue
+        parser = configparser.RawConfigParser(strict=True, interpolation=None, inline_comment_prefixes=(";",))
+        try:
+            parser.read_string(text, source=str(source))
+            sections = [(section, dict(parser.items(section))) for section in parser.sections()]
+        except configparser.Error:
+            config_complete = False
+            continue
+        for section, values in sections:
+            kind, _, name = section.partition(":")
+            if kind not in {"program", "fcgi-program", "eventlistener"} or not name:
+                continue
+            scoped = module.production_program_scoped(name, scope) or any(
+                root in value for value in values.values() for root in module.PRODUCTION_PRIVATE_ROOTS)
+            if not scoped:
+                continue
+            if name in configured:
+                config_complete = False  # ambiguous duplicate definition
+            configured[name] = _supervisor_autostart(values.get("autostart"))
+    runtime: dict[str, str] = {}
+    runtime_available = False
+    if supervisor_active:
+        status = _run_status(["/usr/bin/supervisorctl", "status"])
+        if status is not None and status[0] in {0, 3}:
+            runtime_available = True
+            try:
+                for line in status[1].decode("utf-8").splitlines():
+                    fields = line.split()
+                    if not fields:
+                        continue
+                    if len(fields) < 2 or fields[0] in runtime:
+                        runtime_available = False
+                        break
+                    runtime[fields[0]] = fields[1] if fields[1] in module._FENCE_PROGRAM_STATES else "UNKNOWN"
+            except UnicodeError:
+                runtime_available = False
+    programs = []
+    covered: set[str] = set()
+    for name, autostart in sorted(configured.items()):
+        if not supervisor_active:
+            programs.append({"name": name, "state": "SUPERVISOR_INACTIVE", "autostart": autostart})
+            continue
+        matches = [(rname, state) for rname, state in sorted(runtime.items())
+                   if re.fullmatch(re.escape(name) + r"(_[0-9]+)?", rname.split(":", 1)[-1])]
+        if not matches:
+            programs.append({"name": name, "state": "NOT_LOADED", "autostart": autostart})
+        for rname, state in matches:
+            covered.add(rname)
+            programs.append({"name": rname, "state": state, "autostart": autostart})
+    for rname, state in sorted(runtime.items()):
+        if rname not in covered and module.production_program_scoped(rname, scope):
+            # Running without a readable definition: autostart cannot be proven false.
+            programs.append({"name": rname, "state": state, "autostart": True})
+    return {"config_complete": config_complete, "runtime_available": runtime_available, "programs": programs}
+
+
+def _observe_fence_marker(raw_path: str) -> Mapping[str, object] | None:
+    path = FENCE_MARKER_ROOT / raw_path.lstrip("/")
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise DeployRefused("confinement_production_jobs_unverifiable") from None
+    record = {"type": "regular" if stat.S_ISREG(info.st_mode) else "other", "uid": info.st_uid,
+              "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode), "nlink": info.st_nlink, "sha256": ""}
+    if stat.S_ISREG(info.st_mode):
+        try:
+            record["sha256"] = hashlib.sha256(_read_proc_bytes(path, maximum=256)).hexdigest()
+        except (OSError, _PeerUnreadable):
+            raise DeployRefused("confinement_production_jobs_unverifiable") from None
+    return record
+
+
+def _observe_production_jobs_fence(contract, supervisor_active: bool) -> Mapping[str, object]:
+    module = _ENVIRONMENT_MODULE
+    try:
+        scope = module.production_job_fence_scope(contract)
+    except EnvironmentRefused:
+        raise DeployRefused("confinement_production_jobs_unverifiable") from None
+    return {"units": {unit: _systemd_unit_state(unit) for unit in scope["units"]},
+            "supervisor": _observe_supervisor_programs(scope, supervisor_active),
+            "markers": {kind: _observe_fence_marker(path) for kind, path in scope["markers"].items()}}
+
+
 def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
     """Collect, as root, the schema-3 evidence verified by the 2.1.3 contract.
 
-    Reads only fixed host interfaces: the compiled confinement file paths, fixed
+    Reads only fixed host interfaces: the production jobs fence (scheduler unit
+    states, Supervisor configuration and ``supervisorctl status``, fence
+    markers), the compiled confinement file paths, fixed
     ``systemctl show`` properties of the bound units, every ``/proc/<pid>``
     whose UID or GID is www-data, the loaded AppArmor profile list and the
     www-data cron state. It never loads a profile or changes a unit.
@@ -3392,7 +3543,10 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
             "apparmor_profile_property": properties["AppArmorProfile"],
             "loaded_profile_mode": loaded.get(binding.apparmor_profile, "unloaded"),
         }
-    return {"schema": 3, "apparmor_enabled": enabled, "files": files, "services": services,
+    supervisor_active = services["jobs-supervisor"]["active_state"] != "inactive"
+    return {"schema": 3, "apparmor_enabled": enabled,
+            "production_jobs_fence": _observe_production_jobs_fence(contract, supervisor_active),
+            "files": files, "services": services,
             "www_data_cron": _observe_www_data_cron(loaded), "same_uid_peers": _inventory_same_uid_peers()}
 
 
