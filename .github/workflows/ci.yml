@@ -97,6 +97,13 @@ jobs:
       - name: Compile generated Production G1 profiles without kernel load or cache
         run: python3 scripts/tests/production-g1-apparmor-parser-test.py
 
+      - name: GO-13 PHP-FPM confinement artifact tests and real-parser compile
+        env:
+          PHP_FPM_CONFINEMENT_REQUIRE_PARSER: "1"
+          PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY: "1"
+          PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY: "1"
+        run: python3 scripts/tests/php-fpm-confinement-test.py
+
       - name: Staging diagnostics output and policy tests
         run: |
           python3 scripts/tests/staging-diagnostics-output-test.py

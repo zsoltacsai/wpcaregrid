@@ -1,0 +1,79 @@
+# wpcaregrid-php-fpm-confinement 1.0.3 -- production PHP-FPM (PHP 8.4)
+# Install as /etc/apparmor.d/wpcaregrid-php-fpm-production. Selected only by
+# AppArmorProfile= in wpcaregrid-production-php8.4-fpm.service; no attachment path.
+# Allowlist profile: everything not listed is denied. The pool shares the
+# www-data UID with other pools, so this profile (plus the unit's mount
+# namespace) is the only file separation between them.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-php-fpm-production flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  # Executables: the FPM binary (also used for the --test pre-check) and kill (reload).
+  /usr/sbin/php-fpm8.4 mrix,
+  /usr/bin/kill ix,
+
+  # PHP runtime, distribution configuration and the production-only FPM configuration.
+  /usr/lib/php/ r,
+  /usr/lib/php/** mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /etc/php/8.4/fpm/{,**} r,
+  /etc/php/8.4/mods-available/{,**} r,
+  /etc/php/8.4/fpm-wpcaregrid-production/{,**} r,
+  /usr/share/zoneinfo/{,**} r,
+  /etc/localtime r,
+
+  # Application: release tree is read-only. `current` is a symlink; AppArmor
+  # mediates the resolved path, so only the resolved release path matters.
+  /var/www/wpcaregrid-production/{,**} r,
+  /var/lib/wpcaregrid-deploy/production/shared/.env r,
+  /var/lib/wpcaregrid-deploy/production/shared/vendor/{,**} r,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/{,**} rwk,
+
+  # Own FastCGI socket only; log written by the master only.
+  /run/php/ r,
+  /run/php/wpcaregrid-production-php8.4-fpm.sock rwk,
+  /run/systemd/notify w,
+  /var/log/wpcaregrid-production/ r,
+  /var/log/wpcaregrid-production/php-fpm.log w,
+
+  # Unit-private /tmp (PrivateTmp=yes) and the minimum /proc needed by PHP 8.3+
+  # call-stack detection. Cross-process reads are blocked by `deny ptrace` and
+  # the common deny rules, not by this allow rule.
+  /tmp/{,**} rwk,
+  /proc/[0-9]*/maps r,
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  network netlink raw,
+
+  # Signals only inside this profile, plus systemd (unconfined) for stop/reload.
+  signal (send, receive) peer=wpcaregrid-php-fpm-production,
+  signal (receive) peer=unconfined,
+
+  # Explicit audited denials for the other environments sharing www-data.
+  audit deny /var/www/wpcaregrid-staging-new/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-staging-new/{,**} x,
+  audit deny /var/www/wpcaregrid/{,**} rwklm,
+  audit deny /var/www/wpcaregrid/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} x,
+  audit deny /var/lib/wpcaregrid/{,**} rwklm,
+  audit deny /run/php/php[0-9].[0-9]-fpm.{sock,pid} rwklm,
+  audit deny /run/php/php-fpm.sock rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny /var/lib/wpcaregrid-deploy/*/state/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+  audit deny /run/mysqld/{,**} rwklm,
+}

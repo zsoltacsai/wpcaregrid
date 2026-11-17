@@ -1,0 +1,41 @@
+# wpcaregrid-php-fpm-confinement 1.0.5 -- existing shared PHP 8.4 FPM pool (php8.4-fpm.service)
+# Install as /etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy. Selected only by the
+# AppArmorProfile= drop-in for php8.4-fpm.service; no attachment path.
+# DENY-OVERLAY, NOT AN ALLOWLIST. This pool serves legacy staging and sibling
+# vhosts whose paths this repository does not enumerate, so it keeps its existing
+# file, network and capability behavior and only gains the cross-environment
+# denials. Without this overlay an unconfined www-data process would still be
+# able to read the production shared .env and storage, making the production
+# profile one-directional. Weaker than the allowlist profiles by design.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-php-fpm-staging-legacy flags=(attach_disconnected) {
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  capability,
+  network,
+  /** rwlkmix,
+  signal,
+  unix,
+
+  audit deny /var/www/wpcaregrid-production/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-production/{,**} x,
+  audit deny /var/www/wpcaregrid-staging-new/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-staging-new/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} x,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/wpcaregrid-production-php[0-9].[0-9]-fpm.{sock,pid} rwklm,
+  audit deny /run/php/php8.5-fpm.{sock,pid} rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny /var/lib/wpcaregrid-deploy/*/state/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+  audit deny /run/mysqld/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-build,
+}

@@ -1,0 +1,78 @@
+# wpcaregrid-php-fpm-confinement 1.0.2 -- production deploy CLI (PHP 8.4 artisan/probe, www-data)
+# Install as /etc/apparmor.d/wpcaregrid-php-cli-production-deploy. Selected ONLY by the production
+# root-console helper, per command, as
+#   runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy -- /usr/bin/php8.4 ...
+# It is not bound to any systemd unit, has no drop-in and no exec-path attachment: each CLI run is a
+# short-lived root-console child, never a service. The production FPM profile is deliberately NOT widened
+# for this; this is a separate, enforce-attached profile on the same www-data UID so it can be proven in
+# complete peer inventories (label "wpcaregrid-php-cli-production-deploy (enforce)", exe /usr/bin/php8.4).
+# Exactly the helper's needs and nothing more:
+#   * run /usr/bin/php8.4 only (no shell, no other binary, no other PHP);
+#   * read the production release tree, shared vendor, shared .env and release bootstrap/cache;
+#   * write only release bootstrap/cache (package:discover, config:cache) and shared storage;
+#   * TCP to the database (AppArmor cannot restrict ports: credentials separate databases) and no other family;
+#   * deny every staging tree, the control plane, deploy state, backups, every other credential and all sockets.
+# The helper's other commands (including the Phase B runner, once moved to /usr/bin/php8.4) run under this
+# profile too. The exact paths are assumptions confirmed in complain mode; anything unlisted fails closed.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-php-cli-production-deploy flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  /usr/bin/php8.4 mrix,
+  /usr/lib/php/{,**} mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /etc/php/8.4/{cli,mods-available}/{,**} r,
+  /usr/share/zoneinfo/{,**} r,
+  /etc/localtime r,
+  /etc/nsswitch.conf r,
+  /etc/hosts r,
+  /etc/host.conf r,
+  /proc/[0-9]*/maps r,
+
+  # Production application, read-only except the two approved write locations below.
+  /var/www/wpcaregrid-production/releases/{,**} r,
+  /var/lib/wpcaregrid-deploy/production/shared/.env r,
+  /var/lib/wpcaregrid-deploy/production/shared/vendor/{,**} r,
+  /var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/{,**} rwk,
+
+  # Database over TCP only: connecting IPv4 stream sockets. No IPv6, datagram, unix, raw or netlink family, and
+  # no bind/listen/accept (the process must not be able to serve). AppArmor cannot restrict the destination
+  # address or port: any TCP address is reachable, so credentials (not this rule) separate databases, and an
+  # egress rule for uid 33 is a separate host-firewall decision. Fine-grained access rules need a kernel with
+  # network access mediation; the live probe's network checks prove it on the host and fail closed otherwise.
+  network (create, connect, shutdown, send, receive, getattr, getopt, setopt) inet stream,
+  audit deny network (bind, listen, accept) inet stream,
+  audit deny network inet6,
+  audit deny network inet dgram,
+  audit deny network unix,
+  audit deny network netlink,
+  audit deny userns,
+
+  signal (send, receive) peer=wpcaregrid-php-cli-production-deploy,
+  signal (receive) peer=unconfined,
+
+  # Explicit audited denials: every other environment, state and backups, shells and other binaries.
+  audit deny /var/www/wpcaregrid-staging-new/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-staging-new/{,**} x,
+  audit deny /var/www/wpcaregrid/{,**} rwklm,
+  audit deny /var/www/wpcaregrid/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} x,
+  audit deny /var/lib/wpcaregrid/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/production/state/{,**} rwklm,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/{,**} rwklm,
+  # (python is not listed: it is default-denied here, and the live probe's derived profile must be able to grant it)
+  audit deny /{usr/,}{bin,sbin}/{dash,bash,sh,perl*,curl,wget,nc,ncat,socat,env,id,php,php8.[0-35-9],php-fpm*} x,
+  audit deny /var/www/wpcaregrid-production/releases/*/{app,config,routes,database,resources,vendor}/{,**} w,
+  audit deny /var/www/wpcaregrid-production/releases/*/{.env*,artisan,composer.*} w,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+}

@@ -1,0 +1,67 @@
+# wpcaregrid-php-fpm-confinement 1.0.5 -- rules shared by every confined PHP-FPM profile.
+# Install as /etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common.
+# Only deny rules live here. A deny always beats an allow, so no profile that
+# includes this file can re-grant these paths or operations.
+# Source artifact: not installed or loaded by the repository.
+
+  # Process inspection and tracing. All pools share the www-data UID, so UID
+  # separation gives no protection; ptrace mediation gates cross-process reads
+  # of /proc/<pid>/{environ,mem,maps,fd,...} and process_vm_readv().
+  audit deny ptrace,
+  audit deny capability sys_ptrace,
+  deny capability sys_admin,
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability sys_boot,
+  deny capability net_admin,
+  deny capability net_raw,
+  deny capability mac_admin,
+  deny capability mac_override,
+  deny mount,
+  deny umount,
+  deny remount,
+  deny pivot_root,
+  deny dbus,
+  deny network inet raw,
+  deny network inet6 raw,
+  deny network packet,
+
+  # Abstract-namespace unix sockets bypass every path rule above and are not
+  # separated by systemd. Connecting to, or listening on, any abstract address
+  # is denied; FPM, the journal and systemd notify use path sockets.
+  audit deny unix (connect, send, receive) peer=(addr=@**),
+  audit deny unix (bind, listen, accept) addr=@**,
+
+  # /proc entries that are readable by any same-UID process without a ptrace check.
+  audit deny /proc/[0-9]*/cmdline r,
+  audit deny /proc/[0-9]*/environ r,
+  audit deny /proc/[0-9]*/mem rw,
+  audit deny /proc/[0-9]*/{fd,fdinfo,ns,task}/{,**} rw,
+  audit deny /proc/[0-9]*/{cwd,root,exe} rwklm,
+  audit deny /proc/sysrq-trigger rwklm,
+  audit deny /proc/kcore rwklm,
+  audit deny /proc/sys/** w,
+
+  # Control plane, deploy state, credentials and backups. No FPM pool may read
+  # these, including its own environment's.
+  audit deny /etc/wpcaregrid-deploy/{,**} rwklm,
+  audit deny /etc/wpcaregrid-deploy/{,**} x,
+  audit deny /home/{,**} rwklm,
+  audit deny /home/{,**} x,
+  audit deny /root/{,**} rwklm,
+  audit deny /root/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/*/{incoming,inbox,receipts,database-backups}/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/*/{incoming,inbox,receipts,database-backups}/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/*/shared/** x,
+  audit deny /etc/mysql/{,**} rwklm,
+  audit deny /var/lib/mysql*/{,**} rwklm,
+  # (/run/mysqld is denied in each profile that includes this file, not here: the production deploy CLI must be able to
+  #  allow exactly one MySQL socket, and a deny here would override that allow.)
+  audit deny /etc/shadow* rwklm,
+  audit deny /etc/gshadow* rwklm,
+  audit deny /etc/sudoers* rwklm,
+  audit deny /etc/sudoers.d/{,**} rwklm,
+  audit deny /etc/ssh/{,**} rwklm,
+  audit deny /etc/ssl/private/{,**} rwklm,
+  audit deny /etc/letsencrypt/{,**} rwklm,
+  audit deny /sys/kernel/security/{,**} rwklm,
