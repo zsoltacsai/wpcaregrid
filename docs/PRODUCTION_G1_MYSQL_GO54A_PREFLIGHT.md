@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `4c8e06e9e0cb7130cbbc6d75160ab077c86eeee8c83e825895c19b5a158d6504`)
+    (SHA-256 `9e0fdc68cd031e92e4c554409dbf02dcfb5c341aa5d0f2768615bf71ba39bd00`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
-    (SHA-256 `8a078a619a8f196bd092795b0795031323c362bef667065a8574e799caa05412`)
+    (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `72981bd72b58bd3a15df4e4546176c20dbb02daac63ce433d5252c5eb60848af`)
+    `52dff0381577b4342f97b66518e5428bba6bb88204f650abdfecabd92244def5`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -69,6 +69,20 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     with restored mtime are caught through the never-restorable ctime and
     inode identity); the accepted `--since` value is sanitized before it
     reaches the output.
+  - Reviewer corrections included in v1.4.0 (AppSec round 4): the datadir
+    walk records each enumerated directory's identity/change metadata and
+    re-verifies every traversed directory after the whole walk (an entry
+    added, removed or replaced during traversal fails closed instead of being
+    omitted from the fingerprint); the log check binds validation and hashing
+    to the SAME opened descriptor (`read_regular_stable`) with a post-read
+    identity/ctime comparison (concurrent replacement or rewrite fails closed
+    as UNKNOWN); the bounded journal read re-checks the deadline after a
+    readability event (a late EOF at or past the deadline is a timeout, never
+    a success); output sanitization covers DEL, C1 controls and Unicode
+    line/paragraph separators, and is applied to systemctl unit lines,
+    profile-source lines and unit-property values; the notify exit-code
+    contract is documented (exit 0 = collection completed; the final line
+    carries the classification — gate on the line, not the exit code alone).
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.

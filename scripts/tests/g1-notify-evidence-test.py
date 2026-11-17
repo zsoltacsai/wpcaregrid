@@ -379,6 +379,21 @@ class NotifyEvidenceTestCase(unittest.TestCase):
         self.assertIn("JOURNAL lines_cap=20000 since=2026-11-17?EVIL", self.output())
         self.assertNotIn("since=2026-11-17\rEVIL", self.output())
 
+    # -- AppSec round-4 hardening (output sanitization coverage) ------------
+
+    def test_profile_and_unitprop_lines_are_sanitized(self):
+        # C1 control characters and Unicode separators in untrusted source
+        # lines and systemctl values are masked in the transcript.
+        files = {ne.PROFILE_P: "#include <tunables/global>\u0080EVIL\n"}
+        commands = self.unit_commands()
+        commands[(ne.UNITS[0], "PrivateTmp")] = "no\u2028EVIL"
+        self.host = FakeHost(journal="-- No entries --", files=files, commands=commands)
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("PROFILE %s:1 #include <tunables/global>?EVIL" % ne.PROFILE_P, self.output())
+        self.assertIn("UNITPROP %s PrivateTmp=no?EVIL" % ne.UNITS[0], self.output())
+        self.assertNotIn("\u0080EVIL", self.output())
+        self.assertNotIn("\u2028EVIL", self.output())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

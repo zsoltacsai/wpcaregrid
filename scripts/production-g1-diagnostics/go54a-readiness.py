@@ -51,7 +51,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -112,6 +112,7 @@ MAX_DATADIR_ENTRIES = 50000
 MAX_DATADIR_BYTES = 2 * 1024 * 1024 * 1024
 MAX_PROFILE_SOURCE_BYTES = 4 * 1024 * 1024
 COMMAND_TIMEOUT = 60
+MUTATION_IDENTITY = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}
 
 
@@ -174,6 +175,29 @@ class RealHost:
         finally:
             os.close(fd)
 
+    def read_regular_stable(self, path, max_bytes):
+        """AppSec R4-F2 fix: open ONCE with no-follow semantics, validate a
+        regular file on the descriptor, read bounded bytes, and return
+        (data, st_before, st_after) so the caller binds validation, hashing
+        and mutation detection to the same opened object."""
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            st_before = os.fstat(fd)
+            if not stat.S_ISREG(st_before.st_mode):
+                raise HostError("not_regular", os.path.basename(path))
+            data = b""
+            while len(data) < max_bytes:
+                chunk = os.read(fd, min(65536, max_bytes - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+            if len(data) >= max_bytes and os.read(fd, 1):
+                raise HostError("too_large", os.path.basename(path))
+            st_after = os.fstat(fd)
+            return data, st_before, st_after
+        finally:
+            os.close(fd)
+
     def read_text(self, path, max_bytes):
         return self.read_regular(path, max_bytes).decode("utf-8", errors="replace")
 
@@ -189,18 +213,20 @@ class RealHost:
                 yield os.path.relpath(os.path.join(base, name), path), st
 
     def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
-        """Upgrader-grade hardened datadir walk (AppSec F2 fix).
+        """Upgrader-grade hardened datadir walk (AppSec F2/R3-F2/R4-F1 fix).
 
         Mirrors go54a-upgrade-apparmor.fingerprint_tree with explicit resource
         bounds: every entry is stat'ed through the walk's directory FD, every
         regular file is opened through that same FD with O_NOFOLLOW, and the
         opened descriptor's identity is compared with the walked stat before
-        hashing, so a swapped parent directory or symlink cannot feed
-        out-of-tree bytes into the fingerprint.
-        """
+        hashing. Each enumerated directory's identity and change metadata are
+        recorded and re-verified after the whole walk, so an entry added,
+        removed or replaced during traversal fails closed instead of being
+        silently omitted from the fingerprint."""
         root = os.lstat(path)
         datadir_root_check(root, path, mysql_ids)
         records, entries, total = [], 0, 0
+        levels = []
 
         def fail(exc):
             raise HostError("walk_failed", errno.errorcode.get(exc.errno, str(exc.errno))) from exc
@@ -208,6 +234,15 @@ class RealHost:
         for base, dirs, files, dfd in os.fwalk(path, topdown=True, follow_symlinks=False, onerror=fail):
             dirs.sort()
             files.sort()
+            dir_stat = os.fstat(dfd)
+            rel_base = os.path.relpath(base, path)
+            if rel_base == ".":
+                levels.append(("", root))
+                if any(getattr(dir_stat, field) != getattr(root, field)
+                       for field in MUTATION_IDENTITY):
+                    raise UnsafeState("datadir_changed_during_read", os.path.basename(path))
+            else:
+                levels.append((rel_base, dir_stat))
             for name in dirs + files:
                 rel = os.path.relpath(os.path.join(base, name), path)
                 st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
@@ -241,6 +276,11 @@ class RealHost:
                     total = datadir_read_check(rel, st, fd_after, st_path, len(data), total,
                                                max_total_bytes)
                 records.append(datadir_record(rel, st, digest))
+        for rel, st_recorded in levels:
+            current = os.stat(os.path.join(path, rel) if rel else path, follow_symlinks=False)
+            if any(getattr(current, field) != getattr(st_recorded, field)
+                   for field in MUTATION_IDENTITY):
+                raise HostError("datadir_changed_during_read", rel or os.path.basename(path))
         material = repr((stat.S_IMODE(root.st_mode), root.st_uid, root.st_gid, root.st_mtime_ns, records)).encode()
         return sha256(material), entries, total
 
@@ -387,7 +427,8 @@ def check_units_inactive(host, emit):
         load = unit_property(host, unit, "LoadState")
         active = unit_property(host, unit, "ActiveState")
         sub = unit_property(host, unit, "SubState")
-        emit("UNIT %s LoadState=%s ActiveState=%s SubState=%s" % (unit, load, active, sub))
+        emit("UNIT %s LoadState=%s ActiveState=%s SubState=%s"
+             % (unit, sanitize(load), sanitize(active), sanitize(sub)))
         if load == "masked":
             return "HOLD", "g1_unit_masked:" + unit
         if load == "not-found":
@@ -518,9 +559,13 @@ def datadir_read_check(rel, st_before, st_after_fd, st_after_path, data_len, tot
 
 
 def sanitize(text):
-    """Control characters in untrusted evidence or arguments never reach the
-    archived output verbatim (AppSec R2 non-blocking hardening)."""
-    return "".join(ch if ch >= " " else "?" for ch in str(text))
+    """Untrusted evidence and arguments never reach the archived output
+    verbatim: ASCII control characters, DEL, C1 controls and Unicode
+    line/paragraph separators are all masked (AppSec R2/R4 hardening)."""
+    separators = {" ", " "}
+    return "".join("?" if (ch < " " or ch == "\x7f" or "\x80" <= ch <= "\x9f"
+                           or ch in separators) else ch
+                   for ch in str(text))
 
 
 def check_datadirs(host, emit):
@@ -535,21 +580,34 @@ def check_datadirs(host, emit):
 
 
 def check_logs(host, emit):
+    """AppSec R4-F2 fix: validation and hashing bind to the SAME descriptor.
+    The lstat pre-checks keep their HOLD classifications; the descriptor's own
+    metadata is re-validated, and a post-read identity/ctime comparison fails
+    closed as UNKNOWN on concurrent replacement or in-place rewrite."""
     mysql_ids = host.ids("mysql")
     material = []
     for path in LOGS:
+        name = os.path.basename(path)
         if not host.lexists(path):
-            return "HOLD", "mysql_log_missing:" + os.path.basename(path)
+            return "HOLD", "mysql_log_missing:" + name
         st = host.lstat(path)
         if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-            return "HOLD", "mysql_log_not_regular:" + os.path.basename(path)
+            return "HOLD", "mysql_log_not_regular:" + name
         if (st.st_uid, st.st_gid) != mysql_ids:
-            return "HOLD", "mysql_log_owner_invalid:" + os.path.basename(path)
+            return "HOLD", "mysql_log_owner_invalid:" + name
         if stat.S_IMODE(st.st_mode) != 0o600:
-            return "HOLD", "mysql_log_mode_invalid:" + os.path.basename(path)
+            return "HOLD", "mysql_log_mode_invalid:" + name
         if st.st_size > MAX_LOG_BYTES:
-            return "UNKNOWN", "mysql_log_exceeds_bounds:" + os.path.basename(path)
-        material.append((os.path.basename(path), sha256(host.read_regular(path, MAX_LOG_BYTES)), st.st_size))
+            return "UNKNOWN", "mysql_log_exceeds_bounds:" + name
+        data, st_before, st_after = host.read_regular_stable(path, MAX_LOG_BYTES)
+        if (not stat.S_ISREG(st_before.st_mode)
+                or (st_before.st_uid, st_before.st_gid) != mysql_ids
+                or stat.S_IMODE(st_before.st_mode) != 0o600
+                or st_before.st_size > MAX_LOG_BYTES):
+            return "HOLD", "mysql_log_descriptor_metadata_invalid:" + name
+        if any(getattr(st_after, field) != getattr(st_before, field) for field in MUTATION_IDENTITY):
+            return "UNKNOWN", "mysql_log_changed_during_read:" + name
+        material.append((name, sha256(data), st_before.st_size))
     emit("FINGERPRINT logs sha256=%s" % sha256(repr(material).encode()))
     return "PASS", "both_logs_fingerprinted"
 

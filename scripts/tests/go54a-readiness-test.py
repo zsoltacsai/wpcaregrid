@@ -41,7 +41,8 @@ class FakeHost:
 
     def __init__(self, files=None, dirs=None, symlinks=None, euid=0,
                  ids=None, commands=None, lock=None, script_dir="/opt/toolkit-empty",
-                 mutate_on_read=None, replace_on_read=None, rewrite_on_read=None):
+                 mutate_on_read=None, replace_on_read=None, rewrite_on_read=None,
+                 grow_dir_after_listing=None, replace_dir_after_listing=None):
         self.files = files or {}
         self.dirs = dirs or {}
         self.symlinks = symlinks or {}
@@ -56,6 +57,11 @@ class FakeHost:
         # restored mtime (ctime cannot be restored on a real host).
         self.replace_on_read = replace_on_read or set()
         self.rewrite_on_read = rewrite_on_read or set()
+        # Simulated evasions from the AppSec round-4 review: an entry added
+        # after a directory's listing (directory mtime changes), and a child
+        # directory replaced during traversal (directory inode changes).
+        self.grow_dir_after_listing = grow_dir_after_listing or set()
+        self.replace_dir_after_listing = replace_dir_after_listing or set()
 
     def _all_paths(self):
         return list(self.files) + list(self.dirs) + list(self.symlinks)
@@ -126,18 +132,45 @@ class FakeHost:
                     yield from recurse(full, rel)
         yield from recurse(path, "")
 
+    def read_regular_stable(self, path, max_bytes):
+        """Mirrors RealHost.read_regular_stable: returns (data, st_before,
+        st_after) with the same mutation hooks so descriptor-bound log
+        validation can be tested deterministically."""
+        if path in self.symlinks:
+            raise OSError(errno.ELOOP, "symlink", path)
+        if path in self.dirs:
+            raise rd.HostError("not_regular", posixpath.basename(path))
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        st_before = self.lstat(path)
+        data = self.files[path].get("content", b"")
+        if len(data) > max_bytes:
+            raise rd.HostError("too_large", posixpath.basename(path))
+        if path in self.mutate_on_read:
+            self.files[path]["mtime_ns"] = self.files[path].get("mtime_ns", 1000) + 1
+        if path in self.rewrite_on_read:
+            self.files[path]["ctime_ns"] = self.files[path].get("ctime_ns", 1000) + 1
+        if path in self.replace_on_read:
+            self.files[path]["ino"] = self.files[path].get("ino", 1) + 1
+        st_after = self.lstat(path)
+        return data, st_before, st_after
+
     def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
         """Mirrors RealHost.datadir_fingerprint semantics over the in-memory
         tree using the production module's shared validation helpers, so the
         fake and the real walk cannot drift apart. Directory entries of one
         level are processed (sorted dirs, then sorted files) before the walk
-        descends, matching os.fwalk topdown ordering."""
+        descends, matching os.fwalk topdown ordering; every enumerated
+        directory's identity and change metadata is re-verified after the
+        whole walk (AppSec R4-F1)."""
         root = self.lstat(path)
         rd.datadir_root_check(root, path, mysql_ids)
         records, entries, total = [], 0, 0
+        levels = []
 
         def process(directory, rel_base):
             nonlocal entries, total
+            levels.append((rel_base, self.lstat(directory)))
             children = self._children(directory)
             dir_names = sorted(name for name in children
                                if (directory.rstrip("/") + "/" + name) in self.dirs)
@@ -170,10 +203,20 @@ class FakeHost:
                 records.append(rd.datadir_record(rel, st, digest))
                 if full in self.dirs:
                     subdirs.append((full, rel))
+            if directory in self.grow_dir_after_listing:
+                self.dirs[directory]["mtime_ns"] = self.dirs[directory].get("mtime_ns", 1000) + 1
+            if directory in self.replace_dir_after_listing:
+                self.dirs[directory]["ino"] = self.dirs[directory].get("ino", 1) + 1
             for full, rel in subdirs:
                 process(full, rel)
 
         process(path, "")
+        for rel, st_recorded in levels:
+            current = self.lstat(posixpath.join(path, rel) if rel else path)
+            if any(getattr(current, field) != getattr(st_recorded, field)
+                   for field in rd.MUTATION_IDENTITY):
+                raise rd.HostError("datadir_changed_during_read",
+                                   rel or posixpath.basename(path))
         material = repr((stat.S_IMODE(root.st_mode), root.st_uid, root.st_gid,
                          root.st_mtime_ns, records)).encode()
         return rd.sha256(material), entries, total
@@ -798,6 +841,46 @@ class ReadinessTestCase(unittest.TestCase):
         self.host = self.healthy_host(rewrite_on_read={rd.DATADIRS[0] + "/ib_logfile0"})
         self.assertEqual(self.run_main(), 4)
         self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0:fd", self.output())
+
+    # -- AppSec round-4 findings (R4-F1 enumeration, R4-F2 logs) ------------
+
+    def test_datadir_entry_added_during_listing_yields_unknown(self):
+        # An entry added after a directory's names were collected must not be
+        # silently omitted from the fingerprint: the directory's change
+        # metadata is re-verified after the whole walk.
+        self.host = self.healthy_host(grow_dir_after_listing={rd.DATADIRS[0]})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:mysql-wpcaregrid-production",
+                      self.output())
+
+    def test_datadir_child_directory_replaced_during_walk_yields_unknown(self):
+        self.host = self.healthy_host(replace_dir_after_listing={rd.DATADIRS[0]})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:mysql-wpcaregrid-production",
+                      self.output())
+
+    def test_log_replaced_during_read_yields_unknown(self):
+        # AppSec R4-F2: validation and hashing bind to the same descriptor;
+        # a concurrent replacement of the log file fails closed.
+        self.host = self.healthy_host(replace_on_read={rd.LOGS[0]})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN mysql_log_changed_during_read:" + posixpath.basename(rd.LOGS[0]),
+                      self.output())
+
+    def test_log_rewritten_during_read_yields_unknown(self):
+        self.host = self.healthy_host(rewrite_on_read={rd.LOGS[0]})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN mysql_log_changed_during_read:" + posixpath.basename(rd.LOGS[0]),
+                      self.output())
+
+    def test_unit_line_values_are_sanitized(self):
+        # Untrusted systemctl output never reaches the transcript verbatim.
+        commands = dict(self.host.commands)
+        commands[(rd.UNITS[0], "SubState")] = "dead\x1b[EVIL"
+        self.host = self.healthy_host(commands=commands)
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("SubState=dead?[EVIL", self.output())
+        self.assertNotIn("dead\x1b[EVIL", self.output())
 
 
 if __name__ == "__main__":

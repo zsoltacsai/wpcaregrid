@@ -20,9 +20,13 @@ Fail-closed: an unreadable journal is UNKNOWN, never "no denial"; an empty
 journal is reported explicitly; a DENIED line that does not carry the complete
 expected audit shape is counted as unrecognized and never becomes target
 evidence. The tool is designed for the approved root console and requires
-root: a non-root run reports UNKNOWN, never a verdict. Output and runtime are
-bounded. No service is started, stopped or reloaded, no profile is loaded or
-compiled, and nothing is written. Local synthetic test passes do NOT make
+root: a non-root run reports UNKNOWN, never a verdict. Exit code 0 means the
+bounded evidence COLLECTION completed — the classification is carried by the
+final G1_NOTIFY_EVIDENCE line (PRESENT with STATUS=PASS, or ABSENT with
+STATUS=HOLD); UNKNOWN and collection failures exit 4. Gate on the final line
+together with the exit code, never on the exit code alone. Output and runtime
+are bounded. No service is started, stopped or reloaded, no profile is loaded
+or compiled, and nothing is written. Local synthetic test passes do NOT make
 this tool approved; independent Integration QA and AppSec PASS records are
 required before its output is used in a release decision.
 
@@ -37,7 +41,7 @@ import stat
 import sys
 
 TOOL = "g1-notify-evidence"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 TARGET = "/run/systemd/notify"
 PROFILE_DIR = "/etc/apparmor.d/"
@@ -119,6 +123,12 @@ class RealHost:
                 events = selector.select(timeout=remaining)
                 if not events:
                     continue  # the deadline fires on the next loop iteration
+                if time.monotonic() >= deadline:
+                    # Strict deadline (AppSec R4 note): a late EOF/readiness
+                    # event at or past the deadline is a timeout, never a
+                    # successful completion.
+                    process.kill()
+                    raise HostError("command_failed", args[0])
                 chunk = process.stdout.read1(65536)
                 if not chunk:
                     break
@@ -250,9 +260,13 @@ def journal_rows(text):
 
 
 def sanitize(text):
-    """Control characters in untrusted evidence never reach the archived
-    output verbatim (AppSec R2 non-blocking hardening)."""
-    return "".join(ch if ch >= " " else "?" for ch in str(text))
+    """Untrusted evidence and arguments never reach the archived output
+    verbatim: ASCII control characters, DEL, C1 controls and Unicode
+    line/paragraph separators are all masked (AppSec R2/R4 hardening)."""
+    separators = {" ", " "}
+    return "".join("?" if (ch < " " or ch == "\x7f" or "\x80" <= ch <= "\x9f"
+                           or ch in separators) else ch
+                   for ch in str(text))
 
 
 def emit_row(emit, fields):
@@ -275,7 +289,7 @@ def profile_statics(host, paths, emit):
             continue
         notify_rule = False
         for number, line in enumerate(outcome.splitlines(), start=1):
-            stripped = line.strip()
+            stripped = sanitize(line.strip())
             if stripped.startswith("#include") or stripped.startswith("abi "):
                 emit("PROFILE %s:%d %s" % (path, number, stripped))
             if TARGET in line:
@@ -289,9 +303,9 @@ def emit_unit_properties(host, units, emit):
         for prop in UNIT_PROPERTIES:
             outcome = guard(lambda: unit_property(host, unit, prop))  # noqa: B023
             if isinstance(outcome, tuple):
-                emit("UNITPROP %s %s UNKNOWN %s" % (unit, prop, outcome[1]))
+                emit("UNITPROP %s %s UNKNOWN %s" % (unit, prop, sanitize(outcome[1])))
             else:
-                emit("UNITPROP %s %s=%s" % (unit, prop, outcome))
+                emit("UNITPROP %s %s=%s" % (unit, prop, sanitize(outcome)))
 
 
 def main(argv=None, host=None, stream=None):
