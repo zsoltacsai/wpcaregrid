@@ -133,16 +133,17 @@ class FakeHost:
         yield from recurse(path, "")
 
     def read_regular_stable(self, path, max_bytes):
-        """Mirrors RealHost.read_regular_stable: returns (data, st_before,
-        st_after) with the same mutation hooks so descriptor-bound log
-        validation can be tested deterministically."""
+        """Mirrors RealHost.read_regular_stable faithfully: the opened
+        descriptor keeps identifying the ORIGINAL inode even after a path
+        replacement, so the descriptor views are stable while a fresh path
+        stat reflects the rebound name."""
         if path in self.symlinks:
             raise OSError(errno.ELOOP, "symlink", path)
         if path in self.dirs:
             raise rd.HostError("not_regular", posixpath.basename(path))
         if path not in self.files:
             raise FileNotFoundError(path)
-        st_before = self.lstat(path)
+        st_fd_before = self.lstat(path)
         data = self.files[path].get("content", b"")
         if len(data) > max_bytes:
             raise rd.HostError("too_large", posixpath.basename(path))
@@ -150,31 +151,49 @@ class FakeHost:
             self.files[path]["mtime_ns"] = self.files[path].get("mtime_ns", 1000) + 1
         if path in self.rewrite_on_read:
             self.files[path]["ctime_ns"] = self.files[path].get("ctime_ns", 1000) + 1
+        st_fd_after = self.lstat(path)
         if path in self.replace_on_read:
             self.files[path]["ino"] = self.files[path].get("ino", 1) + 1
-        st_after = self.lstat(path)
-        return data, st_before, st_after
+        st_path_after = self.lstat(path)
+        return data, st_fd_before, st_fd_after, st_path_after
 
     def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
-        """Mirrors RealHost.datadir_fingerprint semantics over the in-memory
-        tree using the production module's shared validation helpers, so the
-        fake and the real walk cannot drift apart. Directory entries of one
-        level are processed (sorted dirs, then sorted files) before the walk
-        descends, matching os.fwalk topdown ordering; every enumerated
-        directory's identity and change metadata is re-verified after the
-        whole walk (AppSec R4-F1)."""
+        """Mirrors RealHost.datadir_fingerprint faithfully over the in-memory
+        tree: like os.fwalk, the level's names are collected FIRST and the
+        level stat is captured afterwards, so the mutation hooks simulate the
+        window between name collection and the code's fstat. Every child
+        directory's level stat is compared against the stat its parent
+        recorded before descent, and every level is re-verified after the
+        whole walk."""
         root = self.lstat(path)
         rd.datadir_root_check(root, path, mysql_ids)
         records, entries, total = [], 0, 0
         levels = []
+        parent_expected = {}
 
         def process(directory, rel_base):
             nonlocal entries, total
-            levels.append((rel_base, self.lstat(directory)))
             children = self._children(directory)
             dir_names = sorted(name for name in children
                                if (directory.rstrip("/") + "/" + name) in self.dirs)
             file_names = sorted(name for name in children if name not in dir_names)
+            # fwalk collected the names above; hooks mutate in the window
+            # before the code fstats the level.
+            if directory in self.grow_dir_after_listing:
+                self.dirs[directory]["mtime_ns"] = self.dirs[directory].get("mtime_ns", 1000) + 1
+            if directory in self.replace_dir_after_listing:
+                self.dirs[directory]["ino"] = self.dirs[directory].get("ino", 1) + 1
+            level_stat = self.lstat(directory)
+            if rel_base == "":
+                if any(getattr(level_stat, field) != getattr(root, field)
+                       for field in rd.MUTATION_IDENTITY):
+                    raise rd.HostError("datadir_changed_during_read", posixpath.basename(path))
+            else:
+                expected = parent_expected.get(rel_base)
+                if expected is not None and any(getattr(level_stat, field) != getattr(expected, field)
+                                                for field in rd.MUTATION_IDENTITY):
+                    raise rd.HostError("datadir_changed_during_read", rel_base)
+            levels.append((rel_base, level_stat))
             subdirs = []
             for name in dir_names + file_names:
                 full = directory.rstrip("/") + "/" + name
@@ -184,6 +203,8 @@ class FakeHost:
                 if entries > max_entries:
                     raise rd.HostError("datadir_entry_count_exceeded", path)
                 rd.validate_datadir_entry(rel, st, mysql_ids)
+                if stat.S_ISDIR(st.st_mode):
+                    parent_expected[rel] = st
                 digest = "-"
                 if stat.S_ISREG(st.st_mode):
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
@@ -203,10 +224,6 @@ class FakeHost:
                 records.append(rd.datadir_record(rel, st, digest))
                 if full in self.dirs:
                     subdirs.append((full, rel))
-            if directory in self.grow_dir_after_listing:
-                self.dirs[directory]["mtime_ns"] = self.dirs[directory].get("mtime_ns", 1000) + 1
-            if directory in self.replace_dir_after_listing:
-                self.dirs[directory]["ino"] = self.dirs[directory].get("ino", 1) + 1
             for full, rel in subdirs:
                 process(full, rel)
 
@@ -881,6 +898,45 @@ class ReadinessTestCase(unittest.TestCase):
         self.assertEqual(self.run_main(), 0)
         self.assertIn("SubState=dead?[EVIL", self.output())
         self.assertNotIn("dead\x1b[EVIL", self.output())
+
+    # -- AppSec round-5 findings (R5-F1 nested windows, R5-F3 emission) -----
+
+    def _healthy_with_nested(self):
+        files, dirs = dict(self.host.files), dict(self.host.dirs)
+        nested = rd.DATADIRS[0] + "/nested"
+        dirs[nested] = {"mode": 0o750, "uid": 105, "gid": 105}
+        files[nested + "/ibdata1"] = {"content": b"nested", "mode": 0o640, "uid": 105, "gid": 105}
+        return self.healthy_host(files=files, dirs=dirs)
+
+    def test_datadir_nested_entry_added_during_listing_yields_unknown(self):
+        # R5-F1: a mutation between the parent's stat of a child directory
+        # and that child's own level capture is caught through the
+        # parent-recorded baseline.
+        self.host = self._healthy_with_nested()
+        self.host.grow_dir_after_listing = {rd.DATADIRS[0] + "/nested"}
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:nested", self.output())
+
+    def test_datadir_nested_directory_replaced_during_listing_yields_unknown(self):
+        self.host = self._healthy_with_nested()
+        self.host.replace_dir_after_listing = {rd.DATADIRS[0] + "/nested"}
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:nested", self.output())
+
+    def test_log_mutated_during_read_yields_unknown(self):
+        self.host = self.healthy_host(mutate_on_read={rd.LOGS[0]})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN mysql_log_changed_during_read:" + posixpath.basename(rd.LOGS[0]),
+                      self.output())
+
+    def test_accepted_package_path_is_sanitized_in_output(self):
+        # R5-F3: a valid caller-supplied package path must never inject
+        # newline/control characters into the CHECK result lines.
+        files, dirs = self.valid_package(name="/root/wpcg-go54a-x\nEVIL")
+        self.host = self.healthy_host(files=files, dirs=dirs)
+        self.assertEqual(self.run_main(["--package", "/root/wpcg-go54a-x\nEVIL"]), 0)
+        self.assertIn("package_verified:/root/wpcg-go54a-x?EVIL", self.output())
+        self.assertNotIn("/root/wpcg-go54a-x\nEVIL", self.output())
 
 
 if __name__ == "__main__":

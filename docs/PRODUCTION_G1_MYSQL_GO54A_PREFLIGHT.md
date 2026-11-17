@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `9e0fdc68cd031e92e4c554409dbf02dcfb5c341aa5d0f2768615bf71ba39bd00`)
+    (SHA-256 `d1e62bc77e53e6e62f1bb4926bbe218a219374b04d10768fd91bbc1195a3dd14`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `52dff0381577b4342f97b66518e5428bba6bb88204f650abdfecabd92244def5`)
+    `f8bb237328a2060346d1e14589a398ccda998b216d7b01254b40888cad4afd1d`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -83,6 +83,17 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     profile-source lines and unit-property values; the notify exit-code
     contract is documented (exit 0 = collection completed; the final line
     carries the classification — gate on the line, not the exit code alone).
+  - Reviewer corrections included in v1.5.0 (AppSec round 5, readiness tool):
+    every child directory's opened identity/change metadata is compared
+    against the stat its PARENT recorded before the walk descended (closing
+    the window between a parent's listing and the child's own level capture;
+    an unvisited-directory mismatch also fails closed); all
+    mutation-during-read conditions classify uniformly as UNKNOWN; the log
+    check verifies that the pathname still names the opened descriptor
+    (initial lstat vs descriptor, plus a post-read path stat vs the still-open
+    descriptor); and the emission boundary sanitizes every result detail,
+    staged-package name, companion directory and vendor profile line.
+    The notify tool is unchanged in this round (v1.4.0).
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.

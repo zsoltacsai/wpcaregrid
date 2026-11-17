@@ -51,7 +51,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -176,14 +176,15 @@ class RealHost:
             os.close(fd)
 
     def read_regular_stable(self, path, max_bytes):
-        """AppSec R4-F2 fix: open ONCE with no-follow semantics, validate a
-        regular file on the descriptor, read bounded bytes, and return
-        (data, st_before, st_after) so the caller binds validation, hashing
-        and mutation detection to the same opened object."""
+        """AppSec R4-F2/R5-F2 fix: open ONCE with no-follow semantics, validate
+        a regular file on the descriptor, read bounded bytes, and return
+        (data, st_fd_before, st_fd_after, st_path_after) so the caller can
+        bind validation, hashing, descriptor-stability AND pathname binding
+        to the same opened object."""
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
         try:
-            st_before = os.fstat(fd)
-            if not stat.S_ISREG(st_before.st_mode):
+            st_fd_before = os.fstat(fd)
+            if not stat.S_ISREG(st_fd_before.st_mode):
                 raise HostError("not_regular", os.path.basename(path))
             data = b""
             while len(data) < max_bytes:
@@ -193,10 +194,11 @@ class RealHost:
                 data += chunk
             if len(data) >= max_bytes and os.read(fd, 1):
                 raise HostError("too_large", os.path.basename(path))
-            st_after = os.fstat(fd)
-            return data, st_before, st_after
+            st_fd_after = os.fstat(fd)
         finally:
             os.close(fd)
+        st_path_after = os.stat(path, follow_symlinks=False)
+        return data, st_fd_before, st_fd_after, st_path_after
 
     def read_text(self, path, max_bytes):
         return self.read_regular(path, max_bytes).decode("utf-8", errors="replace")
@@ -213,20 +215,23 @@ class RealHost:
                 yield os.path.relpath(os.path.join(base, name), path), st
 
     def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
-        """Upgrader-grade hardened datadir walk (AppSec F2/R3-F2/R4-F1 fix).
+        """Upgrader-grade hardened datadir walk (AppSec F2/R3-F2/R4-F1/R5-F1 fix).
 
         Mirrors go54a-upgrade-apparmor.fingerprint_tree with explicit resource
         bounds: every entry is stat'ed through the walk's directory FD, every
         regular file is opened through that same FD with O_NOFOLLOW, and the
         opened descriptor's identity is compared with the walked stat before
-        hashing. Each enumerated directory's identity and change metadata are
-        recorded and re-verified after the whole walk, so an entry added,
-        removed or replaced during traversal fails closed instead of being
+        hashing. Every child directory's opened identity/change metadata is
+        compared against the stat its PARENT recorded before the walk
+        descended, and every enumerated directory is re-verified after the
+        whole walk, so a mutation in any window (before descent, during a
+        level's enumeration, or after it) fails closed instead of being
         silently omitted from the fingerprint."""
         root = os.lstat(path)
         datadir_root_check(root, path, mysql_ids)
         records, entries, total = [], 0, 0
         levels = []
+        parent_stats = {}
 
         def fail(exc):
             raise HostError("walk_failed", errno.errorcode.get(exc.errno, str(exc.errno))) from exc
@@ -237,11 +242,15 @@ class RealHost:
             dir_stat = os.fstat(dfd)
             rel_base = os.path.relpath(base, path)
             if rel_base == ".":
-                levels.append(("", root))
                 if any(getattr(dir_stat, field) != getattr(root, field)
                        for field in MUTATION_IDENTITY):
-                    raise UnsafeState("datadir_changed_during_read", os.path.basename(path))
+                    raise HostError("datadir_changed_during_read", os.path.basename(path))
+                levels.append(("", dir_stat))
             else:
+                expected = parent_stats.pop(rel_base, None)
+                if expected is not None and any(getattr(dir_stat, field) != getattr(expected, field)
+                                                for field in MUTATION_IDENTITY):
+                    raise HostError("datadir_changed_during_read", rel_base)
                 levels.append((rel_base, dir_stat))
             for name in dirs + files:
                 rel = os.path.relpath(os.path.join(base, name), path)
@@ -250,6 +259,8 @@ class RealHost:
                 if entries > max_entries:
                     raise HostError("datadir_entry_count_exceeded", path)
                 validate_datadir_entry(rel, st, mysql_ids)
+                if stat.S_ISDIR(st.st_mode):
+                    parent_stats[rel] = st
                 digest = "-"
                 if stat.S_ISREG(st.st_mode):
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
@@ -276,6 +287,8 @@ class RealHost:
                     total = datadir_read_check(rel, st, fd_after, st_path, len(data), total,
                                                max_total_bytes)
                 records.append(datadir_record(rel, st, digest))
+        if parent_stats:
+            raise HostError("datadir_changed_during_read", "unvisited_directory")
         for rel, st_recorded in levels:
             current = os.stat(os.path.join(path, rel) if rel else path, follow_symlinks=False)
             if any(getattr(current, field) != getattr(st_recorded, field)
@@ -485,7 +498,7 @@ def check_apparmor_enforced(host, emit):
     vendor = [line for line in lines if line.startswith(VENDOR_PROFILE_NAME + " (")]
     if len(vendor) != 1:
         return "HOLD", "vendor_profile_line_unexpected"
-    emit("VENDOR_PROFILE_LOADED " + vendor[0])
+    emit("VENDOR_PROFILE_LOADED " + sanitize(vendor[0]))
     emit("NOTE parser_compilation_not_checked_by_this_tool")
     emit("NOTE package_state_not_checked_by_this_tool")
     return "PASS", "both_g1_profiles_enforced"
@@ -580,10 +593,14 @@ def check_datadirs(host, emit):
 
 
 def check_logs(host, emit):
-    """AppSec R4-F2 fix: validation and hashing bind to the SAME descriptor.
-    The lstat pre-checks keep their HOLD classifications; the descriptor's own
-    metadata is re-validated, and a post-read identity/ctime comparison fails
-    closed as UNKNOWN on concurrent replacement or in-place rewrite."""
+    """AppSec R4-F2/R5-F2 fix: validation and hashing bind to the SAME
+    descriptor, and the pathname must still name that descriptor when the
+    check completes. The lstat pre-checks keep their HOLD classifications;
+    the opened descriptor's metadata is re-validated; the initial lstat is
+    compared with the opened descriptor (path rebind between them fails);
+    and a post-read comparison covers BOTH the still-open descriptor and a
+    fresh stat of the pathname — concurrent replacement, in-place rewrite or
+    path rebinding all fail closed as UNKNOWN."""
     mysql_ids = host.ids("mysql")
     material = []
     for path in LOGS:
@@ -599,15 +616,21 @@ def check_logs(host, emit):
             return "HOLD", "mysql_log_mode_invalid:" + name
         if st.st_size > MAX_LOG_BYTES:
             return "UNKNOWN", "mysql_log_exceeds_bounds:" + name
-        data, st_before, st_after = host.read_regular_stable(path, MAX_LOG_BYTES)
-        if (not stat.S_ISREG(st_before.st_mode)
-                or (st_before.st_uid, st_before.st_gid) != mysql_ids
-                or stat.S_IMODE(st_before.st_mode) != 0o600
-                or st_before.st_size > MAX_LOG_BYTES):
+        data, st_fd_before, st_fd_after, st_path_after = host.read_regular_stable(path, MAX_LOG_BYTES)
+        if (not stat.S_ISREG(st_fd_before.st_mode)
+                or (st_fd_before.st_uid, st_fd_before.st_gid) != mysql_ids
+                or stat.S_IMODE(st_fd_before.st_mode) != 0o600
+                or st_fd_before.st_size > MAX_LOG_BYTES):
             return "HOLD", "mysql_log_descriptor_metadata_invalid:" + name
-        if any(getattr(st_after, field) != getattr(st_before, field) for field in MUTATION_IDENTITY):
+        if any(getattr(st_fd_before, field) != getattr(st, field) for field in MUTATION_IDENTITY):
             return "UNKNOWN", "mysql_log_changed_during_read:" + name
-        material.append((name, sha256(data), st_before.st_size))
+        if any(getattr(st_fd_after, field) != getattr(st_fd_before, field)
+               for field in MUTATION_IDENTITY):
+            return "UNKNOWN", "mysql_log_changed_during_read:" + name
+        if any(getattr(st_path_after, field) != getattr(st_fd_before, field)
+               for field in MUTATION_IDENTITY):
+            return "UNKNOWN", "mysql_log_changed_during_read:" + name
+        material.append((name, sha256(data), st_fd_before.st_size))
     emit("FINGERPRINT logs sha256=%s" % sha256(repr(material).encode()))
     return "PASS", "both_logs_fingerprinted"
 
@@ -639,7 +662,7 @@ def scan_staged_packages(host, emit):
         verdict = validate_package_dir(host, os.path.join(ROOT_DIR, name))
         if verdict != "valid":
             return "HOLD", "staged_package_invalid:" + name + ":" + verdict
-        emit("NOTE staged_package_validated:" + name)
+        emit("NOTE staged_package_validated:" + sanitize(name))
         emit("NOTE package_generated_profiles_and_parser_compilation_not_checked_here")
     return "PASS", ("staged_packages_recognized" if staged else "none")
 
@@ -709,7 +732,7 @@ def check_toolkit_companions(host, emit):
             if digest != expected:
                 return "HOLD", ("toolkit_companion_mismatch:" + os.path.basename(directory.rstrip("/"))
                                 + "/" + name)
-        emit("NOTE toolkit_companions_verified:" + directory)
+        emit("NOTE toolkit_companions_verified:" + sanitize(directory))
         verified = True
     if not verified:
         emit("NOTE toolkit_companions_absent_standalone_run_verify_this_tool_by_its_pr_pinned_hash")
@@ -812,7 +835,7 @@ def main(argv=None, host=None, stream=None):
             results.append(("vendor_mysql_stability", "PASS", "mainpid_stable_during_run=" + vendor_pid))
 
     for name, status, detail in results:
-        emit("CHECK %s %s%s" % (name, status, (" " + detail) if detail else ""))
+        emit("CHECK %s %s%s" % (name, status, (" " + sanitize(detail)) if detail else ""))
     emit("NOTE backup_evidence restore_evidence_is_not_verifiable_by_a_host_read")
     emit("BACKUP_EVIDENCE=UNKNOWN;CHECKLIST=RACKFOREST_BACKUP_VERIFICATION_CHECKLIST")
     if any(status == "HOLD" for _, status, _ in results):
