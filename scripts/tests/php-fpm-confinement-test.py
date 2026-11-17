@@ -3116,7 +3116,8 @@ class PackageImmutability(unittest.TestCase):
     make a missing git checkout a failure instead of a skip.
     """
 
-    # version -> (git tree id of deploy/php-fpm-confinement/<version> at its reviewed commit, that commit)
+    # version -> (git tree id of deploy/php-fpm-confinement/<version> at its reviewed commit, provenance commit)
+    # The tree id is the durable pin: protected squash merges need not preserve the source PR commit as an ancestor.
     FROZEN = {
         "1.0.4": ("71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912", "9a54ca6581ea0fe173667236dcd6555f10ccdc12"),
         "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
@@ -3142,22 +3143,14 @@ class PackageImmutability(unittest.TestCase):
             path = f"deploy/php-fpm-confinement/{version}"
             self.assertEqual(git_out("status", "--porcelain", "--untracked-files=all", "--", path), "", f"{version} was modified in the working tree")
 
-    def test_the_pin_agrees_with_the_historical_commit_when_history_is_available(self) -> None:
+    def test_the_pin_agrees_with_the_provenance_commit_when_available(self) -> None:
         self.require_git()
-        checked = 0
         for version, (tree, commit) in self.FROZEN.items():
             if git_out("cat-file", "-t", commit) != "commit":
-                if os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY") == "1":
-                    self.fail(f"history required but the pinned commit {commit[:7]} for {version} is missing")
-                continue  # shallow clone: the pinned tree id above is the reference
-            ancestor = subprocess.run(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"], capture_output=True)
-            self.assertEqual(ancestor.returncode, 0, f"pinned commit {commit[:7]} for {version} is not an ancestor of HEAD")
+                continue  # squash merge or shallow checkout: the pinned tree id above remains the reference
             self.assertEqual(git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), tree, version)
             self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"),
                              git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), f"{version} changed after {commit[:7]}")
-            checked += 1
-        if checked == 0 and os.environ.get("PHP_FPM_CONFINEMENT_REQUIRE_GIT_HISTORY") == "1":
-            self.fail("history required but unavailable")
 
     def test_tree_identity_is_reproducible_from_bytes_and_tamper_evident(self) -> None:
         """Re-derive the tree id from the files alone in a scratch repository: any byte or mode change moves it."""

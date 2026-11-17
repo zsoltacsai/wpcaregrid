@@ -1,5 +1,11 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-17 (GO-13 post-merge CI and squash-history correction)
+
+- **Primary:** PR #415 merged at `37eefe29e694be434dff2dc70d80cfb221c9903b`; its seven required PR-head checks and exact-head QA/AppSec passed, and the V3 records/report artifacts were verified in the actual #174 ledger.
+- **Post-merge CI:** run `44025491945` on that exact merge SHA failed in Quality at the GO-13 confinement artifact test. Root cause: the test required the frozen package source commits to remain ancestors of HEAD, but the protected squash merge preserves the package tree bytes and removes those intermediate commits from primary history.
+- **Correction in progress:** the frozen Git tree IDs remain the required immutable pins; available provenance commit objects are compared when present without requiring ancestry. The CI Git-checkout requirement remains. On the merge-SHA checkout, the focused package immutability suite passed 6/6 and the full confinement suite passed 214 tests with one local AppArmor-parser skip. A protected follow-up PR is required before post-merge CI can be green.
+
 ## Update — 2026-11-17 (GO-13 Workstream B: confinement package 1.0.5 — source, review pending)
 
 - **Status:** 1.0.5 is a new immutable successor under `deploy/php-fpm-confinement/1.0.5/`; 1.0.4 and earlier package bytes remain unchanged. It is not yet independently reviewed, merged, installed or kernel-validated.
