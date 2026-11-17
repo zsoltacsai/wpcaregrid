@@ -103,6 +103,14 @@ jobs:
           PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY: "1"
         run: python3 scripts/tests/php-fpm-confinement-test.py
 
+      - name: GO-20 confinement 1.0.6 compile-only AppArmor parser check (no kernel load)
+        run: |
+          set -euo pipefail
+          pkg=deploy/php-fpm-confinement/1.0.6
+          for profile in "$pkg"/apparmor/wpcaregrid-*; do
+            apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
+          done
+
       - name: Staging diagnostics output and policy tests
         run: |
           python3 scripts/tests/staging-diagnostics-output-test.py

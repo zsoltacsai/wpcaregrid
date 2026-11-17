@@ -228,3 +228,7 @@ Stop conditions: a file or label that differs from the recorded baseline, a unit
 - `acceptance/matrix.json` is the single source for the model test, the live probe, the verifier and the fixture manifest; update it with every access change.
 - `scripts/tests/php-fpm-confinement-test.py` is wired into CI; the real-parser compile runs there (`apparmor_parser` 4.0.1 from Ubuntu 24.04 compiles every profile and probe profile; locally set `APPARMOR_PARSER_BIN` and `APPARMOR_PARSER_BASE`).
 - Related: `docs/PRODUCTION_MARKETING_RELEASE_RUNBOOK.md` (production identity inputs), `docs/PHP85_STAGING_MIGRATION.md` (staging FPM), `docs/PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md` (precedent: parser-validated, source-only AppArmor change; do not widen on abbreviated audit descriptions).
+
+## Successor package 1.0.6
+
+Production now runs PHP 8.5 in its own FPM service. That change ships as the successor package `deploy/php-fpm-confinement/1.0.6/`, described in `docs/PHP_FPM_CONFINEMENT_GO20_PHP85.md`, which also lists the frozen packages and their git tree ids. The procedure above is unchanged and still describes package `deploy/php-fpm-confinement/1.0.5/` (production on PHP 8.4, the package production helper 2.1.4 binds); do not apply it to 1.0.6 without the substitutions in the GO-20 document.

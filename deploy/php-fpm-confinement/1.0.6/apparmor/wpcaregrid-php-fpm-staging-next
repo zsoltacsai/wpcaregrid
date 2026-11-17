@@ -1,0 +1,85 @@
+# wpcaregrid-php-fpm-confinement 1.0.6 -- existing staging-next PHP-FPM (php8.5-fpm.service)
+# Install as /etc/apparmor.d/wpcaregrid-php-fpm-staging-next. Selected only by the
+# AppArmorProfile= drop-in for php8.5-fpm.service; no attachment path.
+# Allowlist profile. The master runs as root and drops to www-data, the same UID
+# as the production pool.
+# The packaged unit's ExecStartPre/ExecStopPost helper runs under this profile.
+# Only the helper script and dash are granted. If the host unit runs anything else
+# (for example update-alternatives), enforce mode fails closed: do not widen this
+# profile without reviewed complain-mode evidence.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-php-fpm-staging-next flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  capability setuid,
+  capability setgid,
+  capability chown,
+  capability kill,
+
+  /usr/sbin/php-fpm8.5 mrix,
+  /usr/bin/kill ix,
+  /usr/bin/dash ix,
+  /usr/lib/php/php-fpm-socket-helper ix,
+
+  /usr/lib/php/ r,
+  /usr/lib/php/** mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /etc/php/8.5/fpm/{,**} r,
+  /etc/php/8.5/mods-available/{,**} r,
+  /usr/share/zoneinfo/{,**} r,
+  /etc/localtime r,
+
+  # `/var/www/wpcaregrid-staging-new` is a symlink to a release under
+  # staging-next/releases; the resolved release path is what is mediated.
+  /var/www/wpcaregrid-staging-new/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/releases/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/.env r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/vendor/{,**} r,
+  /var/lib/wpcaregrid-deploy/staging-next/shared/storage/{,**} rwk,
+
+  /run/php/ r,
+  /run/php/php8.5-fpm.sock rwk,
+  /run/php/php8.5-fpm.pid rw,
+  /run/systemd/notify w,
+  /var/log/php8.5-fpm.log w,
+
+  /tmp/{,**} rwk,
+  /proc/[0-9]*/maps r,
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  network netlink raw,
+
+  signal (send, receive) peer=wpcaregrid-php-fpm-staging-next,
+  signal (receive) peer=unconfined,
+
+  audit deny /var/www/wpcaregrid-production/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-production/{,**} x,
+  audit deny /var/www/wpcaregrid/{,**} rwklm,
+  audit deny /var/www/wpcaregrid/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/production/{,**} x,
+  audit deny /var/lib/wpcaregrid/{,**} rwklm,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/wpcaregrid-production-php[0-9].[0-9]-fpm.{sock,pid} rwklm,
+  audit deny /run/php/php8.4-fpm.{sock,pid} rwklm,
+  audit deny /etc/php/8.5/fpm-wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/php-fpm.sock rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny /var/lib/wpcaregrid-deploy/*/state/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+  audit deny /run/mysqld/{,**} rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-build,
+}

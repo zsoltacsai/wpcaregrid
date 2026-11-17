@@ -1,0 +1,99 @@
+# wpcaregrid-php-fpm-confinement 1.0.6 -- offline production build/cache CLI (PHP 8.5 artisan, www-data)
+# Install as /etc/apparmor.d/wpcaregrid-php-cli-production-build. Selected ONLY by the production
+# root-console helper, per command, as
+#   runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-build -- /usr/bin/php8.5 ...
+# It is not bound to any systemd unit, has no drop-in and no exec-path attachment: each CLI run is a
+# short-lived root-console child, never a service. The production FPM profile is deliberately NOT widened
+# for this; this is a separate, enforce-attached profile on the same www-data UID so it can be proven in
+# complete peer inventories (label "wpcaregrid-php-cli-production-build (enforce)", exe /usr/bin/php8.5).
+# Exactly the helper's needs and nothing more:
+#   * run /usr/bin/php8.5 only (no shell, no other binary, no other PHP);
+#   * read the production release tree, shared vendor, shared .env and release bootstrap/cache;
+#   * write only release bootstrap/cache (package:discover, config:cache) and shared storage logs and framework cache/views;
+#   * no network or socket access of any kind;
+#   * deny every staging tree, the control plane, deploy state, backups, every other credential and all sockets.
+# The runtime database identity probe uses the separate read-only wpcaregrid-php-cli-production-deploy profile.
+# The Phase B runner is disabled and is not authorized by either profile.
+# The exact paths are assumptions confirmed in complain mode; anything unlisted fails closed.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-php-cli-production-build flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/wpcaregrid-php-fpm-common>
+
+  /usr/bin/php8.5 mrix,
+  /usr/lib/php/{,**} mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /etc/php/8.5/{cli,mods-available}/{,**} r,
+  /usr/share/zoneinfo/{,**} r,
+  /etc/localtime r,
+  /proc/[0-9]*/maps r,
+
+  # Production application, read-only except the two approved write locations below.
+  /var/www/wpcaregrid-production/releases/{,**} r,
+  /var/lib/wpcaregrid-deploy/production/shared/.env r,
+  /var/lib/wpcaregrid-deploy/production/shared/vendor/{,**} r,
+  /var/www/wpcaregrid-production/releases/*/bootstrap/cache/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/ r,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/framework/ r,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/logs/{,**} rwk,
+  /var/lib/wpcaregrid-deploy/production/shared/storage/framework/{cache,views}/{,**} rwk,
+
+  # NO NETWORK OR SOCKET ACCESS. These commands only build local cache files; their writable cache/storage trees
+  # cannot be used as alternate socket channels because this profile has no network permission. The runtime identity
+  # probe uses the separate read-only wpcaregrid-php-cli-production-deploy profile.
+  # No descriptor-passed sockets are used by the helper.
+  # Phase B stays disabled: this profile does not authorize migrations (see the runbook: AppArmor cannot tell a
+  # query from DDL on an allowed socket, so that is helper policy, not something this profile enforces).
+  audit deny network (bind, listen, accept) unix stream,
+  audit deny network unix dgram,
+  audit deny network unix seqpacket,
+  audit deny unix type=dgram,
+  audit deny unix type=seqpacket,
+  audit deny unix type=raw,
+  audit deny network unix raw,
+  audit deny unix (bind, listen, accept) type=stream,
+  audit deny network inet,
+  audit deny network inet6,
+  audit deny network inet stream,
+  audit deny network inet6 stream,
+  audit deny network inet dgram,
+  audit deny network inet6 dgram,
+  audit deny network netlink,
+  audit deny network (bind, listen, accept) inet stream,
+  audit deny /run/mysqld/wpcaregrid-production.sock rwklm,
+  audit deny /run/mysqld/wpcaregrid-production-restore.sock rwklm,
+  audit deny /run/mysqld/mysqld.sock rwklm,
+  audit deny /run/mysqld/wpcaregrid-production.sock.lock rwklm,
+  audit deny /run/mysqld/*.pid rwklm,
+  audit deny /run/mysqld/{,**} x,
+  audit deny /run/systemd/journal/{,**} rwklm,
+  audit deny /dev/log rwklm,
+  audit deny userns,
+
+  signal (send, receive) peer=wpcaregrid-php-cli-production-build,
+  signal (receive) peer=unconfined,
+
+  # Explicit audited denials: every other environment, state and backups, shells and other binaries.
+  audit deny /var/www/wpcaregrid-staging-new/{,**} rwklm,
+  audit deny /var/www/wpcaregrid-staging-new/{,**} x,
+  audit deny /var/www/wpcaregrid/{,**} rwklm,
+  audit deny /var/www/wpcaregrid/{,**} x,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/staging-next/{,**} x,
+  audit deny /var/lib/wpcaregrid/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/production/state/{,**} rwklm,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /run/php/{,**} rwklm,
+  # (python is not listed: it is default-denied here, and the live probe's derived profile must be able to grant it)
+  audit deny /{usr/,}{bin,sbin}/{dash,bash,sh,perl*,curl,wget,nc,ncat,socat,env,id,php,php8.[0-46-9],php-fpm*} x,
+  audit deny /var/www/wpcaregrid-production/releases/*/{app,config,routes,database,resources,vendor}/{,**} w,
+  audit deny /var/www/wpcaregrid-production/releases/*/{.env*,artisan,composer.*} w,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) peer=wpcaregrid-nginx,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+}
