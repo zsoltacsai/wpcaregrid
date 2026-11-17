@@ -292,8 +292,10 @@ jobs:
           status=0
           python3 scripts/npm_audit_gate.py --report-out "$report" || status=$?
           echo "::group::raw npm audit --json report (evidence; no artifact upload, see docs/SECURITY_EXCEPTIONS.md)"
-          cat "$report" || true
+          npm --version
+          if [[ -s "$report" ]]; then cat -- "$report"; else echo "no report written"; fi
           echo
+          if [[ -s "$report" ]]; then sha256sum -- "$report"; fi
           echo "::endgroup::"
           exit "$status"
 

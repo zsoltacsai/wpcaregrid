@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +29,13 @@ EVALUATED_SEVERITIES = ("high", "critical")
 ALL_SEVERITIES = ("info", "low", "moderate", "high", "critical")
 STABLE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 LOCK_DISALLOWED_FLAGS = ("optional", "devOptional", "peer", "inBundle")
+SEVERITY_RANK = {name: rank for rank, name in enumerate(ALL_SEVERITIES)}
+# Hard ceiling for any policy expiry: a policy edit cannot silently extend the exception beyond this.
+MAX_EXPIRY = dt.date(2026, 12, 1)
+# Overrides NODE_ENV=production and npm_config_omit=dev so dev dependencies are always audited.
+NPM_AUDIT_ARGV = ["npm", "audit", "--json", "--include=dev", "--include=optional", "--include=peer"]
+OFFLINE_FLAGS = ("--audit-json", "--audit-exit-code", "--registry-json", "--policy")
+CI_ENV_VARS = ("CI", "GITHUB_ACTIONS", "GITLAB_CI")
 REGISTRY_ATTEMPTS = 3
 REGISTRY_RETRY_DELAY_SECONDS = 5
 
@@ -94,9 +102,17 @@ def validate_policy(policy: object) -> None:
         if not isinstance(policy.get(key), str) or not policy[key]:
             raise ValueError(f"exception policy: {key} required")
     try:
-        dt.date.fromisoformat(str(policy.get("expires")))
+        expires = dt.date.fromisoformat(str(policy.get("expires")))
     except ValueError as error:
         raise ValueError("exception policy: expires must be an ISO date") from error
+    if expires > MAX_EXPIRY:
+        raise ValueError(f"exception policy: expires {expires} is later than the hard limit {MAX_EXPIRY}")
+    if advisory.get("severity") not in EVALUATED_SEVERITIES:
+        raise ValueError("exception policy: advisory.severity must be high or critical")
+    known = policy.get("known_stable_versions")
+    if (not isinstance(known, list) or not known or not all(isinstance(v, str) and parse_stable(v) for v in known)
+            or len(set(known)) != len(known)):
+        raise ValueError("exception policy: known_stable_versions must be a non-empty list of unique x.y.z versions")
 
 
 def parse_stable(version: str) -> Optional[tuple[int, int, int]]:
@@ -115,6 +131,7 @@ def advisory_matches(via: dict, policy: dict) -> bool:
         and via.get("url") == advisory["url"]
         and via.get("name") == advisory["package"]
         and via.get("range") == advisory["vulnerable_range"]
+        and via.get("severity") == advisory["severity"]
     )
 
 
@@ -154,7 +171,33 @@ def parse_report(text: str, npm_exit_code: int, result: GateResult) -> Optional[
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             result.fail(f"metadata.vulnerabilities.{severity} missing or not a count")
             return None
+    dependencies = metadata.get("dependencies")
+    dev_count = dependencies.get("dev") if isinstance(dependencies, dict) else None
+    if not isinstance(dev_count, int) or isinstance(dev_count, bool) or dev_count < 0:
+        result.fail("audit report has no usable 'metadata.dependencies.dev' count")
+        return None
     return report
+
+
+def check_dev_scope(report: dict, root: Path, result: GateResult) -> bool:
+    """Fail when dev dependencies were not audited although the lockfile contains dev entries."""
+    try:
+        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+        packages = lock["packages"]
+        if not isinstance(packages, dict):
+            raise ValueError("packages is not an object")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        result.fail(f"package-lock.json unreadable, audit scope cannot be verified: {error}")
+        return False
+    lock_dev = sum(1 for path, item in packages.items() if path and isinstance(item, dict) and item.get("dev") is True)
+    audited_dev = report["metadata"]["dependencies"]["dev"]
+    if lock_dev > 0 and audited_dev == 0:
+        result.fail(
+            f"npm audit scanned 0 dev dependencies but package-lock.json has {lock_dev} dev entries: "
+            "dev dependencies were omitted (NODE_ENV=production or npm_config_omit=dev?), so nothing was checked"
+        )
+        return False
+    return True
 
 
 def check_report_consistency(report: dict, npm_exit_code: int, result: GateResult) -> bool:
@@ -196,6 +239,27 @@ def check_report_consistency(report: dict, npm_exit_code: int, result: GateResul
         result.fail("npm audit exited 1 but the report lists no vulnerabilities")
         ok = False
     return ok
+
+
+def effective_severity(entry: dict) -> str:
+    """Highest of the entry's own severity and the severities of its advisory (dict) via items."""
+    best = entry["severity"]
+    for via in entry["via"]:
+        if isinstance(via, dict):
+            severity = via.get("severity")
+            if severity not in SEVERITY_RANK:
+                return "critical"  # unknown/missing advisory severity: never downgrade
+            if SEVERITY_RANK[severity] > SEVERITY_RANK[best]:
+                best = severity
+    return best
+
+
+def has_real_fix(entry: dict) -> bool:
+    """True unless npm offers no fix or only a semver-major (downgrade) suggestion."""
+    fix = entry.get("fixAvailable")
+    if fix is False:
+        return False
+    return not (isinstance(fix, dict) and fix.get("isSemVerMajor") is True)
 
 
 def explain_entry(name: str, vulnerabilities: dict, policy: dict, result: GateResult) -> bool:
@@ -250,10 +314,20 @@ def evaluate_audit(report: dict, policy: dict, result: GateResult) -> list[str]:
     covered: list[str] = []
     for name in sorted(vulnerabilities):
         entry = vulnerabilities[name]
-        if entry["severity"] not in EVALUATED_SEVERITIES:
+        severity = effective_severity(entry)
+        if severity not in EVALUATED_SEVERITIES:
             continue
-        if entry["severity"] == "critical":
+        if severity == "critical":
             result.fail(f"{name}: critical vulnerability (the exception covers high severity only)")
+            continue
+        if not entry["nodes"] or not all(isinstance(node, str) and node for node in entry["nodes"]):
+            result.fail(f"{name}: covered entry has no installed node to verify")
+            continue
+        if has_real_fix(entry):
+            result.fail(
+                f"{name}: npm reports a real (non-major) fix: fixAvailable={entry.get('fixAvailable')!r}; "
+                "the exception no longer applies. Upgrade, then remove it (docs/SECURITY_EXCEPTIONS.md)."
+            )
             continue
         if explain_entry(name, vulnerabilities, policy, result):
             covered.append(name)
@@ -366,6 +440,7 @@ def check_fixed_version(policy: dict, lookup: RegistryLookup, result: GateResult
     except Exception as error:  # noqa: BLE001 - every lookup failure must fail closed
         result.fail(f"registry lookup for {package} failed (fail closed): {error}")
         return None
+    known = set(policy["known_stable_versions"])
     newest: Optional[tuple[int, int, int]] = None
     for candidate in list(versions) + [str(v) for v in tags.values()]:
         parsed = parse_stable(candidate)
@@ -376,7 +451,13 @@ def check_fixed_version(policy: dict, lookup: RegistryLookup, result: GateResult
             continue
         if newest is None or parsed > newest:
             newest = parsed
-        if parsed > limit:
+        if candidate not in known:
+            result.fail(
+                f"{package} {candidate} is a stable version published after this exception was approved "
+                "(not in known_stable_versions): the exception no longer applies. Review it; if it fixes the "
+                "advisory upgrade and remove the exception (docs/SECURITY_EXCEPTIONS.md)."
+            )
+        elif parsed > limit:
             result.fail(
                 f"{package} {candidate} is published and is newer than the excepted range "
                 f"<= {gate['max_vulnerable_version']}: the exception no longer applies. Upgrade, then remove it "
@@ -408,6 +489,8 @@ def run_gate(
         return result
     if not check_report_consistency(report, npm_exit_code, result):
         return result
+    if not check_dev_scope(report, root, result):
+        return result
     covered = evaluate_audit(report, policy, result)
     counts = report["metadata"]["vulnerabilities"]
     result.note(
@@ -436,9 +519,18 @@ def run_gate(
 
 def run_npm_audit(root: Path) -> tuple[str, int]:
     completed = subprocess.run(
-        ["npm", "audit", "--json"], cwd=root, capture_output=True, text=True, timeout=300, check=False
+        NPM_AUDIT_ARGV, cwd=root, capture_output=True, text=True, timeout=300, check=False
     )
+    if completed.returncode not in (0, 1) or (completed.stderr or "").strip():
+        print("npm audit stderr:")
+        print(safe_text(completed.stderr or "(empty)"))
     return completed.stdout, completed.returncode
+
+
+def safe_text(text: str, limit: int = 4000) -> str:
+    """Make untrusted text inert for CI log parsers: no line can start a workflow command ('::')."""
+    text = text.replace("\r", "\n")[:limit]
+    return "\n".join("  | " + line.replace("::", ": :") for line in text.splitlines())
 
 
 def main(
@@ -457,11 +549,16 @@ def main(
     parser.add_argument("--registry-json", type=Path, default=None,
                         help="offline registry data {versions:[...],dist_tags:{...}} instead of querying npm (rehearsal only)")
     args = parser.parse_args(argv)
+    if any(os.environ.get(name) for name in CI_ENV_VARS):
+        used = [flag for flag in OFFLINE_FLAGS if any(a == flag or a.startswith(flag + "=") for a in (argv if argv is not None else sys.argv[1:]))]
+        if used:
+            print(f"FAIL: offline/rehearsal flags are refused in CI: {', '.join(used)}")
+            return 1
     root = args.root.resolve()
     try:
         policy = load_policy(args.policy or (root / "config/security/npm-audit-exceptions.json"))
     except ValueError as error:
-        print(f"FAIL: {error}")
+        print(f"FAIL: {safe_text(str(error))}")
         return 1
     if args.audit_json is not None:
         audit_text, exit_code = args.audit_json.read_text(encoding="utf-8", errors="replace"), args.audit_exit_code
@@ -469,7 +566,7 @@ def main(
         try:
             audit_text, exit_code = (audit_runner or run_npm_audit)(root)
         except (OSError, subprocess.TimeoutExpired) as error:
-            print(f"FAIL: npm audit could not be run: {error}")
+            print(f"FAIL: npm audit could not be run: {safe_text(str(error))}")
             return 1
     if args.report_out is not None:
         args.report_out.parent.mkdir(parents=True, exist_ok=True)
@@ -486,12 +583,12 @@ def main(
     )
     print(f"npm audit gate (npm exit code {exit_code}; threshold high; exception {policy['id']})")
     for note in result.notes:
-        print("  " + note)
+        print(safe_text(note))
     if result.passed:
         print("PASS")
         return 0
     for failure in result.failures:
-        print("  FAIL: " + failure)
+        print(safe_text("FAIL: " + failure))
     print("FAIL: npm advisory gate")
     return 1
 

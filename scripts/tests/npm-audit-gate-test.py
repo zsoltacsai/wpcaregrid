@@ -6,9 +6,13 @@ import io
 import datetime as dt
 import importlib.util
 import json
+import os
+import re
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,7 +62,7 @@ def counts(vulnerabilities):
     for item in vulnerabilities.values():
         tally[item["severity"]] += 1
     tally["total"] = len(vulnerabilities)
-    return {"vulnerabilities": tally, "dependencies": {"prod": 1, "dev": 1, "total": 2}}
+    return {"vulnerabilities": tally, "dependencies": {"prod": 1, "dev": 5, "optional": 0, "peer": 0, "total": 6}}
 
 
 def with_entries(report, **changes):
@@ -118,8 +122,8 @@ class GateTest(unittest.TestCase):
         self.assertTrue(any("GHSA-fc5q-39xc-vjpf" in note for note in result.notes))
 
     def test_moderate_and_low_do_not_affect_the_gate(self):
-        report = with_entries(baseline_report(), lodash=entry("lodash", [advisory(source=5, url=OTHER_URL, name="lodash")], "moderate"),
-                              minimist=entry("minimist", [advisory(source=6, url=OTHER_URL, name="minimist")], "low"))
+        report = with_entries(baseline_report(), lodash=entry("lodash", [advisory(source=5, url=OTHER_URL, name="lodash", severity="moderate")], "moderate"),
+                              minimist=entry("minimist", [advisory(source=6, url=OTHER_URL, name="minimist", severity="low")], "low"))
         self.assertTrue(self.run_gate(report).passed)
 
     def test_no_high_vulnerabilities_marks_exception_unused(self):
@@ -302,11 +306,134 @@ class GateTest(unittest.TestCase):
         self.assertFalse(self.run_gate(report).passed)
 
 
+    # ---- F1: dev dependencies must really be audited
+    def test_dev_scan_of_zero_with_dev_lock_entries_fails(self):
+        for report in (baseline_report(), {"auditReportVersion": 2, "vulnerabilities": {}, "metadata": counts({})}):
+            report["metadata"]["dependencies"]["dev"] = 0
+            with self.subTest(len(report["vulnerabilities"])):
+                self.assertFails(self.run_gate(report, exit_code=1 if report["vulnerabilities"] else 0),
+                                 "scanned 0 dev dependencies")
+
+    def test_missing_dependency_counts_fail(self):
+        report = baseline_report()
+        del report["metadata"]["dependencies"]
+        self.assertFails(self.run_gate(report), "metadata.dependencies.dev")
+
+    def test_dev_zero_is_fine_when_lock_has_no_dev_entries(self):
+        report = {"auditReportVersion": 2, "vulnerabilities": {}, "metadata": counts({})}
+        report["metadata"]["dependencies"]["dev"] = 0
+        data = {"lockfileVersion": 3, "packages": {"": {"name": "x"}, "node_modules/a": {"version": "1.0.0"}}}
+        self.assertTrue(self.run_gate(report, exit_code=0, lock_data=data).passed)
+
+    def test_npm_audit_argv_includes_dev_optional_peer(self):
+        self.assertEqual(gate.NPM_AUDIT_ARGV,
+                         ["npm", "audit", "--json", "--include=dev", "--include=optional", "--include=peer"])
+        with mock.patch.object(gate.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+            gate.run_npm_audit(ROOT)
+        self.assertEqual(run.call_args.args[0], gate.NPM_AUDIT_ARGV)
+
+    def test_npm_stderr_is_printed_and_neutralised(self):
+        out = io.StringIO()
+        with mock.patch.object(gate.subprocess, "run") as run, contextlib.redirect_stdout(out):
+            run.return_value = subprocess.CompletedProcess([], 2, stdout="", stderr="::set-output name=x::1\nboom")
+            gate.run_npm_audit(ROOT)
+        for line in out.getvalue().splitlines():
+            self.assertFalse(line.lstrip().startswith("::"), line)
+        self.assertIn("boom", out.getvalue())
+
+    def test_safe_text_defuses_workflow_commands(self):
+        for raw in ("::error::x", "a\n::stop-commands::t", "\r::warning::y"):
+            for line in gate.safe_text(raw).splitlines():
+                self.assertFalse(line.startswith("::"))
+                self.assertNotIn("::", line)
+
+    # ---- F3: auto-invalidation
+    def test_any_new_stable_version_fails_even_below_limit_line(self):
+        for versions in (("4.0.7", "4.0.8"), ("4.0.7", "3.0.3"), ("4.0.7", "2.3.3"), ("4.0.7", "1.2.1"), ("4.0.7", "5.0.0")):
+            with self.subTest(versions):
+                self.assertFails(self.run_gate(lookup=registry(versions)), "known_stable_versions")
+
+    def test_known_stable_versions_all_pass_and_policy_lists_them(self):
+        known = POLICY["known_stable_versions"]
+        self.assertIn("4.0.7", known)
+        self.assertIn("2.3.2", known)
+        self.assertEqual(max(known, key=gate.parse_stable), "4.0.7")
+        self.assertTrue(self.run_gate(lookup=registry(tuple(known), {"latest": "4.0.7"})).passed)
+
+    def test_real_fix_in_fix_available_fails(self):
+        for fix in (True, {"name": "vite", "version": "8.4.0", "isSemVerMajor": False},
+                    {"name": "vite", "version": "8.4.0"}):
+            with self.subTest(fix):
+                report = baseline_report()
+                report["vulnerabilities"]["vite"]["fixAvailable"] = fix
+                self.assertFails(self.run_gate(report), "real (non-major) fix")
+
+    def test_major_downgrade_suggestion_is_not_a_fix(self):
+        report = baseline_report()
+        for item in report["vulnerabilities"].values():
+            item["fixAvailable"] = {"name": "vite", "version": "6.2.7", "isSemVerMajor": True}
+        self.assertTrue(self.run_gate(report).passed)
+
+    # ---- F5: severity cross-check
+    def test_moderate_entry_with_unrelated_high_via_fails(self):
+        report = with_entries(baseline_report(), lodash=entry("lodash", [advisory(source=9, url=OTHER_URL, name="lodash")], "moderate"))
+        self.assertFails(self.run_gate(report), "lodash")
+
+    def test_moderate_entry_with_critical_via_fails_as_critical(self):
+        report = with_entries(baseline_report(), lodash=entry("lodash", [advisory(source=9, url=OTHER_URL, name="lodash", severity="critical")], "low"))
+        self.assertFails(self.run_gate(report), "critical vulnerability")
+
+    def test_excepted_advisory_relabelled_critical_or_lower_fails(self):
+        for severity in ("critical", "moderate", "low", None):
+            with self.subTest(severity):
+                report = baseline_report()
+                report["vulnerabilities"]["picomatch"]["via"] = [advisory(severity=severity)]
+                self.assertFails(self.run_gate(report), "advisory not covered")
+
+    def test_covered_entry_without_nodes_fails(self):
+        report = baseline_report()
+        report["vulnerabilities"]["vite"]["nodes"] = []
+        self.assertFails(self.run_gate(report), "no installed node")
+
+    # ---- F7: scope is pinned
+    def test_policy_scope_is_pinned(self):
+        self.assertEqual(POLICY["allowed_packages"], ["picomatch", "fdir", "tinyglobby", "vite-plugin-full-reload",
+                                                      "laravel-vite-plugin", "vite"])
+        self.assertEqual(POLICY["id"], "GHSA-fc5q-39xc-vjpf")
+        self.assertEqual(POLICY["advisory"], {
+            "source_id": 1247710, "url": GHSA_URL, "package": "picomatch", "vulnerable_range": "<=4.0.7",
+            "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs", "severity": "high"})
+        self.assertEqual(POLICY["fixed_version_gate"], {"package": "picomatch", "max_vulnerable_version": "4.0.7"})
+
+    def test_expiry_is_capped_by_hard_limit(self):
+        self.assertEqual(gate.MAX_EXPIRY, dt.date(2026, 12, 1))
+        policy = copy.deepcopy(POLICY)
+        policy["expires"] = "2026-12-02"
+        with self.assertRaises(ValueError):
+            gate.validate_policy(policy)
+        policy["expires"] = "2026-12-01"
+        gate.validate_policy(policy)
+
+
 class CliTest(unittest.TestCase):
     def setUp(self):
         stdout = contextlib.redirect_stdout(io.StringIO())
         stdout.__enter__()
         self.addCleanup(stdout.__exit__, None, None, None)
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        for name in gate.CI_ENV_VARS:  # these tests may use offline flags, which CI itself must refuse
+            os.environ.pop(name, None)
+
+    def test_offline_flags_are_refused_in_ci(self):
+        os.environ["CI"] = "true"
+        for flags in (["--audit-json", "x.json"], ["--audit-exit-code", "0"], ["--registry-json=r.json"],
+                      ["--policy", "p.json"]):
+            with self.subTest(flags):
+                self.assertEqual(gate.main(flags, today=TODAY, registry_lookup=registry(),
+                                           audit_runner=lambda _r: ("{}", 0)), 1)
 
     def test_cli_saves_raw_report_and_reports_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -340,6 +467,41 @@ class CliTest(unittest.TestCase):
         gate_source = (ROOT / "scripts/npm_audit_gate.py").read_text(encoding="utf-8")
         for forbidden in ("--omit=dev", "--force", "|| true", "--audit-level"):
             self.assertNotIn(forbidden, gate_source)
+
+    def npm_gate_steps(self):
+        github = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        start = github.index("- name: npm advisories")
+        github_step = github[start:github.index("\n      - name:", start + 10)]
+        gitlab = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        start = gitlab.index("python3 scripts/tests/npm-audit-gate-test.py")
+        gitlab_step = gitlab[start:gitlab.index("set -eu\n      version=8", start)]
+        return github_step, gitlab_step
+
+    def test_ci_gate_steps_contain_no_bypass(self):
+        for step in self.npm_gate_steps():
+            for forbidden in ("|| true", "continue-on-error", "--omit=dev", "--omit", "--force", "--audit-level",
+                              "npm_config_omit", "NODE_ENV"):
+                self.assertNotIn(forbidden, step)
+            self.assertNotRegex(step, r"(?m)^\s*(- )?npm audit")  # only the gate may invoke npm audit
+        self.assertNotIn("continue-on-error", (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8").split("npm advisories")[1].split("Secret scan")[0])
+
+    def test_ci_invocation_is_pinned(self):
+        github_step, gitlab_step = self.npm_gate_steps()
+        for step in (github_step, gitlab_step):
+            invocations = [line.strip() for line in step.splitlines() if "scripts/npm_audit_gate.py" in line
+                           and "py_compile" not in line]
+            self.assertEqual(len(invocations), 1, invocations)
+            for flag in gate.OFFLINE_FLAGS:
+                self.assertNotIn(flag, step)
+            self.assertRegex(invocations[0], r'^(- )?python3 scripts/npm_audit_gate\.py --report-out "[^" ]+" \|\| status=\$\?$')
+            self.assertIn('exit "$status"', step)
+            self.assertIn("sha256sum", step)
+            self.assertIn("npm --version", step)
+            self.assertIn("py_compile scripts/npm_audit_gate.py scripts/tests/npm-audit-gate-test.py", step)
+        self.assertIn('--report-out "$report"', github_step)
+        self.assertIn('--report-out "$report"', gitlab_step)
+        self.assertIn('report="$CI_PROJECT_DIR/npm-audit-report.json"', gitlab_step)
+        self.assertIn('if [[ -s "$report" ]]; then cat -- "$report"; else echo "no report written"; fi', github_step)
 
 
 if __name__ == "__main__":

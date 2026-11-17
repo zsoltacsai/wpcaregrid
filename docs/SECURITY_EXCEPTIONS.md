@@ -27,7 +27,7 @@ picomatch (advisory) -> tinyglobby -> laravel-vite-plugin (direct devDependency)
 picomatch (advisory) -> vite-plugin-full-reload -> laravel-vite-plugin (direct devDependency)
 ```
 
-Allowlist: `picomatch`, `fdir`, `tinyglobby`, `vite-plugin-full-reload`, `laravel-vite-plugin`, `vite`. npm's suggested "fixes" are downgrades (vite 6.2.7, laravel-vite-plugin 2.1.0), not real fixes.
+Allowlist: `picomatch`, `fdir`, `tinyglobby`, `vite-plugin-full-reload`, `laravel-vite-plugin`, `vite`. npm's suggested "fixes" are downgrades (vite 6.2.7, laravel-vite-plugin 1.3.0), not real fixes.
 
 ### Compensating controls
 
@@ -39,13 +39,14 @@ Allowlist: `picomatch`, `fdir`, `tinyglobby`, `vite-plugin-full-reload`, `larave
 
 ### What the gate does (CI Quality job, replaces the bare `npm audit --audit-level=high` step)
 
-1. Runs `npm audit --json` itself and saves the raw report to `$RUNNER_TEMP/npm-audit-report.json`. The CI step prints that report in a collapsed log group. It is **not** uploaded as an Actions artifact: `scripts/tests/ci-supply-chain-policy-test.py` forbids `upload-artifact` in `ci.yml` ("PR artifacts must not become release inputs"), and that guard was left unchanged.
+1. Runs `npm audit --json --include=dev --include=optional --include=peer` itself (the flags override `NODE_ENV=production` and `npm_config_omit=dev`, which would otherwise make npm audit nothing and exit 0) and saves the raw report to `$RUNNER_TEMP/npm-audit-report.json`. The CI step prints `npm --version`, the report and its sha256 in a collapsed log group. The GitLab fallback does the same and keeps the gate's exit status. It is **not** uploaded as an Actions artifact: `scripts/tests/ci-supply-chain-policy-test.py` forbids `upload-artifact` in `ci.yml` ("PR artifacts must not become release inputs"), and that guard was left unchanged.
 2. Evaluates only `high` and `critical` (the previous threshold is unchanged; moderate/low behave as before). Critical always fails. For every high entry, the whole transitive `via` closure must consist of the excepted advisory only (source id **and** URL **and** name **and** range, on the `picomatch` entry) and allowlisted packages. Any other advisory, even on the same package, an unknown or missing `via` target, or a package outside the allowlist fails.
-3. Fails closed on empty, non-JSON or truncated output, `auditReportVersion` other than 2, missing `metadata`/`vulnerabilities`, an `error` key, npm exit codes other than 0/1, an exit code that contradicts the report, and any mismatch between `metadata.vulnerabilities` counts and the entries listed.
+3. Fails when `metadata.dependencies.dev` is 0 while `package-lock.json` has `dev: true` entries (dev dependencies were not scanned). Fails closed on empty, non-JSON or truncated output, `auditReportVersion` other than 2, missing `metadata`/`vulnerabilities`, an `error` key, npm exit codes other than 0/1, an exit code that contradicts the report, and any mismatch between `metadata.vulnerabilities` counts and the entries listed.
 4. Verifies the exposure conditions above from `package.json` and `package-lock.json`.
-5. Auto-invalidation: queries the npm registry (`npm view picomatch versions` and `dist-tags`, three attempts). Any stable (non-prerelease) picomatch newer than 4.0.7 fails the gate. Registry failure fails the gate.
+5. Auto-invalidation: queries the npm registry (`npm view picomatch versions` and `dist-tags`, three attempts). Any stable (non-prerelease) picomatch version that is not in `known_stable_versions` in the policy fails the gate, as does a covered entry whose `fixAvailable` is `true` or a non-major object (a real fix). Severity is the highest of an entry's own severity and its advisories'; the excepted advisory must still be `high`. Registry failure fails the gate.
 6. If the audit no longer reports the advisory, the gate passes and prints `exception unused — remove it`.
-7. Fails on and after the expiry date.
+7. Fails on and after the expiry date. The policy `expires` may never exceed the hard limit `MAX_EXPIRY` (2026-12-01) in the script, so renewal needs a reviewed script change too.
+8. Offline/rehearsal flags (`--audit-json`, `--audit-exit-code`, `--registry-json`, `--policy`) are refused when `CI`, `GITHUB_ACTIONS` or `GITLAB_CI` is set; log output from npm is neutralised so it cannot inject workflow commands.
 
 No `--omit=dev`, `--force`, `|| true`, `continue-on-error`, lowered threshold, or package-wide picomatch/vite exception is used.
 
