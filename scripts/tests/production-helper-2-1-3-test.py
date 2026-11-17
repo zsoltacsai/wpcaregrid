@@ -484,10 +484,13 @@ class ContractTests(unittest.TestCase):
         nginx = next(item for item in data["same_uid_peers"]["processes"] if item["unit"] == "nginx.service")
         nginx["fds"] = ["/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/public/build/app.js"]
         self._passes(data)
-        self.assertEqual(self._refusal(lambda d: next(
-            item for item in d["same_uid_peers"]["processes"] if item["unit"] == "nginx.service").update(
-                fds=["/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/bootstrap/cache/config.php"])),
-            "confinement_peer_foreign_descriptor")
+        for path in ("public/storage", "public/storage/uploads/avatar.jpg",
+                     "bootstrap/cache/config.php"):
+            with self.subTest(nginx_path=path):
+                full_path = "/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/" + path
+                self.assertEqual(self._refusal(lambda d, value=full_path: next(
+                    item for item in d["same_uid_peers"]["processes"] if item["unit"] == "nginx.service").update(
+                        fds=[value])), "confinement_peer_foreign_descriptor")
 
     def test_missing_mismatched_and_unconfined_observations_refuse(self):
         first = CONTRACT.CONFINEMENT_FILES[0]

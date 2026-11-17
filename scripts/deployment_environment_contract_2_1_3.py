@@ -810,7 +810,7 @@ def _forbidden_descriptor(peer: Mapping, production_side: bool, role: str | None
             tail = path[len(_PRODUCTION_RELEASES):]
             release, separator, public_path = tail.partition("/")
             if separator and re.fullmatch(r"[0-9a-f]{40}", release) and public_path.startswith("public/") \
-                    and not public_path.startswith("public/storage/"):
+                    and public_path != "public/storage" and not public_path.startswith("public/storage/"):
                 continue
         if path.startswith(forbidden) or path + "/" in forbidden:
             raise EnvironmentRefused("confinement_peer_foreign_descriptor")

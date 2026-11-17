@@ -238,11 +238,11 @@ sibling PHP that runs `sendmail`, `proc_open` or `exec`, then complain-mode soak
 | `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
 | `scripts/deployment_backend_v2_1_3.py` | `b586d4bf8aca330339f86e435290b1812e789d8e101d7097ce8e841825572cb0` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `088772ca2de9184d3aaf9a4047e130a4e9fed29768199d30036e852f27a823b0` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `928d72ed8bc8ba30653a781f746b1f0df644445f9542d4c24b42c0157ed91517` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `685faab84239131a3ed00c94622ec791c48209d30ddc987a7f24d8cf10bae0c7` |
-| `scripts/production_deploy_controller_2_1_3.py` | `2f3258d3d69f7b62e753b30d147551d85452f1692dea50272343d49916f3a2eb` |
-| `scripts/install_production_helper_2_1_3.py` | `84df18bec8c01f34f36001ec0da1cd5dc97c7158caa643ecf05de2601969612e` |
+| helper artifact digest | `593b67e7da339f29abc8dcca9c353029f2ddf9cc13a48b10781c7903c22c4948` |
+| `scripts/production_deploy_controller_2_1_3.py` | `a98ac8a2dd79a95c8763140ee91e39d72eb84fa41e9cebae2660fe779c9330e1` |
+| `scripts/install_production_helper_2_1_3.py` | `7cb18670ac3478d0be5ff07c2fe843f49f30265f1cd5c6cb1eeff91a4897de49` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.
