@@ -1056,6 +1056,13 @@ MIGRATION_RECEIPT_SPEC = {
         "app_account": ACCOUNT_REPORT_SPEC, "dba_executor": ACCOUNT_REPORT_SPEC,
         "elevated_sessions_open": 0,
     },
+    # This utility proves a disposable-clone rehearsal only. Production
+    # recovery readiness requires separate host-bound evidence and cannot be
+    # inferred from a successful synthetic/clone receipt.
+    "production_admission": {
+        "state": _one_of("HOLD", "PASS"),
+        "required_runtime_attestations": _list(_text(64), 3),
+    },
     "attested": {
         "accounts": {"app": _rx(V2.DEFINER_RE), "dba_executor": _rx(V2.DEFINER_RE), "definer": _rx(V2.DEFINER_RE)},
         "dba_window": {"granted_at": _time, "revoked_at": _time, "sessions_terminated_at": _time},
@@ -1440,6 +1447,14 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
                      "definer": {**definer_report, "locked": definer_lifecycle["account_locked"],
                                  "select_tables": definer_lifecycle["select_tables"]},
                      "app_account": app_report, "dba_executor": executor_report, "elevated_sessions_open": 0},
+        "production_admission": {
+            "state": "HOLD",
+            "required_runtime_attestations": [
+                "mysqldump_endpoint_instance_identity",
+                "application_connection_identity",
+                "candidate_migration_bytes_execution",
+            ],
+        },
         "attested": {"accounts": accounts, "dba_window": inputs["dba_window"],
                      "guarded_writes": inputs["guarded_writes"]},
         "limitations": list(LIMITATIONS),
@@ -1511,6 +1526,15 @@ def verify_migration_consistency(body, *, contract=None):
             or body["restore_point"]["baseline_schema"] == body["restore_point"]["clone_schema"]
             or body["mysql"]["server_uuid_sha256"] != body["restore_point"]["destination_server_uuid_sha256"]):
         refuse("MIGRATION_RECEIPT_SEPARATION_INVALID")
+    if body["production_admission"] != {
+            "state": "HOLD",
+            "required_runtime_attestations": [
+                "mysqldump_endpoint_instance_identity",
+                "application_connection_identity",
+                "candidate_migration_bytes_execution",
+            ],
+    }:
+        refuse("PRODUCTION_ADMISSION_MUST_REMAIN_HOLD")
     window = {name: _utc(value) for name, value in body["attested"]["dba_window"].items()}
     if not (window["granted_at"] <= window["revoked_at"] <= window["sessions_terminated_at"] <= _utc(body["issued_at"])):
         refuse("DBA_WINDOW_ORDER_INVALID")
@@ -1598,7 +1622,10 @@ def main(argv=None):
         else:
             receipt, key = need("migration-receipt", "signing-key")
             body, file_sha = verify_migration_receipt(receipt, load_signing_key(key, owner_uid=0), owner_uid=0)
-            result = {"migration_receipt": "VALID", "sha256": file_sha, "receipt_id": body["receipt_id"]}
+            result = {"migration_receipt": "VALID_CLONE_REHEARSAL_ONLY",
+                      "production_recovery": body["production_admission"]["state"],
+                      "required_runtime_attestations": body["production_admission"]["required_runtime_attestations"],
+                      "sha256": file_sha, "receipt_id": body["receipt_id"]}
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
     except RestoreRefused as error:

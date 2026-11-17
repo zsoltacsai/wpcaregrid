@@ -711,6 +711,14 @@ def test_migration_receipt_is_machine_checkable_and_binds_the_whole_chain():
         assert body["observed"]["baseline_unchanged"] is True and body["observed"]["elevated_sessions_open"] == 0
         assert body["observed"]["app_account"]["schema_privileges"] == ["delete", "insert", "select", "update"]
         assert body["attested"]["guarded_writes"]["executed_as"] == "app"  # attested, not observed
+        assert body["production_admission"] == {
+            "state": "HOLD",
+            "required_runtime_attestations": [
+                "mysqldump_endpoint_instance_identity",
+                "application_connection_identity",
+                "candidate_migration_bytes_execution",
+            ],
+        }
         assert "isolated_rehearsal_evidence_only" in body["limitations"]
         text = rehearsal.out.read_text()
         assert DEST_UUID not in text and SOURCE_UUID not in text
@@ -769,6 +777,7 @@ def test_offline_verifier_rejects_internally_inconsistent_but_correctly_signed_r
                 revoked_at="2000-01-01T00:00:00Z")),
             ("MIGRATION_RECEIPT_INVALID", lambda b: b["observed"].update(baseline_unchanged=False)),
             ("MIGRATION_RECEIPT_INVALID", lambda b: b["observed"].update(elevated_sessions_open=1)),
+            ("PRODUCTION_ADMISSION_MUST_REMAIN_HOLD", lambda b: b["production_admission"].update(state="PASS")),
             ("MIGRATION_RECEIPT_INVALID", lambda b: b.update(result="HOLD")),
         )
         for code, mutate in cases:

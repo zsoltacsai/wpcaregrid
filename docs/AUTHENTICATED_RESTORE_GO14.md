@@ -187,6 +187,30 @@ and credential-only defaults file, but this source tool does not attest the UUID
 from inside the mysqldump connection itself. A host deployment must keep the
 configured endpoint local and directly bound to the intended MySQL instance.
 
+### Production recovery admission remains fail-closed
+
+This tool proves a clone rehearsal, not production recovery readiness. Every
+v3 migration receipt is signed with `production_admission.state=HOLD`, and the
+offline verifier requires that exact value; there is no `ready=true` field or
+override. The CLI therefore reports `migration_receipt=VALID_CLONE_REHEARSAL_ONLY`
+and `production_recovery=HOLD`. A `result=PASS` inside this receipt means only
+that the clone rehearsal passed.
+
+Clearing this HOLD requires a separately reviewed successor to consume all
+three authenticated, host-bound records below. A missing, stale, mismatched or
+synthetic-only record must keep production admission at HOLD.
+
+| Required runtime attestation | Required binding and evidence |
+| --- | --- |
+| `mysqldump_endpoint_instance_identity` | Real controlled capture on the approved host; actual mysqldump binary hash and fixed argv digest; endpoint/socket inode and peer PID; active MySQL unit and main `mysqld` executable; boot ID and capture interval; source UUID observed through the selected endpoint and matching the policy plus before/after observations. |
+| `application_connection_identity` | Read-only query using the actual protected production application configuration, recording `CURRENT_USER()`, `USER()`, `DATABASE()`, `@@server_uuid`, endpoint/socket and grants fingerprint. Bind it to the protected config fingerprint; never include credential values. |
+| `candidate_migration_bytes_execution` | Root-controlled executor verifies exact merged SHA, artifact/tree and every migration blob hash immediately before execution; executes only those bytes against the isolated clone; emits a protected per-migration receipt with executor hash/argv, migration path/hash, destination UUID/schema, before/after schema and ledger fingerprints, exit status and time interval. The observed ledger must equal the complete candidate migration inventory. |
+
+The current helper 2.1.3 remains disabled by default and requires separately
+approved recovery evidence. Until a reviewed release gate consumes these
+attestations, no clone receipt may satisfy that production gate. This source
+change provisions no live database and changes no grant.
+
 ## Commands (root, never run here)
 
 ```text
