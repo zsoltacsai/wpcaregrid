@@ -1,5 +1,12 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-17 (GO-20: confinement package 1.0.6, production on PHP 8.5 — source only, review pending)
+
+- **Decision (Owner):** production runs PHP 8.5 in a dedicated FPM service `wpcaregrid-production-php8.5-fpm.service`; legacy staging stays PHP 8.4 (`php8.4-fpm.service`), staging-next stays PHP 8.5 (`php8.5-fpm.service`); PHP 8.4 is not removed; no new Linux user/group/FPM UID (`www-data` 33/33 under the confinement model).
+- **What:** new immutable successor `deploy/php-fpm-confinement/1.0.6/` (1.0.0–1.0.5 untouched and pinned by git tree id): own FPM master config/pool under `/etc/php/8.5/fpm-wpcaregrid-production/`, socket `/run/php/wpcaregrid-production-php8.5-fpm.sock`, production profile (`/usr/sbin/php-fpm8.5`, bound only to the production unit; packaged `/etc/php/8.5/fpm/pool.d` and `php-fpm.conf` denied), production CLI profiles on `/usr/bin/php8.5`. Because production and staging-next now share `php-fpm8.5`, the verifier derives classes only from (label, unit) and pool/socket paths and refuses an ambiguous matrix. Details and frozen tree ids: [PHP_FPM_CONFINEMENT_GO20_PHP85.md](PHP_FPM_CONFINEMENT_GO20_PHP85.md).
+- **Pins for the helper successor:** package git tree `970b46397eeedd3581ae58493b9de839716971b9`; `SHA256SUMS` SHA-256 `dd07a01779b469e7e5aa420cf4a083983f7dde35ce11519c1a272976ba25ae93`. Helper 2.1.4 and its contract are untouched and stay bound to 1.0.5; a separate helper 2.1.5 will bind 1.0.6. Not bound by any helper yet.
+- **Validation:** `scripts/tests/php-fpm-confinement-test.py` covers 1.0.6 and pins 1.0.0–1.0.5 immutably; real `apparmor_parser` compile runs only in CI (compile-only step added: `apparmor_parser -Q -K -I <dir> <profile>`). Phase B stays disabled; MySQL socket contract unchanged. No host or service touched.
+
 ## Update — 2026-11-17 (GO-14 Workstream A: bind merged package 1.0.5 — source only, review pending)
 
 - **Base:** protected primary `04a8e10711e0a24bf5b85a258764c99ec3f878bd` plus the merged GO-13 history. Source only: nothing installed, loaded, enabled or deployed; no host, service, database, sudoers or credential change.

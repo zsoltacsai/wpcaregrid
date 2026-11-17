@@ -41,7 +41,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # never leave bytecode inside the hashed artifact tree
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.5"
+ARTIFACTS = ROOT / "deploy" / "php-fpm-confinement" / "1.0.6"
 MYSQL_SOCKET = "/run/mysqld/wpcaregrid-production.sock"
 DEPLOY_UNIX = "(create, connect, shutdown, send, receive, getattr, getopt, setopt) unix stream"
 DOC = ROOT / "docs" / "PHP_FPM_CONFINEMENT_GO13.md"
@@ -77,7 +77,7 @@ EXPECTED_FILES = {
     "systemd/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf",
     "systemd/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf",
     "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf",
-    "systemd/wpcaregrid-production-php8.4-fpm.service",
+    "systemd/wpcaregrid-production-php8.5-fpm.service",
 }
 PROFILES = {
     "wpcaregrid-php-fpm-production": "apparmor/wpcaregrid-php-fpm-production",
@@ -92,12 +92,12 @@ ATTACHMENT: dict = {}  # no profile has an exec-path attachment: www-data cron i
 NO_COMMON = {"wpcaregrid-nginx"}  # nginx needs TLS keys, so it carries its own complete deny set
 # Exact per-profile grants beyond plain reads. Anything else is a finding.
 EXEC_ALLOW = {
-    "wpcaregrid-php-fpm-production": {"/usr/sbin/php-fpm8.4", "/usr/bin/kill"},
+    "wpcaregrid-php-fpm-production": {"/usr/sbin/php-fpm8.5", "/usr/bin/kill"},
     "wpcaregrid-php-fpm-staging-next": {"/usr/sbin/php-fpm8.5", "/usr/bin/kill", "/usr/bin/dash",
                                        "/usr/lib/php/php-fpm-socket-helper"},
     "wpcaregrid-nginx": {"/usr/sbin/nginx", "/usr/sbin/start-stop-daemon"},
-    "wpcaregrid-php-cli-production-deploy": {"/usr/bin/php8.4"},
-    "wpcaregrid-php-cli-production-build": {"/usr/bin/php8.4"},
+    "wpcaregrid-php-cli-production-deploy": {"/usr/bin/php8.5"},
+    "wpcaregrid-php-cli-production-build": {"/usr/bin/php8.5"},
     "wpcaregrid-php-cli-staging": {"/usr/bin/supervisord", "/usr/bin/python3*", "/usr/bin/php8.4", "/usr/bin/php8.5",
                                    "/usr/local/bin/wpcaregrid-php", "/usr/local/bin/wpcaregrid-scheduler",
                                    "/usr/bin/dash", "/usr/bin/bash", "/usr/bin/flock", "/usr/bin/logger"},
@@ -105,14 +105,14 @@ EXEC_ALLOW = {
 WRITE_ALLOW = {
     "wpcaregrid-php-fpm-production": {
         "/var/lib/wpcaregrid-deploy/production/shared/storage/{,**}",
-        "/run/php/wpcaregrid-production-php8.4-fpm.sock", "/run/systemd/notify",
+        "/run/php/wpcaregrid-production-php8.5-fpm.sock", "/run/systemd/notify",
         "/var/log/wpcaregrid-production/php-fpm.log", "/tmp/{,**}"},
     "wpcaregrid-php-fpm-staging-next": {
         "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/{,**}",
         "/run/php/php8.5-fpm.sock", "/run/php/php8.5-fpm.pid", "/run/systemd/notify",
         "/var/log/php8.5-fpm.log", "/tmp/{,**}"},
     "wpcaregrid-nginx": {"/run/nginx.pid", "/var/log/nginx/{,**}", "/var/lib/nginx/{,**}",
-                         "/run/php/wpcaregrid-production-php8.4-fpm.sock", "/run/php/php8.5-fpm.sock",
+                         "/run/php/wpcaregrid-production-php8.5-fpm.sock", "/run/php/php8.5-fpm.sock",
                          "/run/php/php8.4-fpm.sock"},
     "wpcaregrid-php-cli-production-deploy": {MYSQL_SOCKET},
     "wpcaregrid-php-cli-production-build": {
@@ -141,9 +141,12 @@ PATH_EXCEPTIONS = {"/etc/hosts", "/etc/host.conf", "/etc/nsswitch.conf", "/tmp/{
 # even where default-deny would already refuse it.
 REQUIRED_DENIES = {
     "wpcaregrid-php-fpm-production": ("/var/lib/wpcaregrid-deploy/staging-next/{,**}", "/var/www/wpcaregrid-staging-new/{,**}",
-                                      "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}"),
+                                      "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}", "/run/php/php[0-9].[0-9]-fpm.{sock,pid}",
+                                      "/etc/php/8.5/fpm/php-fpm.conf", "/etc/php/8.5/fpm/pool.d/{,**}"),
     "wpcaregrid-php-fpm-staging-next": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
-                                        "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}"),
+                                        "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}",
+                                        "/run/php/wpcaregrid-production-php[0-9].[0-9]-fpm.{sock,pid}",
+                                        "/etc/php/8.5/fpm-wpcaregrid-production/{,**}"),
     "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
     "wpcaregrid-php-cli-staging": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
                                    "/var/log/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
@@ -164,12 +167,15 @@ MARKER_EXCEPTIONS = {MYSQL_SOCKET, "/var/lib/wpcaregrid/deploy-maintenance", "/v
                      "/var/lib/wpcaregrid-deploy/staging-next/state/workers-disabled",
                      "/var/lib/wpcaregrid-deploy/staging-next/state/scheduler-paused"}
 FOREIGN_TOKENS = {
-    "wpcaregrid-php-fpm-production": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.5-fpm"),
-    "wpcaregrid-php-fpm-staging-next": ("production", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.4-fpm.sock"),
+    # Production and staging-next both run PHP 8.5: foreign tokens name the other pool's exact paths, never a bare "php8.5".
+    "wpcaregrid-php-fpm-production": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "/run/php/php8.5-fpm.",
+                                      "/run/php/php8.4-fpm.", "/var/log/php8.5-fpm.log", "/etc/php/8.5/fpm/pool.d",
+                                      "/etc/php/8.5/fpm/php-fpm.conf", "php8.4"),
+    "wpcaregrid-php-fpm-staging-next": ("production", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.4"),
     "wpcaregrid-nginx": ("/shared/", "/storage/", "/bootstrap/", "/.env", "/etc/wpcaregrid-deploy"),
     "wpcaregrid-php-cli-staging": ("production",),
-    "wpcaregrid-php-cli-production-deploy": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.5", "/run/php", "/log/"),
-    "wpcaregrid-php-cli-production-build": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.5", "/run/php", "/log/"),
+    "wpcaregrid-php-cli-production-deploy": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.4", "/run/php", "/log/"),
+    "wpcaregrid-php-cli-production-build": ("staging", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "php8.4", "/run/php", "/log/"),
 }
 SECRET_PATHS_NEVER_GRANTED = (
     "/etc/wpcaregrid-deploy/", "/home/", "/root/", "/var/lib/mysql", "/run/mysqld/", "/etc/shadow",
@@ -567,7 +573,7 @@ def resolve_virtual(symlinks: dict[str, str], path: str) -> str:
 
 def validate_units(root: Path) -> list[str]:
     findings: list[str] = []
-    unit = parse_unit(root / "systemd/wpcaregrid-production-php8.4-fpm.service")
+    unit = parse_unit(root / "systemd/wpcaregrid-production-php8.5-fpm.service")
     for _, key, _ in unit:
         if key not in PRODUCTION_UNIT_KEYS:
             findings.append(f"production unit: unreviewed directive {key}")
@@ -604,14 +610,14 @@ def validate_units(root: Path) -> list[str]:
     pool = (root / "php-fpm/production/pool.d/wpcaregrid-production.conf").read_text(encoding="utf-8")
     master = (root / "php-fpm/production/php-fpm.conf").read_text(encoding="utf-8")
     for needed in ("user = www-data", "group = www-data", "clear_env = yes", "listen.mode = 0660",
-                   "listen = /run/php/wpcaregrid-production-php8.4-fpm.sock", "security.limit_extensions = .php"):
+                   "listen = /run/php/wpcaregrid-production-php8.5-fpm.sock", "security.limit_extensions = .php"):
         if needed not in pool.splitlines():
             findings.append(f"pool: missing {needed}")
     if re.search(r"^\s*env\[", pool, re.MULTILINE) or re.search(r"^listen\s*=\s*(?!/)\S", pool, re.MULTILINE):
         findings.append("pool: passes environment values or listens on TCP")
     if any(path in pool for path in ("staging-next", "wpcaregrid-staging-new", "/var/www/wpcaregrid/")):
         findings.append("pool: references another environment")
-    if "daemonize = no" not in master or "include = /etc/php/8.4/fpm-wpcaregrid-production/pool.d/*.conf" not in master:
+    if "daemonize = no" not in master or "include = /etc/php/8.5/fpm-wpcaregrid-production/pool.d/*.conf" not in master:
         findings.append("master config changed")
     return findings
 
@@ -625,7 +631,7 @@ def load_script(path: Path, name: str):
 
 
 def copy_artifacts(destination: Path) -> Path:
-    target = destination / "1.0.5"
+    target = destination / "1.0.6"
     shutil.copytree(ARTIFACTS, target)
     return target
 
@@ -793,9 +799,9 @@ class ProcPtraceSignalAndSockets(unittest.TestCase):
         for sock in ("/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock", "/run/php/php-fpm.sock",
                      "/run/mysqld/mysqld.sock"):
             self.assertFalse(decide(production, sock, "rw"), sock)
-        self.assertTrue(decide(production, "/run/php/wpcaregrid-production-php8.4-fpm.sock", "rw"))
+        self.assertTrue(decide(production, "/run/php/wpcaregrid-production-php8.5-fpm.sock", "rw"))
         staging = load_profile(ARTIFACTS, "wpcaregrid-php-fpm-staging-next", [])[0]
-        self.assertFalse(decide(staging, "/run/php/wpcaregrid-production-php8.4-fpm.sock", "rw"))
+        self.assertFalse(decide(staging, "/run/php/wpcaregrid-production-php8.5-fpm.sock", "rw"))
         self.assertTrue(decide(staging, "/run/php/php8.5-fpm.sock", "rw"))
 
     def test_tcp_port_separation_is_not_claimed(self) -> None:
@@ -817,7 +823,7 @@ class InheritedDescriptors(unittest.TestCase):
                 self.assertEqual(unit_values(entries, forbidden), [], f"{path.name}: {forbidden}")
             self.assertEqual(unit_values(entries, "FileDescriptorStoreMax"), ["0"], path.name)
             self.assertEqual(unit_values(entries, "StandardInput"), ["null"], path.name)
-        production = parse_unit(ARTIFACTS / "systemd/wpcaregrid-production-php8.4-fpm.service")
+        production = parse_unit(ARTIFACTS / "systemd/wpcaregrid-production-php8.5-fpm.service")
         self.assertEqual(unit_values(production, "StandardOutput"), ["journal"])
         self.assertEqual(unit_values(production, "StandardError"), ["journal"])
 
@@ -909,8 +915,8 @@ class FailClosedMutations(unittest.TestCase):
                           "link")
 
     def test_capability_added(self) -> None:
-        self.assertCaught(self.mutate("apparmor/wpcaregrid-php-fpm-production", "  /usr/sbin/php-fpm8.4 mrix,",
-                                      "  capability dac_override,\n  /usr/sbin/php-fpm8.4 mrix,"), "capability")
+        self.assertCaught(self.mutate("apparmor/wpcaregrid-php-fpm-production", "  /usr/sbin/php-fpm8.5 mrix,",
+                                      "  capability dac_override,\n  /usr/sbin/php-fpm8.5 mrix,"), "capability")
 
     def test_unparseable_and_unknown_rules_fail_closed(self) -> None:
         self.assertCaught(self.mutate("apparmor/wpcaregrid-php-fpm-production", "  /tmp/{,**} rwk,", "  /tmp/{,**} rwk"),
@@ -923,7 +929,7 @@ class FailClosedMutations(unittest.TestCase):
                           "overlay")
 
     def test_unit_fails_open_mutations(self) -> None:
-        unit = "systemd/wpcaregrid-production-php8.4-fpm.service"
+        unit = "systemd/wpcaregrid-production-php8.5-fpm.service"
         self.assertCaught(self.mutate(unit, "AppArmorProfile=wpcaregrid-php-fpm-production",
                                       "AppArmorProfile=-wpcaregrid-php-fpm-production"), "AppArmorProfile")
         self.assertCaught(self.mutate(unit, "AssertSecurity=apparmor", "ConditionSecurity=apparmor"), "unreviewed directive")
@@ -953,7 +959,7 @@ class FailClosedMutations(unittest.TestCase):
         pool = "php-fpm/production/pool.d/wpcaregrid-production.conf"
         self.assertCaught(self.mutate(pool, "clear_env = yes", "clear_env = no"), "clear_env")
         self.assertCaught(self.mutate(pool, "user = www-data", "user = wpcg-production"), "user")
-        self.assertCaught(self.mutate(pool, "listen = /run/php/wpcaregrid-production-php8.4-fpm.sock",
+        self.assertCaught(self.mutate(pool, "listen = /run/php/wpcaregrid-production-php8.5-fpm.sock",
                                       "listen = 127.0.0.1:9000"), "listen")
         self.assertCaught(self.mutate(pool, "pm = dynamic", "pm = dynamic\nenv[DB_PASSWORD] = x"), "environment")
 
@@ -1200,7 +1206,7 @@ class FixturesTool(unittest.TestCase):
         fixture_files = {e["path"] for e in fixtures["files"]}
         fixture_dirs = {e["path"] for e in fixtures["mkdirs"]}
         real = ("/var/www/wpcaregrid-staging-new", "/var/lib/wpcaregrid-deploy/staging-next", "/var/www/wpcaregrid/",
-                "/var/lib/wpcaregrid/", "/usr/", "/run/php/")
+                "/var/lib/wpcaregrid/", "/usr/", "/run/php/", "/etc/php/8.5/")
         symlinks = {e["path"] for e in fixtures["symlinks"]}
         merged: dict = {}
         for spec in self.matrix["profiles"].values():
@@ -1234,7 +1240,7 @@ class FixturesTool(unittest.TestCase):
             mode = int(entry["mode"], 8) & 0o777
             klass = (mode >> 6) if entry["uid"] == 33 else ((mode >> 3) if entry["gid"] == 33 else mode)
             return bool(klass & bit)
-        real = ("/var/www/wpcaregrid-staging-new", "/var/lib/wpcaregrid-deploy/staging-next", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "/usr/", "/run/php/")
+        real = ("/var/www/wpcaregrid-staging-new", "/var/lib/wpcaregrid-deploy/staging-next", "/var/www/wpcaregrid/", "/var/lib/wpcaregrid/", "/usr/", "/run/php/", "/etc/php/8.5/")
         checked = 0
         for name, spec in self.matrix["profiles"].items():
             for check in spec["checks"]:
@@ -1322,7 +1328,7 @@ def fake_proc(base: Path, processes: list[dict], units: dict[str, list[int]], bo
         (d / "stat").write_text(f"{p['pid']} ({p['comm']}) S {p.get('ppid', 1)} " + " ".join(["0"] * 17) + f" {p['start']} 0\n")
         (d / "attr" / "current").write_text(p["label"] + "\n")
         (d / "cgroup").write_text(f"0::/system.slice/{p['unit']}\n" if p.get("unit") else "0::/user.slice\n")
-        os.symlink("/usr/sbin/php-fpm8.4", d / "exe")
+        os.symlink("/usr/sbin/php-fpm8.5", d / "exe")  # production and staging-next share this executable; classes never rely on it
         for index, target in enumerate(p.get("fds", [])):
             os.symlink(target, d / "fd" / str(index))
     for unit, pids in units.items():
@@ -1339,7 +1345,7 @@ class CollectPeers(unittest.TestCase):
         cls.tool = load_script(ACCEPTANCE / "collect-peers.py", "wpcg_collect")
         cls.units = json.loads(MATRIX_TEXT)["role_units"]
 
-    PROD = "wpcaregrid-production-php8.4-fpm.service"
+    PROD = "wpcaregrid-production-php8.5-fpm.service"
 
     def tree(self, processes, units):
         base = Path(tempfile.mkdtemp(prefix="wpcg-fakeproc-"))
@@ -1353,7 +1359,7 @@ class CollectPeers(unittest.TestCase):
 
     def base_processes(self):
         return [
-            {"pid": 10, "uid": 33, "comm": "php-fpm8.4", "label": "wpcaregrid-php-fpm-production (enforce)", "start": 555, "unit": self.PROD,
+            {"pid": 10, "uid": 33, "comm": "php-fpm8.5", "label": "wpcaregrid-php-fpm-production (enforce)", "start": 555, "unit": self.PROD,
              "fds": ["socket:[1]"]},
             {"pid": 11, "uid": 0, "comm": "root-thing", "label": "unconfined", "start": 1, "unit": "x.service"},
             {"pid": 12, "uid": 33, "comm": "nginx", "label": "unconfined", "start": 7, "unit": "nginx.service"},
@@ -1381,13 +1387,13 @@ class CollectPeers(unittest.TestCase):
 
     def test_inventory_carries_the_fields_the_canonical_contract_consumes(self) -> None:
         procs = self.base_processes()
-        procs[0]["cmdline"] = "/usr/sbin/php-fpm8.4\0--nodaemonize\0"
+        procs[0]["cmdline"] = "/usr/sbin/php-fpm8.5\0--nodaemonize\0"
         _, inv = self.run_collect(procs, self.UNITS)
         worker = next(p for p in inv["processes"] if p["pid"] == 10)
         self.assertEqual(worker["state"], "S")
-        self.assertEqual(worker["argv0"], "/usr/sbin/php-fpm8.4")
-        self.assertEqual(worker["cmdline_sha256"], hashlib.sha256(b"/usr/sbin/php-fpm8.4\0--nodaemonize\0").hexdigest())
-        self.assertEqual(worker["cgroup"], "0::/system.slice/wpcaregrid-production-php8.4-fpm.service")
+        self.assertEqual(worker["argv0"], "/usr/sbin/php-fpm8.5")
+        self.assertEqual(worker["cmdline_sha256"], hashlib.sha256(b"/usr/sbin/php-fpm8.5\0--nodaemonize\0").hexdigest())
+        self.assertEqual(worker["cgroup"], "0::/system.slice/wpcaregrid-production-php8.5-fpm.service")
         self.assertEqual(inv["incomplete_reasons"], inv["reasons"])
         for p in inv["processes"]:
             self.assertTrue({"pid", "ppid", "state", "uids", "gids", "groups", "comm", "argv0", "cmdline_sha256", "starttime", "label", "unit",
@@ -1446,7 +1452,7 @@ class CollectPeers(unittest.TestCase):
 
         def reuse(attempt):
             counter["n"] += 1
-            Path(proc, "10", "stat").write_text(f"10 (php-fpm8.4) S 1 " + " ".join(["0"] * 17) + f" {9000 + counter['n']} 0\n")
+            Path(proc, "10", "stat").write_text(f"10 (php-fpm8.5) S 1 " + " ".join(["0"] * 17) + f" {9000 + counter['n']} 0\n")
         inv = self.tool.collect(self.units, proc, cgroup, pause=0, between=reuse, attempts=3)
         self.assertFalse(inv["complete"])
         self.assertTrue(any("churn" in r for r in inv["reasons"]), inv["reasons"])
@@ -1681,9 +1687,9 @@ class VerifyAcceptance(unittest.TestCase):
         def production_running(s):
             for key in ("before", "after"):
                 s[key]["processes"].append({"pid": 2101, "ppid": 1, "uids": [33] * 4, "gids": [33] * 4, "comm": "php-fpm", "starttime": 3001,
-                                            "label": "wpcaregrid-php-fpm-production (enforce)", "unit": "wpcaregrid-production-php8.4-fpm.service",
+                                            "label": "wpcaregrid-php-fpm-production (enforce)", "unit": "wpcaregrid-production-php8.5-fpm.service",
                                             "exe": "x", "fds": []})
-                s[key]["units"]["wpcaregrid-production-php8.4-fpm.service"] = {"present": True, "pids": [2101]}
+                s[key]["units"]["wpcaregrid-production-php8.5-fpm.service"] = {"present": True, "pids": [2101]}
         self.assertFails(self.run_verify(production_running, profile="wpcaregrid-nginx", phase="pre"), "production unit already has processes")
 
         def secrets(s):
@@ -1901,7 +1907,7 @@ class VerifyAcceptance(unittest.TestCase):
         self.assertFails(self.run_verify(lambda s: s["after"].update(collected_start_ns=s["confined"]["ended_ns"] - 1)), "after inventory started before")
 
     def test_missing_peer_role_or_unit_fails_enumeration(self) -> None:
-        for unit in ("php8.5-fpm.service", "php8.4-fpm.service", "wpcaregrid-production-php8.4-fpm.service", "nginx.service"):
+        for unit in ("php8.5-fpm.service", "php8.4-fpm.service", "wpcaregrid-production-php8.5-fpm.service", "nginx.service"):
             self.assertFails(self.run_verify(lambda s, u=unit: s["before"].update(processes=[p for p in s["before"]["processes"] if p["unit"] != u])),
                              "enumeration incomplete")
         self.assertFails(self.run_verify(lambda s: s["before"]["units"]["php8.5-fpm.service"].update(present=False)), "enumeration incomplete")
@@ -2228,7 +2234,7 @@ class EdgeAndJobPeers(unittest.TestCase):
 
     def test_nginx_sockets_are_the_three_fastcgi_upstreams_only(self) -> None:
         rules = self.rules("wpcaregrid-nginx")
-        for sock in ("/run/php/wpcaregrid-production-php8.4-fpm.sock", "/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock"):
+        for sock in ("/run/php/wpcaregrid-production-php8.5-fpm.sock", "/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock"):
             self.assertTrue(decide(rules, sock, "rw"), sock)
         for sock in ("/run/mysqld/mysqld.sock", "/run/supervisor.sock", "/run/php/php-fpm.sock", "/run/php/other.sock",
                      "/run/systemd/private", "/var/run/docker.sock"):
@@ -2248,7 +2254,7 @@ class EdgeAndJobPeers(unittest.TestCase):
                         f"{self.PS}/shared/storage/logs/laravel.log", f"{self.PS}/shared/storage/framework/cache/x",
                         f"{self.PS}/shared/vendor/autoload.php", f"{self.PS}/state/workers-disabled", f"{self.PS}/state/scheduler-paused",
                         f"{self.PS}/database-backups/x", f"{self.PS}/incoming/x", "/var/log/wpcaregrid-production/php-fpm.log",
-                        "/run/php/wpcaregrid-production-php8.4-fpm.sock", "/etc/wpcaregrid-deploy/profiles/x.json", "/home/deploy/x"]
+                        "/run/php/wpcaregrid-production-php8.5-fpm.sock", "/etc/wpcaregrid-deploy/profiles/x.json", "/home/deploy/x"]
             for path in attempts:
                 resolved = self.resolve(name, path)
                 for access in ("r", "w", "x"):
@@ -2677,7 +2683,7 @@ class RollbackOrder(unittest.TestCase):
 
 
 class DeployCliProfile(unittest.TestCase):
-    """Owner-approved wpcaregrid-php-cli-production-deploy: the helper's PHP 8.4 CLI, separately confined, same www-data UID."""
+    """Owner-approved wpcaregrid-php-cli-production-deploy: the helper's PHP 8.5 CLI, separately confined, same www-data UID."""
 
     NAME = "wpcaregrid-php-cli-production-build"
     P = "/var/www/wpcaregrid-production"
@@ -2696,8 +2702,8 @@ class DeployCliProfile(unittest.TestCase):
                              (f"{self.P}/current/bootstrap/cache/config.php", "r"), (f"{self.P}/current/bootstrap/cache/packages.php", "w"),
                              (f"{self.P}/current/bootstrap/cache/services.php", "w"), (f"{self.P}/current/bootstrap/cache/config.php", "w"),
                              (f"{self.P}/current/storage/logs/laravel.log", "w"), (f"{self.P}/current/storage/framework/views/x.php", "w"),
-                             (f"{self.PS}/shared/storage/framework/cache/data/x", "w"), ("/usr/bin/php8.4", "x"),
-                             ("/etc/php/8.4/cli/php.ini", "r"), ("/etc/php/8.4/mods-available/pdo_mysql.ini", "r"),
+                             (f"{self.PS}/shared/storage/framework/cache/data/x", "w"), ("/usr/bin/php8.5", "x"),
+                             ("/etc/php/8.5/cli/php.ini", "r"), ("/etc/php/8.5/mods-available/pdo_mysql.ini", "r"),
                              ("/usr/lib/php/20240924/pdo_mysql.so", "r")):
             self.assertTrue(decide(rules, self.resolve(path), access), f"{path} {access}")
 
@@ -2732,10 +2738,10 @@ class DeployCliProfile(unittest.TestCase):
     def test_negative_shell_and_every_other_binary(self) -> None:
         rules = self.rules()
         for path in ("/usr/bin/dash", "/usr/bin/bash", "/bin/sh", "/usr/bin/python3", "/usr/bin/perl", "/usr/bin/curl", "/usr/bin/wget",
-                     "/usr/bin/nc", "/usr/bin/env", "/usr/bin/id", "/usr/bin/php8.5", "/usr/bin/php8.3", "/usr/sbin/php-fpm8.4", "/usr/sbin/sendmail",
+                     "/usr/bin/nc", "/usr/bin/env", "/usr/bin/id", "/usr/bin/php8.4", "/usr/bin/php8.3", "/usr/bin/php8.6", "/usr/bin/php", "/usr/sbin/php-fpm8.4", "/usr/sbin/php-fpm8.5", "/usr/sbin/sendmail",
                      "/usr/bin/aa-exec", "/usr/bin/sudo", "/usr/bin/mysql", "/usr/local/bin/php", "/tmp/x"):
             self.assertFalse(decide(rules, path, "x"), path)
-        self.assertEqual([r.body for r in rules if r.kind == "file" and not r.deny and "x" in r.perms], ["/usr/bin/php8.4"])
+        self.assertEqual([r.body for r in rules if r.kind == "file" and not r.deny and "x" in r.perms], ["/usr/bin/php8.5"])
         for path in ("/tmp/x", "/dev/shm/x", f"{self.P}/x"):
             self.assertFalse(decide(rules, path, "w"), path)
 
@@ -2777,7 +2783,7 @@ class DeployCliProfile(unittest.TestCase):
         for alternate in ("/run/mysqld/wpcaregrid-production-restore.sock", "/run/mysqld/mysqld.sock", "/run/mysqld/wpcaregrid-production.sock.lock",
                           "/run/mysqld/wpcaregrid-production.pid", "/run/mysqld/wpcaregrid-production.sock.bak", "/run/mysqld/wpcaregrid-productionx.sock",
                           "/run/mysqld/other.sock", "/run/mysqld/", "/run/mysqld/sub/wpcaregrid-production.sock", "/var/lib/mysql/mysql.sock",
-                          "/tmp/mysql.sock", "/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock", "/run/php/wpcaregrid-production-php8.4-fpm.sock",
+                          "/tmp/mysql.sock", "/run/php/php8.5-fpm.sock", "/run/php/php8.4-fpm.sock", "/run/php/wpcaregrid-production-php8.5-fpm.sock",
                           "/run/supervisor.sock", "/run/systemd/private", "/var/run/docker.sock", "/run/user/0/bus",
                           "/run/systemd/journal/stdout", "/run/systemd/journal/socket", "/dev/log", "/run/dbus/system_bus_socket"):
             for access in ("r", "w", "rw"):
@@ -2849,15 +2855,15 @@ class DeployCliProfile(unittest.TestCase):
         self.assertIn("no host/port, no TCP fallback", db_commands["runtime-identity-probe"]["note"])
         self.assertIn("server-UUID", db_commands["runtime-identity-probe"]["note"])
         db_rules = load_profile(ARTIFACTS, "wpcaregrid-php-cli-production-deploy", [])[0]
-        for path, access in (("/usr/bin/php8.4", "x"), (MYSQL_SOCKET, "rw"), (f"{self.P}/current/vendor/autoload.php", "r"),
+        for path, access in (("/usr/bin/php8.5", "x"), (MYSQL_SOCKET, "rw"), (f"{self.P}/current/vendor/autoload.php", "r"),
                              (f"{self.P}/current/.env", "r"), (f"{self.P}/current/bootstrap/cache/config.php", "r")):
             self.assertTrue(decide(db_rules, self.resolve(path), access), f"runtime identity probe: {path} {access}")
         self.assertFalse(decide(db_rules, f"{self.P}/current/bootstrap/cache/config.php", "w"))
         self.assertFalse(decide(db_rules, f"{self.PS}/shared/storage/logs/laravel.log", "w"))
         needs = {
-            "package-discover": [("/usr/bin/php8.4", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/vendor/composer/installed.json", "r"),
+            "package-discover": [("/usr/bin/php8.5", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/vendor/composer/installed.json", "r"),
                                  (f"{self.P}/current/bootstrap/cache/packages.php", "w"), (f"{self.P}/current/bootstrap/cache/services.php", "w")],
-            "config-cache": [("/usr/bin/php8.4", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/config/app.php", "r"),
+            "config-cache": [("/usr/bin/php8.5", "x"), (f"{self.P}/current/artisan", "r"), (f"{self.P}/current/config/app.php", "r"),
                              (f"{self.P}/current/.env", "r"), (f"{self.P}/current/bootstrap/cache/config.php", "w")],
         }
         for command, paths in needs.items():
@@ -2903,6 +2909,10 @@ class DeployCliProfile(unittest.TestCase):
         self.assertEqual(deploy["network_checks"][0]["expect"], "allow")
 
 
+# Profiles whose bytes changed in the 1.0.6 PHP 8.5 production successor (see Package106Successor).
+CHANGED_IN_106 = {"wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next", "wpcaregrid-nginx"}
+
+
 class OtherProfilesUnchangedSince102(unittest.TestCase):
     """QA: 'other profiles unchanged except the /run/mysqld deny move' is enforced, not just true today."""
 
@@ -2917,6 +2927,8 @@ class OtherProfilesUnchangedSince102(unittest.TestCase):
         for name, relative in PROFILES.items():
             if name in ("wpcaregrid-php-cli-production-deploy", "wpcaregrid-php-cli-production-build"):
                 continue
+            if name in CHANGED_IN_106:
+                continue  # production moved to PHP 8.5 in 1.0.6: these are pinned line by line against 1.0.5 in Package106Successor
             old, new = self.norm((self.OLD / relative).read_text()), self.norm((ARTIFACTS / relative).read_text())
             extra = "  audit deny signal (send) peer=wpcaregrid-php-cli-production-build,"
             if name == "wpcaregrid-nginx":
@@ -3028,9 +3040,9 @@ class TransientDeployCliClass(unittest.TestCase):
     LABEL = "wpcaregrid-php-cli-production-build (enforce)"
 
     def proc(self, **kw):
-        base = {"pid": 7001, "ppid": 7000, "uids": [33] * 4, "gids": [33] * 4, "groups": [], "comm": "php8.4", "starttime": 12, "label": self.LABEL,
-                "unit": None, "exe": "/usr/bin/php8.4", "fds": ["/dev/null", "socket:[9]", "/var/www/wpcaregrid-production/releases/r1/artisan"],
-                "state": "S", "argv0": "/usr/bin/php8.4", "cmdline_sha256": "a" * 64, "cgroup": "0::/user.slice/user-0.slice/session-7.scope", "age_s": 3.2}
+        base = {"pid": 7001, "ppid": 7000, "uids": [33] * 4, "gids": [33] * 4, "groups": [], "comm": "php8.5", "starttime": 12, "label": self.LABEL,
+                "unit": None, "exe": "/usr/bin/php8.5", "fds": ["/dev/null", "socket:[9]", "/var/www/wpcaregrid-production/releases/r1/artisan"],
+                "state": "S", "argv0": "/usr/bin/php8.5", "cmdline_sha256": "a" * 64, "cgroup": "0::/user.slice/user-0.slice/session-7.scope", "age_s": 3.2}
         base.update(kw)
         return base
 
@@ -3050,10 +3062,10 @@ class TransientDeployCliClass(unittest.TestCase):
         self.assertTrue(any("production is not allowed to run PHP yet" in f for f in verdict.failures), verdict.failures[:3])
 
     def test_wrong_exe_uid_or_a_service_unit_is_refused(self) -> None:
-        for change in ({"exe": "/usr/bin/php8.5"}, {"exe": "/usr/bin/dash"}, {"uids": [0, 0, 0, 0]}, {"uids": [33, 33, 33, 0]},
-                       {"unit": "supervisor.service"}, {"unit": "wpcaregrid-production-php8.4-fpm.service"}, {"exe": None},
+        for change in ({"exe": "/usr/bin/php8.4"}, {"exe": "/usr/bin/dash"}, {"uids": [0, 0, 0, 0]}, {"uids": [33, 33, 33, 0]},
+                       {"unit": "supervisor.service"}, {"unit": "wpcaregrid-production-php8.5-fpm.service"}, {"exe": None},
                        {"gids": [33, 33, 33, 0]}, {"gids": [1000] * 4}, {"groups": [33, 4]}, {"groups": [1000]},
-                       {"argv0": "/usr/bin/php8.4 -S 0.0.0.0:80"}, {"argv0": "php8.4"},
+                       {"argv0": "/usr/bin/php8.5 -S 0.0.0.0:80"}, {"argv0": "php8.5"},
                        {"cgroup": "0::/system.slice/run-u12.service"}, {"cgroup": "0::/user.slice/user-0.slice/user@0.service/app.slice/x.scope"},
                        {"cgroup": "0::/user.slice/user-1000.slice/session-3.scope"}, {"cgroup": ""},
                        {"cmdline_sha256": None}, {"cmdline_sha256": "xyz"}, {"age_s": 5000.0}, {"age_s": None}):
@@ -3062,7 +3074,7 @@ class TransientDeployCliClass(unittest.TestCase):
 
     def test_a_daemonised_or_long_lived_php_in_the_session_scope_is_refused(self) -> None:
         """Review: `php -S` or `queue:work` left in a session scope must not pass indefinitely as 'transient'."""
-        verdict = self.run_with(age_s=86400.0, argv0="/usr/bin/php8.4")
+        verdict = self.run_with(age_s=86400.0, argv0="/usr/bin/php8.5")
         self.assertTrue(any("not short-lived" in f for f in verdict.failures), verdict.failures[:2])
         self.assertEqual(self.run_with(age_s=959.0).failures, [])
 
@@ -3080,7 +3092,7 @@ class TransientDeployCliClass(unittest.TestCase):
     def test_the_label_without_the_class_attributes_and_other_labels_still_block(self) -> None:
         verdict = self.run_with(label="wpcaregrid-php-cli-production-deploy (complain)")
         self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures))
-        verdict = self.run_with(label="unconfined", comm="php8.4")
+        verdict = self.run_with(label="unconfined", comm="php8.5")
         self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures))
 
     def test_a_churning_transient_process_makes_the_two_inventories_disagree(self) -> None:
@@ -3091,10 +3103,10 @@ class TransientDeployCliClass(unittest.TestCase):
 
     def test_matrix_and_binding_describe_the_class_for_the_canonical_contract(self) -> None:
         cls = next(x for x in json.loads(MATRIX_TEXT)["transient_classes"] if x["label"] == self.LABEL)
-        self.assertEqual((cls["exe"], cls["uids"], cls["unit"], cls["phases"]), ("/usr/bin/php8.4", [33] * 4, None, ["post"]))
+        self.assertEqual((cls["exe"], cls["uids"], cls["unit"], cls["phases"]), ("/usr/bin/php8.5", [33] * 4, None, ["post"]))
         binding = json.loads((ARTIFACTS / "binding.json").read_text())["aa_exec_profiles"]["wpcaregrid-php-cli-production-build"]
         self.assertEqual((binding["exe"], binding["unit"], binding["unit_attachment"], binding["exec_path_attachment"], binding["peer_label"]),
-                         ("/usr/bin/php8.4", None, None, None, self.LABEL))
+                         ("/usr/bin/php8.5", None, None, None, self.LABEL))
         self.assertIn("never a *.service unit", binding["cgroup"])
 
 
@@ -3119,12 +3131,16 @@ class PackageImmutability(unittest.TestCase):
     # version -> (git tree id of deploy/php-fpm-confinement/<version> at its reviewed commit, provenance commit)
     # The tree id is the durable pin: protected squash merges need not preserve the source PR commit as an ancestor.
     FROZEN = {
+        # 1.0.6 (PHP 8.5 production) is pinned by tree id alone: its provenance is the commit that adds it.
+        "1.0.6": ("970b46397eeedd3581ae58493b9de839716971b9", None),
         "1.0.5": ("e8e59b769ed6c6acd85a3bf259364bace5ec374b", "37eefe29e694be434dff2dc70d80cfb221c9903b"),
         "1.0.4": ("71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912", "9a54ca6581ea0fe173667236dcd6555f10ccdc12"),
         "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
         "1.0.2": ("90502b788a660347c52a83ccbe2c99c965fba2ef", "f478c8a70f91078e828ed89403cb9f890457c195"),
         "1.0.3": ("dcf18aa07cbdb8bcddde8f2a0527a13701ab0316", "96dc862ea00ebbcaa0dfe87e37ee44b984a74955"),
     }
+    # Withdrawn: 1.0.0 was replaced by 1.0.1 and removed from the tree; it is pinned only by its historical tree object.
+    WITHDRAWN = {"1.0.0": ("0a56a9a6498c1b000635cef18648d41d3407ec71", "cb3e014e0cd1ccf759101eb913166a560edbd2ac")}
     SUMS_1_0_1 = "1a44d13aa63c71e2228e2ab52cfce76f7139724f4025d13c665d9064a2222883"
 
     def require_git(self) -> None:
@@ -3138,6 +3154,14 @@ class PackageImmutability(unittest.TestCase):
         for version, (tree, _) in self.FROZEN.items():
             self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"), tree, version)
 
+    def test_withdrawn_1_0_0_is_absent_and_its_historical_tree_is_pinned(self) -> None:
+        self.assertFalse((ROOT / "deploy/php-fpm-confinement/1.0.0").exists())
+        self.require_git()
+        self.assertIsNone(git_out("rev-parse", "--verify", "-q", "HEAD:deploy/php-fpm-confinement/1.0.0"), "1.0.0 must not be recreated")
+        for version, (tree, commit) in self.WITHDRAWN.items():
+            if git_out("cat-file", "-t", commit) == "commit":
+                self.assertEqual(git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), tree, version)
+
     def test_frozen_packages_have_no_uncommitted_or_untracked_change(self) -> None:
         self.require_git()
         for version in self.FROZEN:
@@ -3147,7 +3171,7 @@ class PackageImmutability(unittest.TestCase):
     def test_the_pin_agrees_with_the_provenance_commit_when_available(self) -> None:
         self.require_git()
         for version, (tree, commit) in self.FROZEN.items():
-            if git_out("cat-file", "-t", commit) != "commit":
+            if commit is None or git_out("cat-file", "-t", commit) != "commit":
                 continue  # squash merge or shallow checkout: the pinned tree id above remains the reference
             self.assertEqual(git_out("rev-parse", f"{commit}:deploy/php-fpm-confinement/{version}"), tree, version)
             self.assertEqual(git_out("rev-parse", f"HEAD:deploy/php-fpm-confinement/{version}"),
@@ -3183,15 +3207,19 @@ class PackageImmutability(unittest.TestCase):
             digest, _, name = line.partition("  ")
             self.assertEqual(hashlib.sha256((old / name).read_bytes()).hexdigest(), digest, name)
 
-    def test_1_0_5_is_a_distinct_package_with_split_cli_profiles_and_pinned_sibling_canary(self) -> None:
+    def test_1_0_6_is_a_distinct_package_with_split_cli_profiles_and_pinned_sibling_canary(self) -> None:
         new = ARTIFACTS
         for version in self.FROZEN:
-            if version == "1.0.5":
-                # ARTIFACTS *is* 1.0.5: distinctness is asserted against the frozen predecessors below instead.
+            if version == "1.0.6":
+                # ARTIFACTS *is* 1.0.6: distinctness is asserted against its frozen predecessors.
                 continue
             old = ROOT / "deploy" / "php-fpm-confinement" / version
             old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
             new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
+            raw_old_files = old_files
+            # the production unit was renamed php8.4 -> php8.5 in 1.0.6; compare the other names as before
+            old_files = {"systemd/wpcaregrid-production-php8.5-fpm.service" if f == "systemd/wpcaregrid-production-php8.4-fpm.service" else f
+                         for f in old_files}
             if version == "1.0.4":
                 self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-build"})
             elif version == "1.0.1":
@@ -3200,12 +3228,17 @@ class PackageImmutability(unittest.TestCase):
                 self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-build", "acceptance/sibling-listener.py"})
             elif version == "1.0.2":
                 self.assertEqual(new_files - old_files, {"apparmor/wpcaregrid-php-cli-production-build", "acceptance/sibling-listener.py"})
+            elif version == "1.0.5":
+                # 1.0.6 renames only the production unit (php8.4 -> php8.5); every other file name is unchanged.
+                self.assertEqual(new_files - raw_old_files, {"systemd/wpcaregrid-production-php8.5-fpm.service"})
+                self.assertEqual(raw_old_files - new_files, {"systemd/wpcaregrid-production-php8.4-fpm.service"})
+                self.assertEqual(new_files, old_files)
             else:
                 self.assertEqual(new_files, old_files)
             self.assertEqual(old_files - new_files, set())
             self.assertNotEqual((old / "SHA256SUMS").read_bytes(), (new / "SHA256SUMS").read_bytes())
             self.assertEqual(json.loads((old / "binding.json").read_text())["package_version"], version)
-        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.5")
+        self.assertEqual(json.loads((new / "binding.json").read_text())["package_version"], "1.0.6")
         self.assertEqual(len(json.loads((new / "binding.json").read_text())["installed_files"]), 17)
         profile_matrix=json.loads((new / "acceptance/matrix.json").read_text())["profiles"]
         self.assertEqual(set(profile_matrix["wpcaregrid-php-cli-production-deploy"]["commands_supported"] and [x["id"] for x in profile_matrix["wpcaregrid-php-cli-production-deploy"]["commands_supported"]]), {"runtime-identity-probe"})
@@ -3302,7 +3335,7 @@ class BindingManifest(unittest.TestCase):
         self.assertEqual(set(self.binding["installed_files"].values()), artifacts)
         self.assertEqual(len(set(self.binding["installed_files"])), len(artifacts))
         for installed in self.binding["installed_files"]:
-            self.assertTrue(installed.startswith(("/etc/apparmor.d/", "/etc/systemd/system/", "/etc/php/8.4/fpm-wpcaregrid-production/")), installed)
+            self.assertTrue(installed.startswith(("/etc/apparmor.d/", "/etc/systemd/system/", "/etc/php/8.5/fpm-wpcaregrid-production/")), installed)
             self.assertEqual(installed, os.path.normpath(installed))
 
     def test_services_agree_with_the_matrix_units_and_profiles(self) -> None:
@@ -3332,7 +3365,7 @@ class BindingManifest(unittest.TestCase):
         self.assertEqual(self.binding["inventory_schema"]["units"], sorted(set(self.matrix["role_units"].values())))
         self.assertEqual(self.binding["package_version"], ARTIFACTS.name)
         deploy = self.binding["aa_exec_profiles"]["wpcaregrid-php-cli-production-deploy"]
-        self.assertEqual((deploy["gids"], deploy["argv0"], deploy["max_age_seconds"]), ([33] * 4, "/usr/bin/php8.4", 960))
+        self.assertEqual((deploy["gids"], deploy["argv0"], deploy["max_age_seconds"]), ([33] * 4, "/usr/bin/php8.5", 960))
         self.assertIn("no TCP", deploy["network"])
         self.assertEqual({c["id"] for c in deploy["commands_supported"]}, {"runtime-identity-probe"})
         build = self.binding["aa_exec_profiles"]["wpcaregrid-php-cli-production-build"]
@@ -3427,7 +3460,7 @@ class DocumentationContract(unittest.TestCase):
         self.assertIn("php8.5-fpm.service.d/90-wpcaregrid-confinement.conf", stage2)
         for needed in ("nginx.service.d/90-wpcaregrid-confinement.conf", "supervisor.service.d/", "wpcaregrid-staging-next-scheduler.service.d/"):
             self.assertIn(needed, stage3)
-        self.assertIn("wpcaregrid-production-php8.4-fpm.service", stage5)
+        self.assertIn("wpcaregrid-production-php8.4-fpm.service", stage5)  # GO13 doc is the frozen 1.0.5 procedure; GO20 doc covers 1.0.6
         self.assertLess(stage1.index("90-wpcaregrid-confinement.conf"), stage1.index("daemon-reload"))
         self.assertLess(stage2.index("drop-in"), stage2.index("`daemon-reload` (only now)"))
         self.assertLess(stage3.index("copy that unit's drop-in only now"), stage3.index("`daemon-reload`"))
@@ -3569,6 +3602,422 @@ class DocumentationContract(unittest.TestCase):
             if path.is_file() and path.suffix != ".py" and "__pycache__" not in path.parts:
                 for line in path.read_text(encoding="utf-8").splitlines():
                     self.assertIsNone(pattern.search(line), f"{path}: {line}")
+
+
+# --------------------------------------------------------------------------- 1.0.6 (PHP 8.5 production)
+
+GO20_DOC = ROOT / "docs" / "PHP_FPM_CONFINEMENT_GO20_PHP85.md"
+PROD_UNIT_106 = "wpcaregrid-production-php8.5-fpm.service"
+PROD_SOCKET_106 = "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+NEXT_SOCKET = "/run/php/php8.5-fpm.sock"
+LEGACY_SOCKET = "/run/php/php8.4-fpm.sock"
+PROD_POOL_DIR_106 = "/etc/php/8.5/fpm-wpcaregrid-production"
+
+
+class Package106Successor(unittest.TestCase):
+    """1.0.6 is the narrowest successor of 1.0.5: only the files below may differ, everything else is byte-identical."""
+
+    OLD = ROOT / "deploy/php-fpm-confinement/1.0.5"
+    REVIEWED_CHANGED = {
+        "acceptance/matrix.json", "acceptance/verify-acceptance.py", "binding.json",
+        "apparmor/wpcaregrid-nginx", "apparmor/wpcaregrid-php-cli-production-build",
+        "apparmor/wpcaregrid-php-cli-production-deploy", "apparmor/wpcaregrid-php-fpm-production",
+        "apparmor/wpcaregrid-php-fpm-staging-next",
+        "php-fpm/production/php-fpm.conf", "php-fpm/production/pool.d/wpcaregrid-production.conf",
+        "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf", "systemd/" + PROD_UNIT_106,
+    }
+
+    @staticmethod
+    def norm(data: bytes) -> bytes:
+        return re.sub(rb"confinement 1\.0\.\d", b"confinement X", data)
+
+    def old_name(self, relative: str) -> str:
+        return "systemd/wpcaregrid-production-php8.4-fpm.service" if relative == "systemd/" + PROD_UNIT_106 else relative
+
+    def test_only_the_reviewed_files_changed_and_the_rest_is_byte_identical(self) -> None:
+        changed = set()
+        for relative in EXPECTED_FILES - {"SHA256SUMS"}:
+            old = (self.OLD / self.old_name(relative)).read_bytes()
+            new = (ARTIFACTS / relative).read_bytes()
+            if self.norm(old) != self.norm(new):
+                changed.add(relative)
+        self.assertEqual(changed, self.REVIEWED_CHANGED)
+
+    def test_acceptance_tools_other_than_the_verifier_are_byte_identical_to_1_0_5(self) -> None:
+        for name in ("collect-peers.py", "derive-probe-profile.py", "fd-sender.py", "fence-production.py", "fixtures.py", "probe.py",
+                     "rollback-order.py", "sibling-listener.py"):
+            self.assertEqual((self.OLD / "acceptance" / name).read_bytes(), (ARTIFACTS / "acceptance" / name).read_bytes(), name)
+
+    def test_the_php84_production_unit_does_not_exist_in_1_0_6(self) -> None:
+        self.assertFalse((ARTIFACTS / "systemd/wpcaregrid-production-php8.4-fpm.service").exists())
+        self.assertTrue((ARTIFACTS / "systemd" / PROD_UNIT_106).is_file())
+        for path in ARTIFACTS.rglob("*"):
+            if path.is_file() and path.name != "SHA256SUMS":
+                self.assertNotIn("wpcaregrid-production-php8.4", path.read_text(encoding="utf-8"), str(path))
+
+    def test_no_old_production_runtime_path_survives(self) -> None:
+        for path in ARTIFACTS.rglob("*"):
+            if path.is_file() and path.name != "SHA256SUMS":
+                text = path.read_text(encoding="utf-8")
+                for stale in ("/etc/php/8.4/fpm-wpcaregrid-production", "wpcaregrid-production-php8.4-fpm.sock",
+                              "wpcaregrid-production-php8.4-fpm.service"):
+                    self.assertNotIn(stale, text, f"{path.relative_to(ARTIFACTS)}: {stale}")
+
+    def test_frozen_predecessors_are_pinned_withdrawn_or_present(self) -> None:
+        for version in ("1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"):
+            self.assertIn(version, PackageImmutability.FROZEN)
+        self.assertFalse((ROOT / "deploy/php-fpm-confinement/1.0.0").exists(), "1.0.0 was withdrawn in 1.0.1 and must not reappear")
+
+
+class ProductionPhp85Runtime(unittest.TestCase):
+    """Production runs PHP 8.5 as its own FPM service; staging-next keeps php8.5-fpm.service, legacy keeps php8.4."""
+
+    def rules(self, name: str):
+        return load_profile(ARTIFACTS, name, [])[0]
+
+    def text(self, relative: str) -> str:
+        return (ARTIFACTS / relative).read_text(encoding="utf-8")
+
+    def test_unit_master_config_pool_and_socket_are_dedicated_php85(self) -> None:
+        unit = parse_unit(ARTIFACTS / "systemd" / PROD_UNIT_106)
+        for key in ("ExecStartPre", "ExecStart"):
+            (value,) = unit_values(unit, key)
+            self.assertIn("/usr/sbin/php-fpm8.5 ", value)
+            self.assertTrue(value.endswith(f"--fpm-config {PROD_POOL_DIR_106}/php-fpm.conf"), value)
+        self.assertEqual(unit_values(unit, "After"), ["network.target"])  # no ordering/dependency on the packaged php8.5-fpm.service
+        self.assertEqual(unit_values(unit, "AppArmorProfile"), ["wpcaregrid-php-fpm-production"])
+        for forbidden in ("Alias", "Also", "Conflicts", "PartOf", "BindsTo", "Requires", "Wants", "Before", "RequiredBy"):
+            self.assertEqual(unit_values(unit, forbidden), [], forbidden)
+        pool, master = self.text("php-fpm/production/pool.d/wpcaregrid-production.conf"), self.text("php-fpm/production/php-fpm.conf")
+        self.assertIn(f"listen = {PROD_SOCKET_106}", pool.splitlines())
+        self.assertIn(f"include = {PROD_POOL_DIR_106}/pool.d/*.conf", master.splitlines())
+        self.assertIn("error_log = /var/log/wpcaregrid-production/php-fpm.log", master.splitlines())
+        self.assertNotIn("pid =", master)  # no pid file that could collide with /run/php/php8.5-fpm.pid
+        for text in (pool, master, "\n".join(f"{k}={v}" for _, k, v in unit)):
+            self.assertNotIn("8.4", text)
+            self.assertNotIn(NEXT_SOCKET, text)
+            self.assertNotIn("php8.5-fpm.sock", text.replace("wpcaregrid-production-php8.5-fpm.sock", ""))
+        # distinct from staging-next: unit, socket, pool directory
+        self.assertNotEqual(PROD_UNIT_106, "php8.5-fpm.service")
+        self.assertNotEqual(PROD_SOCKET_106, NEXT_SOCKET)
+        self.assertFalse((PROD_POOL_DIR_106 + "/").startswith("/etc/php/8.5/fpm/"))
+        self.assertNotIn("/etc/php/8.5/fpm/pool.d", pool + master)
+
+    def test_production_profile_is_bound_only_to_the_production_unit(self) -> None:
+        bound = set()
+        for path in sorted((ARTIFACTS / "systemd").rglob("*")):
+            if not path.is_file():
+                continue
+            profiles = unit_values(parse_unit(path), "AppArmorProfile")
+            if "wpcaregrid-php-fpm-production" in profiles:
+                bound.add(str(path.relative_to(ARTIFACTS / "systemd")))
+        self.assertEqual(bound, {PROD_UNIT_106})
+        self.assertEqual(unit_values(parse_unit(ARTIFACTS / "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf"), "AppArmorProfile"),
+                         ["wpcaregrid-php-fpm-staging-next"])
+        text = self.text("apparmor/wpcaregrid-php-fpm-production")
+        self.assertIn("profile wpcaregrid-php-fpm-production flags=(attach_disconnected) {", text)  # name only: no exec-path attachment
+        self.assertNotRegex(text, r"(?m)^profile \S+ /")
+        binding = json.loads(self.text("binding.json"))["services"]
+        self.assertEqual((binding["production"]["unit"], binding["production"]["apparmor_profile"]), (PROD_UNIT_106, "wpcaregrid-php-fpm-production"))
+        self.assertEqual((binding["staging-next"]["unit"], binding["staging-next"]["apparmor_profile"]),
+                         ("php8.5-fpm.service", "wpcaregrid-php-fpm-staging-next"))
+        self.assertEqual((binding["staging-legacy"]["unit"], binding["staging-legacy"]["apparmor_profile"]),
+                         ("php8.4-fpm.service", "wpcaregrid-php-fpm-staging-legacy"))
+        self.assertEqual(len({s["unit"] for s in binding.values()}), len(binding))
+
+    def test_production_and_staging_next_path_rules_in_both_directions(self) -> None:
+        prod, nxt = self.rules("wpcaregrid-php-fpm-production"), self.rules("wpcaregrid-php-fpm-staging-next")
+        for path, access in (("/usr/sbin/php-fpm8.5", "x"), (PROD_SOCKET_106, "rw"), (f"{PROD_POOL_DIR_106}/php-fpm.conf", "r"),
+                             (f"{PROD_POOL_DIR_106}/pool.d/wpcaregrid-production.conf", "r"), ("/etc/php/8.5/fpm/php.ini", "r"),
+                             ("/etc/php/8.5/fpm/conf.d/20-pdo_mysql.ini", "r"), ("/etc/php/8.5/mods-available/pdo_mysql.ini", "r"),
+                             ("/var/log/wpcaregrid-production/php-fpm.log", "w")):
+            self.assertTrue(decide(prod, path, access), f"production {path} {access}")
+        for path, access in ((NEXT_SOCKET, "rw"), ("/run/php/php8.5-fpm.pid", "rw"), (LEGACY_SOCKET, "rw"), ("/var/log/php8.5-fpm.log", "w"),
+                             ("/etc/php/8.5/fpm/pool.d/www.conf", "r"), ("/etc/php/8.5/fpm/php-fpm.conf", "r"), ("/usr/sbin/php-fpm8.4", "x"),
+                             ("/usr/bin/php8.5", "x"), ("/usr/bin/php8.4", "x"), ("/usr/lib/php/php-fpm-socket-helper", "x"),
+                             ("/var/lib/wpcaregrid-deploy/staging-next/shared/.env", "r")):
+            self.assertFalse(decide(prod, path, access), f"production must not {path} {access}")
+        for path, access in ((NEXT_SOCKET, "rw"), ("/run/php/php8.5-fpm.pid", "rw"), ("/etc/php/8.5/fpm/pool.d/www.conf", "r"),
+                             ("/usr/sbin/php-fpm8.5", "x"), ("/var/log/php8.5-fpm.log", "w")):
+            self.assertTrue(decide(nxt, path, access), f"staging-next {path} {access}")
+        for path, access in ((PROD_SOCKET_106, "rw"), ("/run/php/wpcaregrid-production-php8.5-fpm.pid", "rw"),
+                             (f"{PROD_POOL_DIR_106}/php-fpm.conf", "r"), (f"{PROD_POOL_DIR_106}/pool.d/wpcaregrid-production.conf", "r"),
+                             ("/var/log/wpcaregrid-production/php-fpm.log", "r"), ("/var/lib/wpcaregrid-deploy/production/shared/.env", "r")):
+            self.assertFalse(decide(nxt, path, access), f"staging-next must not {path} {access}")
+        # the legacy overlay keeps denying the production socket and config
+        legacy = self.rules("wpcaregrid-php-fpm-staging-legacy")
+        self.assertFalse(decide(legacy, PROD_SOCKET_106, "rw"))
+        self.assertFalse(decide(legacy, "/run/php/wpcaregrid-production-php8.5-fpm.pid", "rw"))
+
+    def test_the_new_audited_denials_are_present(self) -> None:
+        prod = self.text("apparmor/wpcaregrid-php-fpm-production")
+        for needed in ("audit deny /etc/php/8.5/fpm/php-fpm.conf rwklm,", "audit deny /etc/php/8.5/fpm/pool.d/{,**} rwklm,",
+                       "audit deny /run/php/php[0-9].[0-9]-fpm.{sock,pid} rwklm,"):
+            self.assertIn(f"  {needed}", prod)
+        nxt = self.text("apparmor/wpcaregrid-php-fpm-staging-next")
+        self.assertIn(f"  audit deny {PROD_POOL_DIR_106}/{{,**}} rwklm,", nxt)
+        self.assertIn("  audit deny /run/php/wpcaregrid-production-php[0-9].[0-9]-fpm.{sock,pid} rwklm,", nxt)
+        self.assertNotIn("/etc/php/8.5/fpm/{,**}", prod)  # the packaged FPM config directory is no longer granted wholesale
+
+    def test_mount_namespace_layer_hides_the_other_pools_configuration(self) -> None:
+        self.assertIn("/etc/php/8.5/fpm/pool.d", masks(parse_unit(ARTIFACTS / "systemd" / PROD_UNIT_106)))
+        self.assertIn(PROD_POOL_DIR_106, masks(parse_unit(ARTIFACTS / "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf")))
+        self.assertNotIn(PROD_POOL_DIR_106, masks(parse_unit(ARTIFACTS / "systemd" / PROD_UNIT_106)))
+
+    def test_cli_profiles_use_php85_only_and_refuse_php84_and_every_fpm_binary(self) -> None:
+        for name in ("wpcaregrid-php-cli-production-deploy", "wpcaregrid-php-cli-production-build"):
+            rules = self.rules(name)
+            self.assertTrue(decide(rules, "/usr/bin/php8.5", "x"), name)
+            self.assertTrue(decide(rules, "/etc/php/8.5/cli/php.ini", "r"), name)
+            for path in ("/usr/bin/php8.4", "/usr/bin/php8.3", "/usr/bin/php8.6", "/usr/bin/php8.9", "/usr/bin/php", "/usr/sbin/php-fpm8.5",
+                         "/usr/sbin/php-fpm8.4", "/usr/bin/dash", "/usr/bin/python3"):
+                self.assertFalse(decide(rules, path, "x"), f"{name}: {path}")
+            self.assertFalse(decide(rules, "/etc/php/8.4/cli/php.ini", "r"), name)
+            for sock in (NEXT_SOCKET, LEGACY_SOCKET, PROD_SOCKET_106):
+                for access in ("r", "w", "rw"):
+                    self.assertFalse(decide(rules, sock, access), f"{name}: {sock}")
+            text = self.text(f"apparmor/{name}")
+            self.assertIn("php8.[0-46-9]", text)
+            self.assertNotIn("php8.[0-35-9]", text)  # the 1.0.5 glob would have denied php8.5 and allowed nothing but 8.4
+
+    def test_cli_matrix_and_binding_name_php85_and_keep_phase_b_disabled(self) -> None:
+        matrix, binding = json.loads(MATRIX_TEXT), json.loads(self.text("binding.json"))
+        for name in ("wpcaregrid-php-cli-production-deploy", "wpcaregrid-php-cli-production-build"):
+            spec = matrix["profiles"][name]
+            for command in spec["commands_supported"]:
+                self.assertEqual(command["argv"][0], "/usr/bin/php8.5")
+            checks = {c["id"]: c for c in spec["checks"]}
+            self.assertEqual((checks["exec-php84"]["expect"], checks["exec-php84"]["path"], checks["exec-php84"].get("live", True)),
+                             ("deny", "/usr/bin/php8.4", True))
+            self.assertNotIn("exec-php85", checks)  # php8.5 is this profile's own interpreter now
+            self.assertEqual(checks["exec-own-php85"]["expect"], "allow")
+            self.assertEqual([d["id"] for d in spec["commands_disabled"]], ["phase-b-migration-runner"])
+            self.assertEqual((binding["aa_exec_profiles"][name]["exe"], binding["aa_exec_profiles"][name]["argv0"]), ("/usr/bin/php8.5",) * 2)
+        for cls in matrix["transient_classes"]:
+            self.assertEqual((cls["exe"], cls["argv0"]), ("/usr/bin/php8.5",) * 2)
+        self.assertEqual(matrix["profiles"]["wpcaregrid-php-cli-production-deploy"]["mysql_unix_socket"], MYSQL_SOCKET)
+
+    def test_production_fpm_matrix_checks_php85_and_the_other_pools(self) -> None:
+        matrix = json.loads(MATRIX_TEXT)
+        spec = matrix["profiles"]["wpcaregrid-php-fpm-production"]
+        checks = {c["id"]: c for c in spec["checks"]}
+        self.assertEqual((checks["exec-php-cli"]["path"], checks["exec-php-cli"]["expect"]), ("/usr/bin/php8.5", "deny"))
+        self.assertEqual((checks["exec-php84-cli"]["path"], checks["exec-php84-cli"]["expect"]), ("/usr/bin/php8.4", "deny"))
+        self.assertEqual((checks["staging-next-pool-config-read"]["expect"], checks["staging-next-pool-config-read"].get("optional")), ("deny", True))
+        self.assertEqual(spec["own_socket"], PROD_SOCKET_106)
+        self.assertEqual({s["id"]: (s["path"], s["expect"]) for s in spec["sockets"]},
+                         {"own-socket": (PROD_SOCKET_106, "allow"), "staging-next-socket": (NEXT_SOCKET, "deny"), "legacy-socket": (LEGACY_SOCKET, "deny")})
+        nxt = matrix["profiles"]["wpcaregrid-php-fpm-staging-next"]
+        self.assertEqual({s["id"]: (s["path"], s["expect"]) for s in nxt["sockets"]},
+                         {"own-socket": (NEXT_SOCKET, "allow"), "production-socket": (PROD_SOCKET_106, "deny"), "legacy-socket": (LEGACY_SOCKET, "deny")})
+        self.assertEqual(next(c for c in nxt["checks"] if c["id"] == "production-fpm-config-read")["expect"], "deny")
+        # every profile that lists FastCGI sockets knows the new production socket and none lists the old one
+        for name, profile in matrix["profiles"].items():
+            paths = {s["path"] for s in profile["sockets"]}
+            self.assertNotIn("/run/php/wpcaregrid-production-php8.4-fpm.sock", paths, name)
+            if name in ("wpcaregrid-nginx", "wpcaregrid-php-cli-staging", "wpcaregrid-php-fpm-staging-legacy"):
+                self.assertIn(PROD_SOCKET_106, paths, name)
+
+    def test_matrix_declares_a_distinct_runtime_identity_per_role(self) -> None:
+        matrix = json.loads(MATRIX_TEXT)
+        roles = matrix["role_runtime"]["roles"]
+        self.assertEqual(set(roles), {"production", "staging-next", "staging-legacy"})
+        self.assertEqual(roles["production"], {"fpm_binary": "/usr/sbin/php-fpm8.5", "pool_dir": PROD_POOL_DIR_106, "socket": PROD_SOCKET_106})
+        self.assertEqual(roles["staging-next"]["fpm_binary"], roles["production"]["fpm_binary"])  # same executable on purpose
+        for field in ("socket", "pool_dir"):
+            self.assertEqual(len({r[field] for r in roles.values()}), 3, field)
+        self.assertEqual(matrix["role_units"], {"jobs-legacy-scheduler": "wpcaregrid-staging-legacy-scheduler.service",
+                                                "jobs-scheduler": "wpcaregrid-staging-next-scheduler.service",
+                                                "jobs-supervisor": "supervisor.service", "nginx": "nginx.service",
+                                                "production": PROD_UNIT_106, "staging-legacy": "php8.4-fpm.service",
+                                                "staging-next": "php8.5-fpm.service"})
+        rules = json.loads(self.text("binding.json"))["rules"]
+        self.assertEqual(rules["php_runtime"], {"production": "8.5", "staging-next": "8.5", "staging-legacy": "8.4"})
+        self.assertIn("never identify an environment", rules["class_identity"])
+        self.assertEqual(rules["role_runtime"], roles)
+
+    def test_no_new_user_group_or_uid_and_phase_b_stays_off(self) -> None:
+        unit = parse_unit(ARTIFACTS / "systemd" / PROD_UNIT_106)
+        self.assertEqual((unit_values(unit, "User"), unit_values(unit, "Group")), (["www-data"], ["www-data"]))
+        pool = self.text("php-fpm/production/pool.d/wpcaregrid-production.conf")
+        self.assertIn("user = www-data", pool.splitlines())
+        self.assertIn("group = www-data", pool.splitlines())
+        self.assertEqual(self.text("binding.json").count("phase-b-migration-runner"), 2)
+        self.assertEqual(json.loads(self.text("binding.json"))["rules"]["permitted_group33_holders"], [])
+
+
+class ExecutableIdentityIsNotAClass(unittest.TestCase):
+    """production and staging-next both run php-fpm8.5: classes come from (label, unit), pool and socket paths only."""
+
+    PROD, NEXT = PIDS["production"], PIDS["staging-next"]
+
+    def verify(self, mutate=None, profile="wpcaregrid-nginx", phase="post"):
+        return VerifyAcceptance().run_verify(mutate, profile=profile, phase=phase)
+
+    @staticmethod
+    def same_exe(state):
+        for key in ("before", "after"):
+            for proc in state[key]["processes"]:
+                if proc["pid"] in (PIDS["production"], PIDS["staging-next"], MASTERS["staging-next"]):
+                    proc["exe"] = "/usr/sbin/php-fpm8.5"
+                    proc["argv0"] = "/usr/sbin/php-fpm8.5"
+                    proc["comm"] = "php-fpm8.5"
+
+    def edit(self, pid, **fields):
+        def mutate(state):
+            self.same_exe(state)
+            for key in ("before", "after"):
+                for proc in state[key]["processes"]:
+                    if proc["pid"] == pid:
+                        proc.update(fields)
+        return mutate
+
+    def test_both_pools_with_one_executable_pass_in_their_own_units(self) -> None:
+        self.assertEqual(self.verify(self.same_exe).failures, [])
+
+    def test_a_production_labelled_process_in_the_staging_next_unit_is_refused(self) -> None:
+        verdict = self.verify(self.edit(self.PROD, unit="php8.5-fpm.service"))
+        self.assertTrue(any("not enforce-attached to its profile" in f or "outside its permitted unit" in f for f in verdict.failures), verdict.failures[:3])
+
+    def test_a_staging_next_labelled_process_in_the_production_unit_is_refused(self) -> None:
+        verdict = self.verify(self.edit(self.NEXT, unit=PROD_UNIT_106))
+        self.assertTrue(verdict.failures, "the executable is identical, only the unit differs")
+
+    def test_swapped_labels_with_the_same_executable_are_refused(self) -> None:
+        verdict = self.verify(self.edit(self.PROD, label="wpcaregrid-php-fpm-staging-next (enforce)"))
+        self.assertTrue(any("not enforce-attached to its profile" in f for f in verdict.failures), verdict.failures[:3])
+        verdict = self.verify(self.edit(self.NEXT, label="wpcaregrid-php-fpm-production (enforce)"))
+        self.assertTrue(any("not enforce-attached to its profile" in f for f in verdict.failures), verdict.failures[:3])
+
+    def test_an_unconfined_or_complain_php_fpm85_in_either_unit_is_refused(self) -> None:
+        for pid in (self.PROD, self.NEXT):
+            for label in ("unconfined", "wpcaregrid-php-fpm-production (complain)", "wpcaregrid-php-fpm-staging-next (complain)"):
+                verdict = self.verify(self.edit(pid, label=label))
+                self.assertTrue(any("not enforce-attached to its profile" in f for f in verdict.failures), (pid, label, verdict.failures[:2]))
+
+    def test_an_unconfined_php_fpm85_outside_every_known_unit_maps_to_no_class(self) -> None:
+        verdict = self.verify(self.edit(self.PROD, label="unconfined", unit=None))
+        self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures), verdict.failures[:3])
+
+    def test_the_old_1_0_5_executable_identity_is_not_a_production_class(self) -> None:
+        build = TransientDeployCliClass()
+        for exe in ("/usr/bin/php8.4", "/usr/sbin/php-fpm8.5"):
+            verdict = build.run_with(exe=exe, argv0=exe)
+            self.assertTrue(any("not the permitted class" in f for f in verdict.failures), exe)
+        self.assertEqual(build.run_with().failures, [])  # php8.5 CLI in the root-console session scope, correct label
+
+    def test_a_staging_job_php85_is_not_a_production_cli_class(self) -> None:
+        """php8.5 is also the staging job interpreter: only the label (and its session scope) makes the production CLI class."""
+        build = TransientDeployCliClass()
+        verdict = build.run_with(label="wpcaregrid-php-cli-staging (enforce)", unit="supervisor.service",
+                                 cgroup="0::/system.slice/supervisor.service")
+        self.assertEqual([f for f in verdict.failures if "not the permitted class" in f], [])
+        verdict = build.run_with(label="unconfined", exe="/usr/bin/php8.5")
+        self.assertTrue(any("maps to no permitted class" in f for f in verdict.failures))
+        for unit in ("supervisor.service", "php8.5-fpm.service", PROD_UNIT_106):
+            verdict = build.run_with(unit=unit)
+            self.assertTrue(any("not the permitted class" in f for f in verdict.failures), unit)
+
+    def test_another_pools_socket_or_pid_path_is_never_a_generic_descriptor(self) -> None:
+        for pid, target in ((self.PROD, NEXT_SOCKET), (self.PROD, "/run/php/php8.5-fpm.pid"), (self.PROD, LEGACY_SOCKET),
+                            (self.NEXT, PROD_SOCKET_106), (self.NEXT, f"{PROD_POOL_DIR_106}/php-fpm.conf"),
+                            (PIDS["staging-legacy"], PROD_SOCKET_106), (PIDS["staging-legacy"], NEXT_SOCKET)):
+            def mutate(state, pid=pid, target=target):
+                self.same_exe(state)
+                for key in ("before", "after"):
+                    for proc in state[key]["processes"]:
+                        if proc["pid"] == pid:
+                            proc["fds"] = proc["fds"] + [target]
+            verdict = self.verify(mutate)
+            self.assertTrue(any("fd-inventory" in f for f in verdict.failures), (pid, target, verdict.failures[:2]))
+        def own(state):
+            self.same_exe(state)
+            for key in ("before", "after"):
+                for proc in state[key]["processes"]:
+                    if proc["pid"] == self.PROD:
+                        proc["fds"] = proc["fds"] + [PROD_SOCKET_106, f"{PROD_POOL_DIR_106}/pool.d/wpcaregrid-production.conf"]
+                    if proc["pid"] == self.NEXT:
+                        proc["fds"] = proc["fds"] + [NEXT_SOCKET, "/run/php/php8.5-fpm.pid", "/var/log/php8.5-fpm.log"]
+        self.assertEqual(self.verify(own).failures, [])
+
+    def test_the_transient_class_refuses_any_pool_socket_descriptor(self) -> None:
+        build = TransientDeployCliClass()
+        for target in (NEXT_SOCKET, PROD_SOCKET_106, f"{PROD_POOL_DIR_106}/php-fpm.conf", LEGACY_SOCKET):
+            verdict = build.run_with(fds=[target])
+            self.assertTrue(any("not the permitted class" in f and "descriptor" in f for f in verdict.failures), target)
+
+    def mutated_matrix(self, change):
+        def mutate(state):
+            matrix = json.loads(MATRIX_TEXT)
+            change(matrix)
+            state["matrix"] = json.dumps(matrix, indent=2, sort_keys=True) + "\n"
+        return mutate
+
+    def test_a_matrix_in_which_two_roles_share_identity_is_refused_before_any_class_is_derived(self) -> None:
+        def shared_unit(m): m["role_units"]["production"] = m["role_units"]["staging-next"]
+        def shared_socket(m): m["role_runtime"]["roles"]["production"]["socket"] = m["role_runtime"]["roles"]["staging-next"]["socket"]
+        def shared_pool(m): m["role_runtime"]["roles"]["production"]["pool_dir"] = m["role_runtime"]["roles"]["staging-next"]["pool_dir"]
+        def no_runtime(m): del m["role_runtime"]
+        def shared_profile(m): m["role_profiles"]["production"] = m["role_profiles"]["staging-next"]
+        def socket_not_in_policy(m): m["role_runtime"]["roles"]["production"]["socket"] = "/run/php/elsewhere.sock"
+        for change in (shared_unit, shared_socket, shared_pool, no_runtime, shared_profile, socket_not_in_policy):
+            verdict = self.verify(self.mutated_matrix(change))
+            self.assertTrue(any(f.startswith("FAIL identity:") for f in verdict.failures), (change.__name__, verdict.failures[:2]))
+        self.assertEqual(self.verify().failures, [])
+
+    def test_the_collector_keeps_the_two_php85_units_apart(self) -> None:
+        collector = load_script(ACCEPTANCE / "collect-peers.py", "wpcg_collect_unit_of")
+        self.assertEqual(collector.unit_of(f"0::/system.slice/{PROD_UNIT_106}"), PROD_UNIT_106)
+        self.assertEqual(collector.unit_of("0::/system.slice/php8.5-fpm.service"), "php8.5-fpm.service")
+        self.assertEqual(collector.unit_of("0::/system.slice/php8.4-fpm.service"), "php8.4-fpm.service")
+        matrix = json.loads(MATRIX_TEXT)
+        self.assertIn(PROD_UNIT_106, matrix["role_units"].values())
+        self.assertNotIn("wpcaregrid-production-php8.4-fpm.service", matrix["role_units"].values())  # a leftover 1.0.5 unit is not a known cgroup
+
+
+class CiAndCompileOnlyParserCheck106(unittest.TestCase):
+    CI = ROOT / ".github" / "workflows" / "ci.yml"
+
+    def test_the_real_parser_test_compiles_the_1_0_6_package(self) -> None:
+        self.assertEqual(ARTIFACTS.name, "1.0.6")
+        self.assertEqual(set(PROFILES.values()), {f"apparmor/{p.name}" for p in (ARTIFACTS / "apparmor").iterdir() if p.is_file()})
+
+    def test_ci_runs_a_compile_only_parser_check_over_every_1_0_6_profile(self) -> None:
+        text = self.CI.read_text(encoding="utf-8")
+        self.assertIn("PHP_FPM_CONFINEMENT_REQUIRE_PARSER: \"1\"", text)
+        self.assertIn('apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"', text)
+        self.assertIn("pkg=deploy/php-fpm-confinement/1.0.6", text)
+        self.assertNotIn("apparmor_parser -r", text)   # never a kernel load in CI
+        self.assertNotIn("apparmor_parser -a", text)
+
+    def test_the_go20_doc_documents_the_compile_only_command(self) -> None:
+        doc = GO20_DOC.read_text(encoding="utf-8")
+        self.assertIn("apparmor_parser -Q -K -I <dir> <profile>", doc)
+        self.assertIn("-I deploy/php-fpm-confinement/1.0.6/apparmor", doc)
+
+
+class Go20Documentation(unittest.TestCase):
+    def doc(self) -> str:
+        return GO20_DOC.read_text(encoding="utf-8")
+
+    def test_states_the_decision_the_changes_and_the_frozen_packages(self) -> None:
+        doc = self.doc()
+        for needed in (PROD_UNIT_106, PROD_SOCKET_106, PROD_POOL_DIR_106, "php8.5-fpm.service", "php8.4-fpm.service", "/usr/sbin/php-fpm8.5",
+                       "/usr/bin/php8.5", "no new Linux user", "www-data", "(label, unit)", "Phase B", MYSQL_SOCKET,
+                       "1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "frozen", "git tree",
+                       "helper 2.1.4", "helper 2.1.5", "not bound", "source preparation only"):
+            self.assertIn(needed, doc, needed)
+        for tree in (PackageImmutability.FROZEN["1.0.5"][0], PackageImmutability.FROZEN["1.0.4"][0], PackageImmutability.WITHDRAWN["1.0.0"][0]):
+            self.assertIn(tree, doc)
+        sums = hashlib.sha256((ARTIFACTS / "SHA256SUMS").read_bytes()).hexdigest()
+        self.assertIn(sums, doc, "the doc must carry the SHA256SUMS hash the successor helper will bind")
+        self.assertIn(PackageImmutability.FROZEN["1.0.6"][0], doc)
+
+    def test_the_go13_doc_only_points_to_the_successor(self) -> None:
+        text = DOC.read_text(encoding="utf-8")
+        self.assertIn("## Successor package 1.0.6", text)
+        self.assertIn("docs/PHP_FPM_CONFINEMENT_GO20_PHP85.md", text)
+        self.assertIn("deploy/php-fpm-confinement/1.0.5/", text)  # the 1.0.5 procedure above is unchanged and still describes 1.0.5
 
 
 class RealParser(unittest.TestCase):
