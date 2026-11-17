@@ -51,7 +51,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -219,7 +219,6 @@ class RealHost:
                 if stat.S_ISREG(st.st_mode):
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
                         raise HostError("datadir_exceeds_bounds", rel)
-                    total += st.st_size
                     fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
                                  | getattr(os, "O_NONBLOCK", 0), dir_fd=dfd)
                     try:
@@ -237,6 +236,8 @@ class RealHost:
                         digest = hashlib.sha256(data).hexdigest()
                     finally:
                         os.close(fd)
+                    st_after = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                    total = datadir_read_check(rel, st, st_after, len(data), total, max_total_bytes)
                 records.append(datadir_record(rel, st, digest))
         material = repr((stat.S_IMODE(root.st_mode), root.st_uid, root.st_gid, root.st_mtime_ns, records)).encode()
         return sha256(material), entries, total
@@ -496,6 +497,24 @@ def datadir_record(rel, st, digest):
     return (rel, st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, digest)
 
 
+def datadir_read_check(rel, st_before, st_after, data_len, total, max_total_bytes):
+    """Charge the AGGREGATE against bytes actually read and detect concurrent
+    mutation (AppSec R2 finding 2): a file that grew or changed between the
+    walk's stat and the completed read makes the fingerprint unreliable and
+    must fail closed instead of silently consuming unbounded work."""
+    if st_after is not None and (st_after.st_size, st_after.st_mtime_ns) != (st_before.st_size, st_before.st_mtime_ns):
+        raise HostError("datadir_changed_during_read", rel)
+    if total + data_len > max_total_bytes:
+        raise HostError("datadir_exceeds_bounds", rel)
+    return total + data_len
+
+
+def sanitize(text):
+    """Control characters in untrusted evidence or arguments never reach the
+    archived output verbatim (AppSec R2 non-blocking hardening)."""
+    return "".join(ch if ch >= " " else "?" for ch in str(text))
+
+
 def check_datadirs(host, emit):
     mysql_ids = host.ids("mysql")
     for path in DATADIRS:
@@ -657,7 +676,7 @@ def main(argv=None, host=None, stream=None):
                 return 3
             package_dir = value
         else:
-            emit("G1_GO54A_READINESS=HOLD;CODE=argument_invalid:" + argument)
+            emit("G1_GO54A_READINESS=HOLD;CODE=argument_invalid:" + sanitize(argument))
             return 3
         index += 1
 

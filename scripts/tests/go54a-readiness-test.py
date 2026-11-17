@@ -39,7 +39,8 @@ class FakeHost:
     """Implements the RealHost interface over an in-memory tree. No filesystem access."""
 
     def __init__(self, files=None, dirs=None, symlinks=None, euid=0,
-                 ids=None, commands=None, lock=None, script_dir="/opt/toolkit-empty"):
+                 ids=None, commands=None, lock=None, script_dir="/opt/toolkit-empty",
+                 mutate_on_read=None):
         self.files = files or {}
         self.dirs = dirs or {}
         self.symlinks = symlinks or {}
@@ -48,6 +49,7 @@ class FakeHost:
         self.commands = commands or {}
         self.lock = lock or {}
         self.script_dir_value = script_dir
+        self.mutate_on_read = mutate_on_read or set()
 
     def _all_paths(self):
         return list(self.files) + list(self.dirs) + list(self.symlinks)
@@ -145,8 +147,12 @@ class FakeHost:
                 if stat.S_ISREG(st.st_mode):
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
                         raise rd.HostError("datadir_exceeds_bounds", rel)
-                    total += st.st_size
-                    digest = rd.sha256(self.read_regular(full, max_file_bytes))
+                    data = self.read_regular(full, max_file_bytes)
+                    if full in self.mutate_on_read:
+                        self.files[full]["mtime_ns"] = self.files[full].get("mtime_ns", 1000) + 1
+                    st_after = self.lstat(full)
+                    total = rd.datadir_read_check(rel, st, st_after, len(data), total, max_total_bytes)
+                    digest = rd.sha256(data)
                 records.append(rd.datadir_record(rel, st, digest))
                 if full in self.dirs:
                     subdirs.append((full, rel))
@@ -737,6 +743,27 @@ class ReadinessTestCase(unittest.TestCase):
         self.host = self.healthy_host()
         self.assertEqual(self.run_main(), 4)
         self.assertIn("UNKNOWN datadir_exceeds_bounds", self.output())
+
+    # -- AppSec round-2 findings (F2 aggregate/mutation, R3 cycle) ----------
+
+    def test_datadir_file_changed_during_read_yields_unknown(self):
+        # A file that mutates between the walk's stat and the completed read
+        # makes the fingerprint unreliable: fail closed as UNKNOWN.
+        self.host = self.healthy_host(mutate_on_read={rd.DATADIRS[0] + "/ib_logfile0"})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0", self.output())
+
+    def test_datadir_read_check_charges_actual_bytes_and_detects_mutation(self):
+        before = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000)
+        same = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000)
+        grown = fake_stat("file", 0o640, 105, 105, size=9, mtime_ns=1001)
+        self.assertEqual(rd.datadir_read_check("f", before, same, 4, 0, 100), 4)
+        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read"):
+            rd.datadir_read_check("f", before, grown, 9, 0, 100)
+        with self.assertRaisesRegex(rd.HostError, "datadir_exceeds_bounds"):
+            rd.datadir_read_check("f", before, same, 4, 99, 100)
+        with self.assertRaisesRegex(rd.HostError, "datadir_exceeds_bounds"):
+            rd.datadir_read_check("f", before, same, 5, 99, 100)
 
 
 if __name__ == "__main__":

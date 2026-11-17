@@ -49,6 +49,17 @@ class FakeHost:
     def euid(self):
         return self.euid_value
 
+    def run_stdout_bounded(self, args, max_bytes, timeout):
+        self.run_args.append(list(args))
+        if args[0] == "/usr/bin/journalctl":
+            if self.fail_journal:
+                raise ne.HostError("command_failed", "journalctl")
+            data = self.journal.encode() if isinstance(self.journal, str) else self.journal
+            if len(data) > max_bytes:
+                raise ne.HostError("journal_exceeds_bounds", str(max_bytes))
+            return self.journal_rc, data
+        raise ne.HostError("command_failed", args[0])
+
     def run(self, args, timeout=60):
         self.run_args.append(list(args))
         if args[0] == "/usr/bin/journalctl":
@@ -274,6 +285,66 @@ class NotifyEvidenceTestCase(unittest.TestCase):
         self.host = FakeHost(journal="-- No entries --")
         self.assertEqual(self.run_main(["--profile", "../secrets"]), 4)
         self.assertIn("CODE=profile_argument_invalid", self.output())
+
+    # -- AppSec round-2 findings (R2-F4, R2-F5, R2-F8) -----------------------
+
+    def test_prefix_lookalike_profile_is_not_g1_evidence(self):
+        # A lookalike profile name that merely starts with the G1 prefix must
+        # never fabricate G1 target evidence.
+        lookalike = ('Nov 17 19:00:12 kernel: audit: 1740000012.1:12 apparmor="DENIED" '
+                     'operation="sendmsg" profile="wpcaregrid-mysql-production-evil" pid=3602 '
+                     'comm="mysqld" requested_mask="send" denied_mask="send" '
+                     'addr=/run/systemd/notify')
+        self.host = FakeHost(journal=lookalike + "\n", commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=0 notify_target=0 unrecognized=0",
+                      self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;"
+                         "CODE=no_matching_records_in_bounded_window")
+
+    def test_near_miss_notify_path_is_not_a_target(self):
+        # An exact G1 profile with a path that merely contains the target as a
+        # substring must not count as the notify denial.
+        near_miss = ('Nov 17 19:00:13 kernel: audit: 1740000013.1:13 apparmor="DENIED" '
+                     'operation="sendmsg" profile="wpcaregrid-mysql-production" pid=3603 '
+                     'comm="mysqld" requested_mask="send" denied_mask="send" '
+                     'name="/run/systemd/notify-backup"')
+        self.host = FakeHost(journal=near_miss + "\n", commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=1 notify_target=0 unrecognized=0",
+                      self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;"
+                         "CODE=no_matching_records_in_bounded_window")
+
+    def test_mixed_target_and_malformed_record_is_unknown_not_pass(self):
+        # AppSec R2 F5: one valid target plus one malformed DENIED record is
+        # incomplete evidence — the verdict must be UNKNOWN, never PASS,
+        # while the valid row remains visible as context.
+        malformed = ('Nov 17 19:00:14 kernel: audit: 1740000014.1:14 apparmor="DENIED" '
+                     'info="unrelated mentions /run/systemd/notify"')
+        journal = NOTIFY_DENIAL_FULL + "\n" + malformed + "\n"
+        self.host = FakeHost(journal=journal, commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=1 notify_target=1 unrecognized=1",
+                      self.output())
+        self.assertIn("NOTE unrecognized_denied_records=1 not_counted_as_evidence", self.output())
+        self.assertIn("ROW Nov 17 19:00:01 | wpcaregrid-mysql-production | sendmsg",
+                      self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=1;STATUS=UNKNOWN;"
+                         "CODE=unrecognized_denied_records")
+
+    def test_journal_output_above_byte_bound_yields_unknown(self):
+        # AppSec R2 F8: unexpectedly large journal output must fail closed as
+        # UNKNOWN instead of being buffered unbounded.
+        saved = ne.MAX_JOURNAL_BYTES
+        ne.MAX_JOURNAL_BYTES = 8
+        self.addCleanup(setattr, ne, "MAX_JOURNAL_BYTES", saved)
+        self.host = FakeHost(journal="-- No entries --")
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("CODE=journal_exceeds_bounds", self.output())
 
 
 if __name__ == "__main__":

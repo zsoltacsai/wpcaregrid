@@ -22,7 +22,7 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
 - Payloads pinned by `scripts/SHA256SUMS` (digest
   `0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85`) equal the
   NEW `/usr/local/libexec` targets in the hotfix document.
-- New read-only diagnostics (correction round v1.1.0 after the independent
+- New read-only diagnostics (correction round v1.2.0 after the independent
   reviews; review pending) live in their own toolkit directory
   `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
   `production-g1-inventory` precedent). The frozen, GO-0-anchored
@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `a55d7ce6530465a12a8bacccd525ce155da34da98749803c6f6f53a09385280b`)
+    (SHA-256 `68e14873a92229dd3de1d96f73c5793eb09e4832687a9e41b9504bff132913aa`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
-    (SHA-256 `91c43b9b58e046372691e55f6644bcf624193f9d9216f48f6265b869c63f91aa`)
+    (SHA-256 `270ed3a3cba54272e583814a2535d781402f0fe46394b6a3f2244a04855d5c81`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `a4c8f69bd18e22ef403e2d6b7caef8a3902bd663c60b792e6a8527af86e63d44`)
+    `ccf197778a3dd49000d47da4799f1f08509f1bf9564d485bc2335c763f0bb3b5`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -48,6 +48,18 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     UNKNOWN, never a verdict), counts malformed DENIED lines as visible
     unrecognized instead of target evidence, and accepts `--profile NAME`
     basenames under `/etc/apparmor.d/` only.
+  - Reviewer corrections included in v1.2.0 (AppSec round 2): the datadir
+    aggregate bound is charged against bytes actually read and a file that
+    mutates between the walk's stat and the completed read fails closed as
+    UNKNOWN (`datadir_changed_during_read`); notify targets require one of
+    the two EXACT G1 profile names and a path/address field value that is
+    EXACTLY the notify path (prefix lookalikes and near-miss paths never
+    count); the recognized audit shape requires both masks plus pid/comm; ANY
+    unrecognized DENIED record makes the overall status UNKNOWN (valid rows
+    stay visible as context, never a PASS); the journal read is byte-capped
+    (`MAX_JOURNAL_BYTES`, streaming read, kill on overflow →
+    `journal_exceeds_bounds` UNKNOWN); untrusted evidence and rejected
+    arguments are control-character sanitized in the output.
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.

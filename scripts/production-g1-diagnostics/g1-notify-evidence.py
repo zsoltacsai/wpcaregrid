@@ -37,7 +37,7 @@ import stat
 import sys
 
 TOOL = "g1-notify-evidence"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 TARGET = "/run/systemd/notify"
 PROFILE_DIR = "/etc/apparmor.d/"
@@ -45,7 +45,10 @@ PROFILE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
 PROFILE_P = "/etc/apparmor.d/wpcaregrid-mysql-production"
 PROFILE_R = "/etc/apparmor.d/wpcaregrid-mysql-production-restore"
 G1_PROFILES = (PROFILE_P, PROFILE_R)
-G1_PROFILE_PREFIXES = ("wpcaregrid-mysql-production", "wpcaregrid-mysql-production-restore")
+# Exact installed profile names (scripts/production_g1_mysql_contract.py): a
+# prefix match would let lookalike profiles such as
+# "wpcaregrid-mysql-production-evil" fabricate G1 evidence (AppSec R2 F4).
+G1_PROFILE_NAMES = ("wpcaregrid-mysql-production", "wpcaregrid-mysql-production-restore")
 TARGET_FIELDS = ("name", "addr", "peer", "peer_addr")
 UNITS = ("mysql@wpcaregrid-production.service", "mysql@wpcaregrid-production-restore.service")
 VENDOR_UNIT = "mysql.service"
@@ -55,6 +58,7 @@ UNIT_PROPERTIES = ("Type", "NotifyAccess", "PrivateTmp", "PrivateDevices", "Prot
 DEFAULT_LINES = 20000
 MAX_LINES = 20000
 MAX_PRINT_ROWS = 200
+MAX_JOURNAL_BYTES = 16 * 1024 * 1024
 MAX_PROFILE_BYTES = 4 * 1024 * 1024
 COMMAND_TIMEOUT = 60
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}
@@ -86,6 +90,43 @@ class RealHost:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise HostError("command_failed", args[0]) from exc
         return done.returncode, done.stdout
+
+    def run_stdout_bounded(self, args, max_bytes, timeout):
+        """AppSec R2 F8 fix: never buffer unbounded subprocess output. Reads
+        stdout incrementally, kills the producer on overflow or deadline, and
+        fails closed with a HostError instead of exhausting memory."""
+        import subprocess
+        import time
+
+        try:
+            process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, close_fds=True, env=ENV)
+        except OSError as exc:
+            raise HostError("command_failed", args[0]) from exc
+        data = b""
+        overflow = False
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                chunk = process.stdout.read(65536)
+                if not chunk:
+                    break
+                if len(data) + len(chunk) > max_bytes:
+                    overflow = True
+                    process.kill()
+                    break
+                data += chunk
+                if time.monotonic() > deadline:
+                    process.kill()
+                    raise HostError("command_failed", args[0])
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+        if overflow:
+            raise HostError("journal_exceeds_bounds", str(max_bytes))
+        return process.returncode, data
 
     def read_regular(self, path, max_bytes):
         import os
@@ -149,16 +190,17 @@ def collect_journal(host, lines_cap, since):
     args = ["/usr/bin/journalctl", "-k", "--no-pager", "--no-hostname", "-n", str(lines_cap)]
     if since:
         args += ["-S", since]
-    rc, raw = host.run(args, timeout=COMMAND_TIMEOUT * 2)
+    rc, raw = host.run_stdout_bounded(args, MAX_JOURNAL_BYTES, COMMAND_TIMEOUT * 2)
     return {"rc": rc, "raw": raw}
 
 
 def recognized_denied_record(fields):
-    """AppSec F4 fix: only a complete, sane audit shape counts as evidence.
+    """AppSec F4 + R2-F4 fix: only a complete audit shape counts as evidence.
 
     A DENIED line must carry an explicit DENIED verdict, a non-empty operation,
-    a syntactically sane profile token and at least one mask field. Anything
-    else is counted as unrecognized and can never become target evidence."""
+    a syntactically sane profile token, BOTH the requested and denied masks,
+    and the pid/comm identity fields. Anything else is counted as unrecognized
+    and can never become target evidence."""
     if fields.get("apparmor") != "DENIED":
         return False
     operation = fields.get("operation", "")
@@ -167,7 +209,11 @@ def recognized_denied_record(fields):
         return False
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", profile):
         return False
-    if not (fields.get("requested_mask") or fields.get("mask") or fields.get("denied_mask")):
+    if not (fields.get("requested_mask") or fields.get("mask")):
+        return False
+    if not fields.get("denied_mask"):
+        return False
+    if not fields.get("pid") or not fields.get("comm"):
         return False
     return True
 
@@ -175,8 +221,9 @@ def recognized_denied_record(fields):
 def journal_rows(text):
     """Split journal text into (recognized_denied, notify_targets, unrecognized).
 
-    Targets require a recognized record, a G1 profile, and the notify path in
-    one of the path/address fields only — never in a free-text field."""
+    Targets require a recognized record, one of the two EXACT G1 profile
+    names, and a path/address field value that is EXACTLY the notify path —
+    prefix lookalike profiles and near-miss paths never count (AppSec R2 F4)."""
     denied, targets, unrecognized = [], [], []
     for line in text.splitlines():
         if 'apparmor="DENIED"' not in line:
@@ -187,11 +234,17 @@ def journal_rows(text):
             unrecognized.append(line)
             continue
         denied.append(fields)
-        if not str(fields.get("profile", "")).startswith(G1_PROFILE_PREFIXES):
+        if fields.get("profile") not in G1_PROFILE_NAMES:
             continue
-        if any(TARGET in str(fields.get(field, "")) for field in TARGET_FIELDS):
+        if any(str(fields.get(field, "")) == TARGET for field in TARGET_FIELDS):
             targets.append(fields)
     return denied, targets, unrecognized
+
+
+def sanitize(text):
+    """Control characters in untrusted evidence never reach the archived
+    output verbatim (AppSec R2 non-blocking hardening)."""
+    return "".join(ch if ch >= " " else "?" for ch in str(text))
 
 
 def emit_row(emit, fields):
@@ -202,7 +255,7 @@ def emit_row(emit, fields):
             value = fields.get("requested_mask", fields.get("mask", "-"))
         if column in ("denied",):
             value = fields.get("denied_mask", "-")
-        values.append(str(value))
+        values.append(sanitize(value))
     emit("ROW " + " | ".join(values))
 
 
@@ -268,7 +321,7 @@ def main(argv=None, host=None, stream=None):
                 return 4
             extra_profiles.append(PROFILE_DIR + name)
         else:
-            emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=argument_invalid:" + argument)
+            emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=argument_invalid:" + sanitize(argument))
             return 4
         index += 1
 
@@ -300,23 +353,25 @@ def main(argv=None, host=None, stream=None):
     else:
         denied, targets, unrecognized = journal_rows(text)
         g1_denied = [fields for fields in denied
-                     if str(fields.get("profile", "")).startswith(G1_PROFILE_PREFIXES)]
+                     if fields.get("profile") in G1_PROFILE_NAMES]
         emit("CHECK journal PASS lines_read=%d" % len(text.splitlines()))
         emit("COUNTS denied_total=%d g1_denied_total=%d notify_target=%d unrecognized=%d"
              % (len(denied), len(g1_denied), len(targets), len(unrecognized)))
+        if unrecognized:
+            emit("NOTE unrecognized_denied_records=%d not_counted_as_evidence" % len(unrecognized))
         if targets:
             emit("ROW_HEADER " + " | ".join(COLUMNS))
         for fields in targets[:MAX_PRINT_ROWS]:
             emit_row(emit, fields)
         if len(targets) > MAX_PRINT_ROWS:
             emit("NOTE rows_truncated printed=%d total=%d" % (MAX_PRINT_ROWS, len(targets)))
+        # AppSec R2 F5 fix: ANY unrecognized DENIED record makes the overall
+        # evidence status UNKNOWN — valid rows and counts remain visible as
+        # context, but incomplete evidence never yields a PASS verdict.
         if unrecognized:
-            emit("NOTE unrecognized_denied_records=%d not_counted_as_evidence" % len(unrecognized))
-        if targets:
+            verdict, status, code, count = "UNKNOWN", "UNKNOWN", "unrecognized_denied_records", len(targets)
+        elif targets:
             verdict, status, code, count = "PRESENT", "PASS", "none", len(targets)
-        elif unrecognized:
-            verdict, status, code, count = ("UNKNOWN", "UNKNOWN",
-                                            "unrecognized_denied_records", 0)
         else:
             verdict, status, code, count = ("ABSENT", "HOLD",
                                             "no_matching_records_in_bounded_window", 0)
