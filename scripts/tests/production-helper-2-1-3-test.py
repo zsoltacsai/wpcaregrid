@@ -1328,10 +1328,17 @@ class TransferInputTests(unittest.TestCase):
 
         def swapping_open(path, flags, *args, **kwargs):
             if path == f"{self.APP}.tar" and kwargs.get("dir_fd") is not None:
-                os.unlink(path, dir_fd=kwargs["dir_fd"])
-                fd = original_open(path, os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=kwargs["dir_fd"])
+                # Create the replacement while the original inode is still
+                # allocated, then atomically substitute it.  Unlink+create
+                # can immediately reuse the old inode on some filesystems,
+                # making the race fixture nondeterministic.
+                replacement = f".{self.APP}.replacement"
+                fd = original_open(replacement, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                                   0o600, dir_fd=kwargs["dir_fd"])
                 os.write(fd, self.payload)
                 os.close(fd)
+                os.unlink(path, dir_fd=kwargs["dir_fd"])
+                os.rename(replacement, path, src_dir_fd=kwargs["dir_fd"], dst_dir_fd=kwargs["dir_fd"])
             return original_open(path, flags, *args, **kwargs)
 
         with patch.object(BACKEND.os, "open", side_effect=swapping_open):
