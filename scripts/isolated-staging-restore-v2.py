@@ -51,7 +51,9 @@ def require_source_schema(source_schema, code="SOURCE_SCHEMA_NOT_ALLOWED"):
 
 
 def _header_regexes(source_schema):
-    schema = re.escape(require_source_schema(source_schema)).encode("ascii")
+    # The schema token is matched case-sensitively (the rest of the header stays
+    # case-insensitive, as before): schema names are case-sensitive identifiers.
+    schema = b"(?-i:" + re.escape(require_source_schema(source_schema)).encode("ascii") + b")"
     create = re.compile(
         rb"CREATE\s+DATABASE\s+"
         rb"(?:/\*!\d{5,6}\s+IF\s+NOT\s+EXISTS\s*\*/\s*)?"
@@ -208,6 +210,11 @@ def _word(token):
 
 def _id(token):
     return token.value.lower() if token and token.kind in {"WORD", "IDENT"} else ""
+
+
+def _exact_id(token):
+    """Identifier text exactly as written (no case folding)."""
+    return token.value if token and token.kind in {"WORD", "IDENT"} else ""
 
 
 def bounded_tokens(data):
@@ -403,7 +410,7 @@ def audit_sql(sql, target_schema, approved_definer=None, source_schema=DEFAULT_S
         if a == "DROP" and b in {"DATABASE", "SCHEMA"}:
             forbidden.add("DATABASE_DROP")
         if a == "USE":
-            use_db.append((token.line, _id(tokens[i + 1]) if i + 1 < len(tokens) else ""))
+            use_db.append((token.line, _exact_id(tokens[i + 1]) if i + 1 < len(tokens) else ""))
         if a == "CREATE" and b == "TABLE":
             table_index = i + 2
             if table_index + 2 < len(tokens) and [_word(tokens[j]) for j in range(table_index, table_index + 3)] == ["IF", "NOT", "EXISTS"]:
@@ -951,26 +958,52 @@ def _g1_contract():
     if _G1_CONTRACT is None:
         import importlib.util
         path = Path(__file__).resolve().with_name("production_g1_mysql_contract.py")
+        name = "production_g1_mysql_contract_for_restore"
         try:
-            spec = importlib.util.spec_from_file_location("production_g1_mysql_contract_for_restore", path)
+            spec = importlib.util.spec_from_file_location(name, path)
             module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
+            sys.modules[name] = module
             spec.loader.exec_module(module)
             production = module.INSTANCES[G1_PRODUCTION_INSTANCE]
             restore = module.INSTANCES[G1_RESTORE_INSTANCE]
-        except (OSError, ImportError, AttributeError, KeyError, SyntaxError):
-            refuse("G1_CONTRACT_UNAVAILABLE")
-        # The two instances share one VPS: separation rests on distinct ports,
-        # datadirs, sockets, units and schemas (plus distinct server UUIDs,
-        # checked against the signed manifest). Fail closed if the contract ever
-        # stops providing that.
-        if (production.port == restore.port or production.datadir == restore.datadir
-                or production.socket == restore.socket or production.unit == restore.unit
-                or production.schema == restore.schema
-                or require_source_schema(production.schema, "G1_CONTRACT_UNAVAILABLE") != production.schema):
+            for instance in (production, restore):
+                if (type(instance.port) is not int or not 1 <= instance.port <= 65535
+                        or any(type(getattr(instance, field)) is not str or not getattr(instance, field)
+                               for field in ("unit", "datadir", "socket", "schema"))):
+                    refuse("G1_CONTRACT_UNAVAILABLE")
+            # The two instances share one VPS: separation rests on distinct ports,
+            # datadirs, sockets, units and schemas (plus distinct server UUIDs,
+            # checked against the signed manifest). Fail closed if the contract
+            # ever stops providing that.
+            if (production.port == restore.port
+                    or _norm_dir(production.datadir) == _norm_dir(restore.datadir)
+                    or production.socket == restore.socket or production.unit == restore.unit
+                    or production.schema == restore.schema
+                    or require_source_schema(production.schema, "G1_CONTRACT_UNAVAILABLE") != production.schema):
+                refuse("G1_CONTRACT_UNAVAILABLE")
+        except Exception:
+            sys.modules.pop(name, None)
             refuse("G1_CONTRACT_UNAVAILABLE")
         _G1_CONTRACT = (production, restore)
     return _G1_CONTRACT
+
+
+def _norm_dir(path):
+    return path.rstrip("/") or "/"
+
+
+def g1_endpoint(instance):
+    """The (port, datadir, socket) triple a G1 instance must report about itself."""
+    return {"port": instance.port, "datadir": _norm_dir(instance.datadir), "socket": instance.socket}
+
+
+def parse_observed_endpoint(port, datadir, socket_path):
+    """Normalise `@@GLOBAL.port, @@GLOBAL.datadir, @@GLOBAL.socket` as read from a server."""
+    if (not isinstance(port, str) or not re.fullmatch(r"[0-9]{1,5}", port)
+            or not isinstance(datadir, str) or not datadir.startswith("/")
+            or not isinstance(socket_path, str) or not socket_path.startswith("/")):
+        refuse("MYSQL_ENDPOINT_INVALID")
+    return {"port": int(port), "datadir": _norm_dir(datadir), "socket": socket_path}
 
 
 def _validate_g1_isolation(isolation, mysql):
@@ -1034,12 +1067,15 @@ def verify_manifest_and_policy(manifest_path, policy_path, *, owner_uid=0):
     dest = policy["destination_identity"]
     mysql = policy["mysql"]
     if policy["isolation"]["kind"] == ISOLATION_KIND_G1_SYSTEMD:
-        # Same-VPS G1 instances legitimately share host_id/environment_id. For
-        # this kind ONLY, separation is enforced by distinct server UUIDs,
+        # Same-VPS G1 instances share host_id/environment_id, and this kind
+        # REQUIRES them to be equal (a different host would not be the same VPS).
+        # Separation is enforced by distinct server UUIDs,
         # distinct pinned ports/datadirs (policy validated against the G1
         # contract) and a source pinned to the G1 production schema.
         production, _restore = _g1_contract()
         if (source["server_uuid"] == mysql["server_uuid"]
+                or source["host_id"] != dest["host_id"]
+                or source["environment_id"] != dest["environment_id"]
                 or manifest["mysql"]["server_uuid"] != mysql["server_uuid"]
                 or source["database"] != production.schema
                 or manifest["backup"]["source_schema"] != production.schema):
@@ -1142,18 +1178,33 @@ def _safe_dump_hash(policy, schema, table_names, *, maximum=20 * 1024 * 1024 * 1
     return digest.hexdigest(), total
 
 
+def _is_g1_policy(policy):
+    isolation = policy.get("isolation") if isinstance(policy, dict) else None
+    return isinstance(isolation, dict) and isolation.get("kind") == ISOLATION_KIND_G1_SYSTEMD
+
+
 def _mysql_identity(policy):
+    g1 = _is_g1_policy(policy)
     raw = mysql_query(policy,
         "SELECT VERSION(),@@server_uuid,@@GLOBAL.log_bin,@@GLOBAL.binlog_format,"
-        "@@GLOBAL.log_bin_trust_function_creators")
+        "@@GLOBAL.log_bin_trust_function_creators"
+        + (",@@GLOBAL.port,@@GLOBAL.datadir,@@GLOBAL.socket" if g1 else ""))
     try:
         fields = raw.decode("ascii", "strict").rstrip("\n").split("\t")
     except UnicodeError:
         refuse("MYSQL_IDENTITY_INVALID")
-    if len(fields) != 5:
+    if len(fields) != (8 if g1 else 5):
         refuse("MYSQL_IDENTITY_INVALID")
-    return {"version": fields[0], "server_uuid": fields[1], "log_bin": fields[2],
-            "binlog_format": fields[3], "trust_function_creators": fields[4]}
+    identity = {"version": fields[0], "server_uuid": fields[1], "log_bin": fields[2],
+                "binlog_format": fields[3], "trust_function_creators": fields[4]}
+    if g1:
+        # The pinned destination must report, from the server itself, that it is
+        # the restore instance (not merely be configured/connected as one).
+        endpoint = parse_observed_endpoint(fields[5], fields[6], fields[7])
+        if endpoint != g1_endpoint(_g1_contract()[1]):
+            refuse("DESTINATION_ENDPOINT_MISMATCH")
+        identity["endpoint"] = endpoint
+    return identity
 
 
 SCHEMA_QUERIES = (
@@ -1544,6 +1595,10 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
             },
             "cleanup": {"status": "retained_for_migration_rehearsal", "journal": str(journal_path)},
         }
+        if _is_g1_policy(policy):
+            if not isinstance(identity.get("endpoint"), dict):
+                refuse("DESTINATION_ENDPOINT_UNOBSERVED")
+            receipt["destination_endpoint"] = identity["endpoint"]
         journal["state"] = "RESTORE_VERIFIED"
         receipt_payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii") + b"\n"
         journal["receipt_sha256"] = hashlib.sha256(receipt_payload).hexdigest()

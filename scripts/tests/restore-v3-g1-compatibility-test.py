@@ -127,7 +127,23 @@ class G1World(V3T.World):
 
     @staticmethod
     def observation():
-        return V3T.observe_ok() | {"database": PROD}
+        return V3T.observe_ok() | {"database": PROD, "endpoint": V3._g1_source_endpoint()}
+
+
+RESTORE_ENDPOINT = {"port": 3309, "datadir": "/var/lib/mysql-wpcaregrid-production-restore",
+                    "socket": "/run/mysqld/wpcaregrid-production-restore.sock"}
+PRODUCTION_ENDPOINT = {"port": 3308, "datadir": "/var/lib/mysql-wpcaregrid-production",
+                       "socket": "/run/mysqld/wpcaregrid-production.sock"}
+
+
+@contextlib.contextmanager
+def g1_restore_mysql(manifest):
+    """The v3 synthetic restore MySQL, but the identity also carries the observed endpoint."""
+    identity = {"version": "8.4.11", "server_uuid": V3T.DEST_UUID, "log_bin": "1", "binlog_format": "ROW",
+                "trust_function_creators": "0", "endpoint": dict(RESTORE_ENDPOINT)}
+    with V3T.synthetic_restore_mysql(manifest) as drop:
+        with mock.patch.object(V2, "_mysql_identity", return_value=identity):
+            yield drop
 
 
 def verify(world):
@@ -375,7 +391,7 @@ def test_g1_restore_chain_receipt_records_only_the_separation_that_holds():
     with tempfile.TemporaryDirectory() as directory:
         world = G1World(directory)
         world.capture()
-        with V3T.synthetic_restore_mysql(world.manifest) as drop:
+        with g1_restore_mysql(world.manifest) as drop:
             receipt = world.restore()
             path = V3._auth_path(world.dir / "restore-receipt.json")
             body, _sha = V3.verify_restore_receipt(path, world.key, owner_uid=OWNER)
@@ -384,12 +400,16 @@ def test_g1_restore_chain_receipt_records_only_the_separation_that_holds():
             assert body["source"]["host_id"] == body["destination"]["host_id"]        # same VPS, stated honestly
             assert body["separation"] == {"server_uuid_distinct": True, "port_distinct": True,
                                           "datadir_distinct": True, "schema_distinct": True,
-                                          "target_schema_absent_before_import": True, "isolation_kind": G1_KIND}
+                                          "target_schema_absent_before_import": True, "isolation_kind": G1_KIND,
+                                          "source_observed": PRODUCTION_ENDPOINT,
+                                          "destination_observed": RESTORE_ENDPOINT}
             assert "host_distinct" not in body["separation"] and "environment_distinct" not in body["separation"]
             assert body["source"]["server_uuid_sha256"] != body["destination"]["server_uuid_sha256"]
             # Forged G1-shaped receipts still fail their separation rules.
+            genuine = copy.deepcopy(read(path))
+
             def resigned(mutate):
-                forged = {k: v for k, v in read(path).items() if k != "authentication"}
+                forged = {k: v for k, v in copy.deepcopy(genuine).items() if k != "authentication"}
                 mutate(forged)
                 V3T.write_json(path, V3.sign_document(forged, world.key, "restore-receipt"))
             resigned(lambda b: b["destination"].update(server_uuid_sha256=b["source"]["server_uuid_sha256"]))
@@ -400,6 +420,18 @@ def test_g1_restore_chain_receipt_records_only_the_separation_that_holds():
             resigned(lambda b: (b["source"].update(schema=PROD),
                                 b["separation"].update(isolation_kind="disposable_mysql_container")))
             expect("RESTORE_RECEIPT_INVALID", V3.verify_restore_receipt, path, world.key, owner_uid=OWNER)
+            # Observed endpoints must equal the contract values and differ from each other.
+            for field, value in (("destination_observed", PRODUCTION_ENDPOINT),
+                                 ("source_observed", RESTORE_ENDPOINT),
+                                 ("destination_observed", {**RESTORE_ENDPOINT, "port": 3310})):
+                resigned(lambda b: (b["destination"].update(server_uuid_sha256="4" * 64),
+                                    b["separation"].update({field: value})))
+                expect("RESTORE_RECEIPT_INVALID", V3.verify_restore_receipt, path, world.key, owner_uid=OWNER)
+            # The G1 kind requires equal host and environment ids in the receipt.
+            resigned(lambda b: b["destination"].update(host_id="other-host", server_uuid_sha256="4" * 64))
+            expect("RESTORE_RECEIPT_SEPARATION_INVALID", V3.verify_restore_receipt, path, world.key, owner_uid=OWNER)
+            resigned(lambda b: b["destination"].update(environment_id="other-env", server_uuid_sha256="4" * 64))
+            expect("RESTORE_RECEIPT_SEPARATION_INVALID", V3.verify_restore_receipt, path, world.key, owner_uid=OWNER)
             # A container-shaped receipt with equal host ids is still refused.
             resigned(lambda b: (b.update(separation={"server_uuid_distinct": True, "environment_distinct": True,
                                                     "host_distinct": True, "schema_distinct": True,
@@ -407,6 +439,144 @@ def test_g1_restore_chain_receipt_records_only_the_separation_that_holds():
                                 b["destination"].update(server_uuid_sha256="4" * 64)))
             expect("RESTORE_RECEIPT_SEPARATION_INVALID", V3.verify_restore_receipt, path, world.key, owner_uid=OWNER)
             drop.assert_not_called()
+
+
+def test_g1_kind_requires_the_same_host_and_environment():
+    with tempfile.TemporaryDirectory() as directory:
+        world = G1World(directory)
+        world.capture()
+        for field in ("host_id", "environment_id"):
+            different = copy.deepcopy(world.policy)
+            different["destination_identity"][field] = "another-" + field
+            world.install(different)
+            expect("DESTINATION_NOT_ISOLATED", verify, world)
+            record, _ = V3.verify_capture_record(world.record_path, world.key, owner_uid=OWNER)
+            manifest = copy.deepcopy(world.manifest)
+            expect("DESTINATION_NOT_SEPARATE_FROM_SOURCE", V3.bind_capture_to_manifest, record, manifest, different)
+        world.install(g1_policy(world.policy))
+        verify(world)
+
+
+def _endpoint_fields(**override):
+    values = {"port": "3309", "datadir": RESTORE_ENDPOINT["datadir"] + "/", "socket": RESTORE_ENDPOINT["socket"]}
+    values.update(override)
+    return values
+
+
+def test_destination_identity_query_reads_and_enforces_the_server_endpoint():
+    base = ["8.4.11", V3T.DEST_UUID, "1", "ROW", "0"]
+    queries = []
+
+    def fake(fields):
+        def query(policy, sql, **kw):
+            queries.append(sql)
+            return ("\t".join(fields) + "\n").encode()
+        return query
+    g1 = g1_policy(V3T.World.__new__(V3T.World).__dict__.get("policy") or {"mysql": {}, "policy_id": "x",
+                                                                          "destination_identity": {}})
+    values = _endpoint_fields()
+    with mock.patch.object(V2, "mysql_query", fake(base + [values["port"], values["datadir"], values["socket"]])):
+        identity = V2._mysql_identity(g1)
+    assert identity["endpoint"] == RESTORE_ENDPOINT                    # trailing '/' normalised
+    assert "@@GLOBAL.port" in queries[0] and "@@GLOBAL.datadir" in queries[0] and "@@GLOBAL.socket" in queries[0]
+    for override in ({"port": "3308"}, {"datadir": PRODUCTION_ENDPOINT["datadir"] + "/"},
+                     {"socket": PRODUCTION_ENDPOINT["socket"]}, {"port": "x"}, {"datadir": "relative"}):
+        values = _endpoint_fields(**override)
+        with mock.patch.object(V2, "mysql_query", fake(base + [values["port"], values["datadir"], values["socket"]])):
+            try:
+                V2._mysql_identity(g1)
+            except V2.RestoreRefused as error:
+                assert str(error) in {"DESTINATION_ENDPOINT_MISMATCH", "MYSQL_ENDPOINT_INVALID"}, str(error)
+            else:
+                raise AssertionError(f"accepted {override}")
+    with mock.patch.object(V2, "mysql_query", fake(base)):
+        expect("MYSQL_IDENTITY_INVALID", V2._mysql_identity, g1)       # five fields: endpoint not reported
+    # The container kind keeps the unchanged five-field query.
+    queries.clear()
+    with mock.patch.object(V2, "mysql_query", fake(base)):
+        assert set(V2._mysql_identity({"mysql": {}})) == {"version", "server_uuid", "log_bin", "binlog_format",
+                                                            "trust_function_creators"}
+    assert "@@GLOBAL.port" not in queries[0]
+
+
+def test_source_identity_query_reads_and_enforces_the_production_endpoint():
+    with tempfile.TemporaryDirectory() as directory:
+        world = G1World(directory)
+        base = [V3T.BACKUP_ACCOUNT, PROD, V3T.SOURCE_UUID, "8.4.11", "1", "ROW", "0", "utf8mb4", "utf8mb4_unicode_ci"]
+        prod = [str(PRODUCTION_ENDPOINT["port"]), PRODUCTION_ENDPOINT["datadir"] + "/", PRODUCTION_ENDPOINT["socket"]]
+
+        def run(fields, policy=world.source_policy):
+            with mock.patch.object(V2, "mysql_query",
+                                   return_value=("\t".join(fields) + "\n").encode()) as query:
+                return V3.observe_source_identity(policy), query.call_args[0][1]
+        observation, sql = run(base + prod)
+        assert observation["endpoint"] == PRODUCTION_ENDPOINT and "@@GLOBAL.port" in sql
+        V3.check_source_observation(world.source_policy, observation)
+        for bad in ([str(RESTORE_ENDPOINT["port"])] + prod[1:], [prod[0], RESTORE_ENDPOINT["datadir"], prod[2]],
+                    prod[:2] + [RESTORE_ENDPOINT["socket"]]):
+            observed, _ = run(base + bad)
+            expect("SOURCE_IDENTITY_MISMATCH", V3.check_source_observation, world.source_policy, observed)
+        # Legacy schema: unchanged nine-field query, no endpoint.
+        legacy = copy.deepcopy(world.source_policy)
+        legacy["schema"] = "wpcaregrid"
+        observed, sql = run([*base[:1], "wpcaregrid", *base[2:]], legacy)
+        assert "endpoint" not in observed and "@@GLOBAL.port" not in sql
+
+
+def test_g1_contract_loader_fails_closed_with_a_fixed_code():
+    saved, name = V2._G1_CONTRACT, "production_g1_mysql_contract_for_restore"
+    contract_path = ROOT / "scripts" / "production_g1_mysql_contract.py"
+    try:
+        for label, original in (("raises", 'raise RuntimeError("boom")'),
+                                ("port-type", "INSTANCES = {k: type(v)(**{**v.__dict__, 'port': '3308'}) "
+                                              "for k, v in INSTANCES.items()}"),
+                                ("no-instances", "del INSTANCES")):
+            V2._G1_CONTRACT = None
+            source = contract_path.read_text() + "\n" + original + "\n"
+            with tempfile.TemporaryDirectory() as directory:
+                fake_dir = Path(directory)
+                (fake_dir / "production_g1_mysql_contract.py").write_text(source)
+                fake_script = fake_dir / "isolated-staging-restore-v2.py"
+                fake_script.write_text("")
+                real_file = V2.__file__
+                V2.__file__ = str(fake_script)
+                try:
+                    expect("G1_CONTRACT_UNAVAILABLE", V2._g1_contract)
+                finally:
+                    V2.__file__ = real_file
+            assert name not in sys.modules, label
+            assert V2._G1_CONTRACT is None
+    finally:
+        V2._G1_CONTRACT = saved
+        sys.modules.pop(name, None)
+    V2._G1_CONTRACT = None
+    assert V2._g1_contract()[0].port == 3308                          # the real contract still loads
+
+
+def test_dump_header_schema_token_is_case_exact():
+    with tempfile.TemporaryDirectory() as directory:
+        definer = G1World(directory).manifest["approved_definer"]
+    _dump_header_case_checks(definer)
+
+
+def _dump_header_case_checks(definer):
+    for schema in ("wpcg_prod_main", "wpcaregrid"):
+        for variant in (schema.upper(), schema.capitalize()):
+            header = V2.wrap_single_schema_dump(b"", schema, "utf8mb4", "utf8mb4_unicode_ci").replace(
+                schema.encode(), variant.encode())
+            sql = header + V3T.MYSQL84_DUMP_BODY_FIXTURE
+            try:
+                V2.audit_sql(sql, V3.CAPTURE_AUDIT_TARGET, definer,
+                             source_schema=schema)
+            except V2.RestoreRefused as error:
+                assert str(error) in {"DATABASE_SELECTOR_SOURCE_MISMATCH", "DATABASE_CREATE_FORMAT_UNEXPECTED",
+                                      "DATABASE_USE_FORMAT_UNEXPECTED"}, str(error)
+            else:
+                raise AssertionError(f"accepted {variant} for {schema}")
+    # Non-schema keywords stay case-insensitive.
+    lowered = V2.wrap_single_schema_dump(b"", PROD, "utf8mb4", "utf8mb4_unicode_ci").replace(
+        b"CREATE DATABASE", b"create database").replace(b"USE ", b"use ")
+    V2.audit_sql(lowered + V3T.MYSQL84_DUMP_BODY_FIXTURE, V3.CAPTURE_AUDIT_TARGET, definer, source_schema=PROD)
 
 
 def read(path):
@@ -476,6 +646,11 @@ def main():
         test_g1_capture_wraps_audits_and_records_the_production_schema,
         test_bind_g1_kind_allows_equal_host_and_environment_but_nothing_weaker,
         test_g1_restore_chain_receipt_records_only_the_separation_that_holds,
+        test_g1_kind_requires_the_same_host_and_environment,
+        test_destination_identity_query_reads_and_enforces_the_server_endpoint,
+        test_source_identity_query_reads_and_enforces_the_production_endpoint,
+        test_g1_contract_loader_fails_closed_with_a_fixed_code,
+        test_dump_header_schema_token_is_case_exact,
         test_g1_migration_receipt_keeps_production_admission_on_hold,
         test_production_admission_hold_is_hardcoded_and_not_derived_from_the_destination_kind,
         test_no_network_host_or_secret_surface_was_added,

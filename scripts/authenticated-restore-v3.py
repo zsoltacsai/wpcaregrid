@@ -465,6 +465,13 @@ def _source_mysql_policy(policy):
                       "client": "/usr/bin/mysql", "dump_client": "/usr/bin/mysqldump"}}
 
 
+G1_SOURCE_SCHEMA = "wpcg_prod_main"
+
+
+def _g1_source_endpoint():
+    return V2.g1_endpoint(V2._g1_contract()[0])
+
+
 def observe_source_identity(policy):
     """Authenticate the *current connection* against the source policy. Only the
     server UUID hash is retained; the raw UUID never leaves this function."""
@@ -472,20 +479,25 @@ def observe_source_identity(policy):
         _source_mysql_policy(policy),
         "SELECT CURRENT_USER(),DATABASE(),@@server_uuid,VERSION(),@@GLOBAL.log_bin,"
         "@@GLOBAL.binlog_format,@@GLOBAL.log_bin_trust_function_creators,"
-        "DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA "
-        "WHERE SCHEMA_NAME=DATABASE()",
+        "DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME"
+        + (",@@GLOBAL.port,@@GLOBAL.datadir,@@GLOBAL.socket" if policy["schema"] == G1_SOURCE_SCHEMA else "")
+        + " FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()",
         database=policy["schema"], maximum=2048)
     try:
         fields = raw.decode("ascii", "strict").rstrip("\n").split("\t")
     except UnicodeError:
         refuse("SOURCE_IDENTITY_INVALID")
-    if len(fields) != 9:
+    if len(fields) != (12 if policy["schema"] == G1_SOURCE_SCHEMA else 9):
         refuse("SOURCE_IDENTITY_INVALID")
     observation = {"current_user": fields[0], "database": fields[1],
                    "server_uuid_sha256": _sha(fields[2].encode("ascii", "replace")),
                    "mysql_version": fields[3], "log_bin": fields[4], "binlog_format": fields[5],
                    "trust_function_creators": fields[6], "database_charset": fields[7],
                    "database_collation": fields[8]}
+    if policy["schema"] == G1_SOURCE_SCHEMA:
+        # Read from the server itself: the production instance must report its own
+        # pinned port/datadir/socket, not merely be reached on that port.
+        observation["endpoint"] = V2.parse_observed_endpoint(fields[9], fields[10], fields[11])
     return observation
 
 
@@ -499,6 +511,8 @@ def check_source_observation(policy, observation):
             or observation["log_bin"] != "1" or observation["binlog_format"] != "ROW"
             or observation["trust_function_creators"] != "0"):
         refuse("SOURCE_IDENTITY_MISMATCH")
+    if policy["schema"] == G1_SOURCE_SCHEMA and observation.get("endpoint") != _g1_source_endpoint():
+        refuse("SOURCE_IDENTITY_MISMATCH")
 
 
 OBSERVATION_SPEC = {
@@ -507,6 +521,12 @@ OBSERVATION_SPEC = {
     "trust_function_creators": "0", "database_charset": _rx(IDENT_RE),
     "database_collation": _rx(IDENT_RE),
 }
+def _observation_spec_for(schema):
+    if schema == G1_SOURCE_SCHEMA:
+        return {**OBSERVATION_SPEC, "endpoint": lambda value: value == _g1_source_endpoint()}
+    return OBSERVATION_SPEC
+
+
 CAPTURE_BEGIN_SPEC = {
     "schema_version": 1, "kind": "wpcg_capture_begin", "record_id": _rx(RECORD_ID_RE),
     "started_at": _time, "expires_at": _time, "source_policy_sha256": _hex(64),
@@ -526,6 +546,17 @@ CAPTURE_RECORD_SPEC = {
     "archive": {"id": _rx(V2.BACKUP_ID_RE), "size_bytes": _int(1, MAX_ARCHIVE_BYTES), "sha256": _hex(64)},
     "config_reference": CONFIG_REFERENCE_SPEC,
 }
+G1_CAPTURE_RECORD_SPEC = {
+    **CAPTURE_RECORD_SPEC,
+    "source": {**CAPTURE_RECORD_SPEC["source"], "endpoint": lambda value: value == _g1_source_endpoint()},
+}
+
+
+def _capture_spec_for(body):
+    source = body.get("source") if isinstance(body, dict) else None
+    if isinstance(source, dict) and source.get("schema") == G1_SOURCE_SCHEMA:
+        return G1_CAPTURE_RECORD_SPEC
+    return CAPTURE_RECORD_SPEC
 
 
 def capture_begin(*args, **kwargs):
@@ -670,7 +701,7 @@ def capture(source_policy_path, archive_path, archive_id, config_reference_path,
     reference, _ = V2.read_protected_json(config_reference_path, owner_uid=owner_uid, maximum=MAX_RECORD_BYTES)
     validate_config_recovery_reference(reference)
     observation = (observe or observe_source_identity)(policy)
-    _check(observation, OBSERVATION_SPEC, "SOURCE_IDENTITY_MISMATCH")
+    _check(observation, _observation_spec_for(policy["schema"]), "SOURCE_IDENTITY_MISMATCH")
     check_source_observation(policy, observation)
     archive = Path(archive_path)
     V2._check_protected_path_parents(archive, owner_uid=owner_uid)
@@ -718,21 +749,23 @@ def capture(source_policy_path, archive_path, archive_id, config_reference_path,
         "application": policy["application"],
         "source": {"environment_id": policy["environment_id"], "host_id": policy["host_id"],
                    "schema": policy["schema"], "backup_account": observation["current_user"],
-                   "server_uuid_sha256": observation["server_uuid_sha256"], "mysql_version": observation["mysql_version"]},
+                   "server_uuid_sha256": observation["server_uuid_sha256"], "mysql_version": observation["mysql_version"],
+                   **({"endpoint": observation["endpoint"]} if policy["schema"] == G1_SOURCE_SCHEMA else {})},
         "capture": {"started_at": _iso(started), "finished_at": _iso(finished),
                     "identity_observation_sha256": _sha(_canonical(observation)),
                     "deployment_receipt_sha256": deployment_sha, "dump_exit_status": 0},
         "archive": {"id": archive_id, "size_bytes": len(raw), "sha256": _sha(raw)},
         "config_reference": reference,
     }
-    _check(body, CAPTURE_RECORD_SPEC, "CAPTURE_RECORD_INVALID")
+    _check(body, _capture_spec_for(body), "CAPTURE_RECORD_INVALID")
     return _write_signed(record_path, body, key, PURPOSE_CAPTURE_RECORD, owner_uid=owner_uid)
 
 
 def verify_capture_record(path, key, *, owner_uid, now=None):
     now = _now(now)
     body, file_sha = _load_signed(path, key, PURPOSE_CAPTURE_RECORD, CAPTURE_RECORD_SPEC,
-                                  owner_uid=owner_uid, code="CAPTURE_RECORD_INVALID")
+                                  owner_uid=owner_uid, code="CAPTURE_RECORD_INVALID",
+                                  spec_for=_capture_spec_for)
     _check_application_consistency(body["recovery_point_kind"], body["application"], "CAPTURE_RECORD_INVALID")
     validate_config_recovery_reference(body["config_reference"])
     issued, expires = _utc(body["issued_at"]), _utc(body["expires_at"])
@@ -769,11 +802,14 @@ def bind_capture_to_manifest(capture, manifest, policy):
     destination = policy["destination_identity"]
     destination_uuid_sha = _sha(policy["mysql"]["server_uuid"].encode("ascii", "replace"))
     if policy["isolation"]["kind"] == V2.ISOLATION_KIND_G1_SYSTEMD:
-        # Same-VPS G1 instances share host/environment ids; separation is the
+        # Same-VPS G1 instances share host/environment ids (REQUIRED equal for
+        # this kind); separation is the
         # distinct server UUID, pinned distinct ports/datadirs (validated in the
         # destination policy against the G1 contract) and the production schema.
         production = V2._g1_contract()[0]
-        if destination_uuid_sha == source["server_uuid_sha256"] or source["schema"] != production.schema:
+        if (destination_uuid_sha == source["server_uuid_sha256"] or source["schema"] != production.schema
+                or destination["host_id"] != source["host_id"]
+                or destination["environment_id"] != source["environment_id"]):
             refuse("DESTINATION_NOT_SEPARATE_FROM_SOURCE")
     elif (destination_uuid_sha == source["server_uuid_sha256"]
             or destination["environment_id"] == source["environment_id"]
@@ -840,7 +876,11 @@ G1_RESTORE_RECEIPT_SPEC = {
     **RESTORE_RECEIPT_SPEC,
     "separation": {"server_uuid_distinct": True, "port_distinct": True, "datadir_distinct": True,
                    "schema_distinct": True, "target_schema_absent_before_import": True,
-                   "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD},
+                   "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD,
+                   # Values read from each server (@@GLOBAL.port/datadir/socket), not
+                   # copied from configuration; both must equal the G1 contract.
+                   "source_observed": lambda value: value == _g1_source_endpoint(),
+                   "destination_observed": lambda value: value == V2.g1_endpoint(V2._g1_contract()[1])},
 }
 
 
@@ -866,6 +906,9 @@ def verify_restore_receipt(path, key, *, owner_uid, now=None, capture_sha256=Non
     if body["separation"].get("isolation_kind") == V2.ISOLATION_KIND_G1_SYSTEMD:
         # Same-VPS G1 receipt: host/environment ids may legitimately be equal.
         if (body["source"]["server_uuid_sha256"] == body["destination"]["server_uuid_sha256"]
+                or body["source"]["host_id"] != body["destination"]["host_id"]
+                or body["source"]["environment_id"] != body["destination"]["environment_id"]
+                or body["separation"]["source_observed"] == body["separation"]["destination_observed"]
                 or body["source"]["schema"] != V2._g1_contract()[0].schema
                 or body["source"]["schema"] == body["destination"]["target_schema"]):
             refuse("RESTORE_RECEIPT_SEPARATION_INVALID")
@@ -882,11 +925,19 @@ def verify_restore_receipt(path, key, *, owner_uid, now=None, capture_sha256=Non
     return body, file_sha
 
 
-def _receipt_separation(policy):
+def _receipt_separation(policy, capture=None, v2_receipt=None):
     if policy["isolation"]["kind"] == V2.ISOLATION_KIND_G1_SYSTEMD:
+        source_observed = capture["source"].get("endpoint") if capture else None
+        destination_observed = v2_receipt.get("destination_endpoint") if v2_receipt else None
+        if (not isinstance(source_observed, dict) or not isinstance(destination_observed, dict)
+                or source_observed["port"] == destination_observed.get("port")
+                or source_observed["datadir"] == destination_observed.get("datadir")
+                or source_observed["socket"] == destination_observed.get("socket")):
+            refuse("DESTINATION_ENDPOINT_UNOBSERVED")
         return {"server_uuid_distinct": True, "port_distinct": True, "datadir_distinct": True,
                 "schema_distinct": True, "target_schema_absent_before_import": True,
-                "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD}
+                "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD,
+                "source_observed": source_observed, "destination_observed": destination_observed}
     return {"server_uuid_distinct": True, "environment_distinct": True, "host_distinct": True,
             "schema_distinct": True, "target_schema_absent_before_import": True}
 
@@ -913,7 +964,7 @@ def _restore_receipt_body(capture, capture_sha, manifest, manifest_sha, policy, 
         "destination": {"environment_id": policy["destination_identity"]["environment_id"],
                         "host_id": policy["destination_identity"]["host_id"],
                         "server_uuid_sha256": destination_uuid_sha, "target_schema": manifest["target_schema"]},
-        "separation": _receipt_separation(policy),
+        "separation": _receipt_separation(policy, capture, v2_receipt),
         "observed": {"schema_sha256": observed["schema_sha256"], "ledger_sha256": observed["ledger_sha256"],
                      "data_sha256": observed["data_sha256"],
                      "table_names": manifest["expected"]["table_names"],

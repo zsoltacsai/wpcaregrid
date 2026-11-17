@@ -266,17 +266,45 @@ three ways. The minimal, backward-compatible fixes:
    only for this kind, and it fails closed if the two instances ever share a port,
    datadir, socket, unit or schema. The `disposable_mysql_container` kind is
    unchanged (network id, `public_ports=false`, and distinct host/environment).
-3. **Same-VPS separation, for that kind only.** `host_id`/`environment_id` may be
-   equal between source and destination. Separation is instead enforced by
+3. **Same-VPS separation, for that kind only.** `host_id`/`environment_id` must be
+   equal between source and destination (see hardening below). Separation is instead enforced by
    distinct MySQL server UUIDs (manifest and policy must agree on the destination
    UUID), distinct pinned ports and datadirs (from the contract), a source pinned
    to the production schema `wpcg_prod_main`, and distinct schemas. The
    authenticated restore receipt for this kind records
    `separation = {server_uuid_distinct, port_distinct, datadir_distinct,
-   schema_distinct, target_schema_absent_before_import, isolation_kind}` and does
+   schema_distinct, target_schema_absent_before_import, isolation_kind,
+   source_observed, destination_observed}` and does
    **not** claim `host_distinct`/`environment_distinct`; the verifier selects the
    receipt shape from `isolation_kind` and applies the matching separation rules.
    The container receipt shape and its rules are unchanged.
+
+**AppSec hardening (same section, source only).**
+
+- **Observed, not configured.** For the G1 kind the destination identity query
+  also reads `@@GLOBAL.port, @@GLOBAL.datadir, @@GLOBAL.socket`
+  (`_mysql_identity`) and refuses (`DESTINATION_ENDPOINT_MISMATCH`) unless they
+  equal the restore instance's contract values (trailing `/` on the datadir
+  normalised). `observe_source_identity` does the same for `wpcg_prod_main`
+  against the production values (3308, production datadir/socket;
+  `SOURCE_IDENTITY_MISMATCH`). The legacy and container kinds keep the unchanged
+  5/9-field queries. The observed values are recorded: the capture record's
+  `source.endpoint`, the v2 receipt's `destination_endpoint`, and the G1
+  authenticated receipt's `separation.source_observed` /
+  `separation.destination_observed`; the verifier requires both to equal the
+  contract values and to differ. Existing container-kind receipts are unchanged.
+- **Same host required.** For the G1 kind `host_id` and `environment_id` of
+  destination and source must be EQUAL (manifest/policy verification, capture
+  binding and receipt verification); the container kind still requires them
+  different.
+- **Contract loader fails closed.** Any exception while loading
+  `production_g1_mysql_contract.py` (and any wrong field type, e.g. a non-`int`
+  port) refuses with the fixed code `G1_CONTRACT_UNAVAILABLE` and removes the
+  half-loaded module from `sys.modules`.
+- **Case-exact schema token.** The dump header `CREATE DATABASE`/`USE` schema
+  token and the audit's `USE` comparison are case-sensitive for the allowlisted
+  names (`wpcaregrid`, `wpcg_prod_main`); keywords and every other identifier keep
+  their previous behaviour.
 
 **Production admission is unchanged and hardcoded.** Every migration receipt still
 carries `production_admission.state = HOLD`; the verifier still requires that exact
@@ -290,10 +318,9 @@ this change supplies or can supply from source:
 - `candidate_migration_bytes_execution` — root-controlled execution of the exact
   candidate migration bytes with per-migration receipts.
 
-Same-host distinct-instance separation is source-level evidence of configuration
-only; it does not prove that port 3309 is currently the restore instance, that
-the datadirs are what the contract says, or that the instances are isolated at
-the operating-system level. Tests:
+Same-host distinct-instance separation is now backed by what each server reports
+about itself (port/datadir/socket), but this is synthetic-tested only; it does not
+prove the instances are isolated at the operating-system level. Tests:
 `scripts/tests/restore-v3-g1-compatibility-test.py` (CI step "Restore v2/v3
 Production G1 compatibility"), covering the positive kind, wrong port/datadir/
 socket/unit, same server UUID, wrong schema, the unchanged container kind
