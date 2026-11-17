@@ -17,6 +17,10 @@ from __future__ import annotations
 
 # Newest stage first: edge/jobs (Stage 3), then staging-next FPM (Stage 2), then the shared legacy pool (Stage 1).
 PEERS_NEWEST_FIRST = ("jobs-legacy-scheduler", "jobs-scheduler", "jobs-supervisor", "nginx", "staging-next", "staging-legacy")
+PRODUCTION_CLI_LABELS = (
+    "wpcaregrid-php-cli-production-deploy (enforce)",
+    "wpcaregrid-php-cli-production-build (enforce)",
+)
 
 
 class RollbackAborted(Exception):
@@ -46,26 +50,29 @@ def run_rollback(host, peers=PEERS_NEWEST_FIRST) -> list:
                 raise RuntimeError("production is still routed or running")
             if not host.jobs_masked():
                 raise RuntimeError("a production job unit is not masked and inactive")
-            if host.deploy_cli_running():
-                raise RuntimeError("a production deploy CLI (aa-exec php8.4) is still running: it can read production secrets")
+            if host.production_cli_running(PRODUCTION_CLI_LABELS):
+                raise RuntimeError("a production deploy or build CLI is still running: it can read production secrets")
         step(name, check)
 
+    def no_production_cli() -> None:
+        # Detect both exact enforce labels from /proc/<pid>/attr/current, never by process name.
+        if host.production_cli_running(PRODUCTION_CLI_LABELS):
+            raise RuntimeError("a production deploy or build CLI is running: it reads production secrets and would become unconfined if its profile is removed")
+
+    # Check before the first rollback mutation, then again after stopping production in case a CLI
+    # started during the route/service transition.
+    step("R1:assert_no_production_cli", no_production_cli)
     step("R1:close_route", host.close_route)
     step("R1:stop_production_service", host.stop_production_service)
     step("R1:assert_jobs_masked", lambda: (_ for _ in ()).throw(RuntimeError("production job units are not masked and inactive"))
          if not host.jobs_masked() else None)
-    def no_deploy_cli() -> None:
-        # Detect by the process label (/proc/<pid>/attr/current == the deploy profile), never by name.
-        if host.deploy_cli_running():
-            raise RuntimeError("a production deploy CLI is running: it reads production secrets as www-data and would turn unconfined "
-                               "when its profile is removed")
-    step("R1:assert_no_deploy_cli", no_deploy_cli)
+    step("R1:assert_no_production_cli_after_stop", no_production_cli)
     step("R2:fence_secrets", host.fence_secrets)
     for peer in peers:
         require_fenced(f"R3:require_fenced_before:{peer}")
         step(f"R3:unconfine:{peer}", lambda peer=peer: host.unconfine(peer))
         step(f"R3:restart:{peer}", lambda peer=peer: host.restart(peer))
         require_fenced(f"R3:require_fenced_after:{peer}")
-    step("R4:assert_no_deploy_cli", no_deploy_cli)  # a CLI started meanwhile would go unconfined with its profile
+    step("R4:assert_no_production_cli", no_production_cli)  # either CLI would go unconfined with its profile
     step("R4:remove_artifacts", host.remove_artifacts)
     return log

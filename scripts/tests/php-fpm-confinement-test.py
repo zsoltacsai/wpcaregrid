@@ -2459,8 +2459,8 @@ class FakeRollbackHost:
     """Simulates the host state the rollback order protects; asserts Invariant I at the moment of every unconfine."""
 
     def __init__(self, peers, faults=None, reexpose_after=None, jobs_masked=True, service_stays_running=False, route_reopens=False,
-                 deploy_cli=False, cli_on_call=None):
-        self.deploy_cli, self.cli_on_call, self.cli_calls = deploy_cli, cli_on_call, 0
+                 deploy_cli=False, build_cli=False, cli_on_call=None):
+        self.deploy_cli, self.build_cli, self.cli_on_call, self.cli_calls = deploy_cli, build_cli, cli_on_call, 0
         self.route, self.service, self.masked = True, True, jobs_masked
         self.exposed = {"/var/www/wpcaregrid-production/releases/r1/bootstrap/cache/config.php", "/var/log/wpcaregrid-production/php-fpm.log",
                         "/var/lib/wpcaregrid-deploy/production/shared/.env", "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"}
@@ -2497,9 +2497,13 @@ class FakeRollbackHost:
         self._fault("exposed_paths")
         return sorted(self.exposed)
 
-    def deploy_cli_running(self):
+    def production_cli_running(self, labels):
+        expected = {"wpcaregrid-php-cli-production-deploy (enforce)",
+                    "wpcaregrid-php-cli-production-build (enforce)"}
+        if set(labels) != expected:
+            raise AssertionError(f"unexpected production CLI label set: {labels}")
         self.cli_calls += 1
-        return self.deploy_cli or self.cli_on_call == self.cli_calls
+        return self.deploy_cli or self.build_cli or self.cli_on_call == self.cli_calls
 
     def route_open(self):
         return self.route
@@ -2509,7 +2513,7 @@ class FakeRollbackHost:
 
     def unconfine(self, peer):
         self._fault("unconfine")
-        if self.exposed or self.route or self.service or not self.masked or self.deploy_cli:
+        if self.exposed or self.route or self.service or not self.masked or self.deploy_cli or self.build_cli:
             self.violations.append((peer, sorted(self.exposed), self.route, self.service, self.masked))
         self.confined.discard(peer)
         self.unconfined.append(peer)
@@ -2551,9 +2555,9 @@ class RollbackOrder(unittest.TestCase):
         log = self.mod.run_rollback(host)
         self.assertEqual(host.violations, [])
         self.assertEqual(host.unconfined, list(self.peers))
-        order = [log.index(x) for x in ("R1:close_route", "R1:stop_production_service", "R1:assert_jobs_masked",
-                                        "R1:assert_no_deploy_cli", "R2:fence_secrets")]
-        self.assertLess(log.index("R4:assert_no_deploy_cli"), log.index("R4:remove_artifacts"))
+        order = [log.index(x) for x in ("R1:assert_no_production_cli", "R1:close_route", "R1:stop_production_service",
+                                        "R1:assert_jobs_masked", "R1:assert_no_production_cli_after_stop", "R2:fence_secrets")]
+        self.assertLess(log.index("R4:assert_no_production_cli"), log.index("R4:remove_artifacts"))
         self.assertEqual(order, sorted(order))
         self.assertLess(log.index("R2:fence_secrets"), log.index(f"R3:unconfine:{self.peers[0]}"))
         for peer in self.peers:  # re-proven immediately before EVERY unconfine, and again after its restart
@@ -2627,28 +2631,30 @@ class RollbackOrder(unittest.TestCase):
         self.assertNotIn("unmask(", source)
         self.assertNotIn("def unmask", source)
 
-    def test_a_running_production_deploy_cli_aborts_in_r1_before_any_change(self) -> None:
-        """Review: the CLI guard must run in R1 (before the fence), not first inside the R3 loop."""
-        host = self.host(deploy_cli=True)
-        with self.assertRaises(self.mod.RollbackAborted) as caught:
-            self.mod.run_rollback(host)
-        self.assertEqual(caught.exception.step, "R1:assert_no_deploy_cli")
-        self.assertEqual(host.unconfined, [])
-        self.assertTrue(host.exposed, "nothing was fenced yet: the operator investigates the running CLI first")
-        self.assertNotIn("fence_secrets", host.calls)
+    def test_either_running_production_cli_aborts_before_any_rollback_change(self) -> None:
+        """Both production CLI profiles must be absent before rollback mutates the host."""
+        for profile in ("deploy", "build"):
+            with self.subTest(profile=profile):
+                host = self.host(**{f"{profile}_cli": True})
+                with self.assertRaises(self.mod.RollbackAborted) as caught:
+                    self.mod.run_rollback(host)
+                self.assertEqual(caught.exception.step, "R1:assert_no_production_cli")
+                self.assertEqual(host.unconfined, [])
+                self.assertTrue(host.exposed, "operator investigates the running CLI before any rollback mutation")
+                self.assertEqual(host.calls, [])
 
     def test_a_cli_started_between_the_last_peer_and_profile_removal_blocks_r4(self) -> None:
-        """Removing the deploy profile would turn a running CLI unconfined: it is re-checked immediately before R4."""
+        """Removing either production CLI profile would unconfine a running process."""
         peers = len(self.peers)
-        host = self.host(cli_on_call=1 + 2 * peers + 1)  # call 1: R1; 2 per peer in R3; then the R4 guard
+        host = self.host(cli_on_call=2 + 2 * peers + 1)  # two R1 checks, two per peer, then the R4 guard
         with self.assertRaises(self.mod.RollbackAborted) as caught:
             self.mod.run_rollback(host)
-        self.assertEqual(caught.exception.step, "R4:assert_no_deploy_cli")
+        self.assertEqual(caught.exception.step, "R4:assert_no_production_cli")
         self.assertNotIn("remove_artifacts", host.calls)
         self.assertEqual(host.violations, [])
 
     def test_a_cli_appearing_mid_rollback_stops_the_remaining_peers(self) -> None:
-        host = self.host(cli_on_call=1 + 2 * 2 + 1)  # appears at the check before the third peer
+        host = self.host(cli_on_call=2 + 2 * 2 + 1)  # appears at the check before the third peer
         with self.assertRaises(self.mod.RollbackAborted) as caught:
             self.mod.run_rollback(host)
         self.assertTrue(caught.exception.step.startswith("R3:require_fenced_before:"), caught.exception.step)
@@ -2657,6 +2663,10 @@ class RollbackOrder(unittest.TestCase):
     def test_the_cli_guard_detects_by_label_not_by_name(self) -> None:
         source = (ACCEPTANCE / "rollback-order.py").read_text()
         self.assertIn("attr/current", source)
+        self.assertIn("production_cli_running", source)
+        self.assertIn("deploy or build CLI", source)
+        self.assertIn("wpcaregrid-php-cli-production-deploy (enforce)", source)
+        self.assertIn("wpcaregrid-php-cli-production-build (enforce)", source)
         self.assertNotIn("pgrep", source)
 
     def test_without_fencing_the_guard_itself_would_have_allowed_a_violation(self) -> None:
@@ -3405,7 +3415,9 @@ class DocumentationContract(unittest.TestCase):
         stage5 = self.section("**Stage 5", "**Stage 6")
         dropins = {"php8.4-fpm.service.d": stage1, "php8.5-fpm.service.d": stage2, "nginx.service.d": stage3,
                    "supervisor.service.d": stage3, "wpcaregrid-staging-next-scheduler.service.d": stage3}
-        stages = [stage1, stage2, stage3, self.section("**Stage 4", "**Stage 5"), stage5, self.section("**Stage 6", "Never combine")]
+        stages = [stage1, stage2, stage3, self.section("**Stage 4", "**Stage 5"), stage5,
+                  self.section("**Stage 6", "**Stage 7"), self.section("**Stage 7", "**Stage 8"),
+                  self.section("**Stage 8", "Never combine")]
         for dropin, home in dropins.items():
             for stage in stages:
                 if dropin in home and stage is not home:
@@ -3450,7 +3462,7 @@ class DocumentationContract(unittest.TestCase):
 
     def test_staging_peers_are_confined_and_gated_before_any_production_stage(self) -> None:
         doc = self.doc()
-        order = [doc.index(f"**Stage {n}") for n in range(7)]
+        order = [doc.index(f"**Stage {n}") for n in range(9)]
         self.assertEqual(order, sorted(order))
         self.assertIn("staging-legacy", self.section("**Stage 1", "**Stage 2"))
         self.assertIn("staging-next", self.section("**Stage 2", "**Stage 3"))
@@ -3462,10 +3474,16 @@ class DocumentationContract(unittest.TestCase):
         self.assertIn("production secrets may not be provisioned", gate)
         self.assertIn("map to a permitted class", gate)
         self.assertIn("Only after Stage 4 passes", self.section("**Stage 5", "**Stage 6"))
-        stage6 = doc[doc.index("**Stage 6"):doc.index("Never combine stages")]
-        self.assertIn("production Nginx route is never changed before this stage", stage6)
-        self.assertIn("fenced production jobs", stage6)
-        for number in range(6):
+        stage6 = self.section("**Stage 6", "**Stage 7")
+        stage7 = self.section("**Stage 7", "**Stage 8")
+        stage8 = doc[doc.index("**Stage 8"):doc.index("Never combine stages")]
+        self.assertIn("fixtures.py status` must report none", stage6)
+        self.assertNotIn("provision real production secrets", stage6)
+        self.assertIn("expected server UUID", stage7)
+        self.assertIn("route remains closed", stage7)
+        self.assertIn("production Nginx route is never changed before this stage", stage8)
+        self.assertIn("production job fences", stage8)
+        for number in range(7):
             end = f"**Stage {number + 1}"
             text = self.section(f"**Stage {number}", end)
             self.assertNotIn("open the production Nginx route", text)

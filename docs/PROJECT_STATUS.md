@@ -6,6 +6,11 @@
 - **AppSec corrections:** production CLI permissions are split. `wpcaregrid-php-cli-production-deploy` is read-only and can connect only to the fixed production MySQL Unix socket for the runtime identity probe; `wpcaregrid-php-cli-production-build` runs only `package:discover` and `config:cache`, with cache/storage writes but no network or socket permissions. Network denial audit evidence now binds family, socket type and action; collector stability includes GIDs and supplementary groups; verifier CLI arity and runbook continuation syntax have regression coverage.
 - **Validation:** `scripts/tests/php-fpm-confinement-test.py` — 214 passed, 1 skipped because local `apparmor_parser` is unavailable. `SHA256SUMS` has 28 entries; its SHA-256 is `a1832c21e60553d4c9876e6392427e008e6dfdcfe9583711068d3906e97eb6e5`. Parser compilation, required CI and independent exact-head QA/AppSec remain gates. No host or service was touched.
 
+## Follow-up — 2026-11-17 (GO-13 Workstream B: rollback and acceptance ordering)
+
+- **Corrections:** rollback now refuses if either the production deploy CLI or build CLI is running, checks both profiles before rollback mutates the host, between every peer restart, and immediately before removing profiles. The runbook separates profile acceptance, fixture removal, real credential provisioning plus exact MySQL server-UUID verification, and public route activation into distinct stages; the route stays closed during the database identity probe.
+- **Validation:** `scripts/tests/php-fpm-confinement-test.py` — 214 passed, 1 skipped because local `apparmor_parser` is unavailable. `SHA256SUMS` has 28 entries and hashes to `b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c`; all listed package files verify. Independent exact-head QA/AppSec and required CI remain pending. No host or service was touched.
+
 ## Historical update — 2026-11-17 (GO-13 Workstream B: 1.0.4 acceptance-tool correction — superseded)
 
 - **Status:** immutable package 1.0.4 is preserved as historical source; 1.0.5 supersedes it. The 1.0.4 acceptance-tool details below describe that predecessor, not the current package.
