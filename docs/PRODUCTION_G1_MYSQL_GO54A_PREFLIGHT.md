@@ -1,0 +1,136 @@
+# Production G1 MySQL — GO-5.4a preflight and installation readiness
+
+Status: **preparation only.** This document prepares and records the preflight
+for the GO-5.4a AppArmor socket-lock transaction. It authorizes nothing. No
+host execution, AppArmor load or reload, MySQL start or initialization, or
+GO-5.4a transaction may be performed from this document. A separate, exact-scope
+Owner GO is required, and per GO-20.8 the GO-5.4a installation itself remains
+**HOLD** until the preflight passes, independent Integration QA and AppSec pass,
+and the Owner explicitly decides.
+
+Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
+(transaction scope, OLD/NEW pins, rollback semantics) and
+[Rackforest backup verification checklist](RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md)
+(backup evidence gate).
+
+## Verified toolkit baseline (2026-11-17, GLM-5.3 session)
+
+- Transaction source of record: `scripts/production-g1-ops/go54a-upgrade-apparmor.py`
+  and `go54a-fetch-package.sh` at protected-primary ancestor commit
+  `0951d9e829364296796a1d4acd303feef698cbc7`; verified byte-identical at current
+  primary `ef4e1d1ea6f4bc928d52bf06137ca242312e23a7` (no drift).
+- Payloads pinned by `scripts/SHA256SUMS` (digest
+  `0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85`) equal the
+  NEW `/usr/local/libexec` targets in the hotfix document.
+- New read-only diagnostics (this change, review pending):
+  - `scripts/production-g1-ops/go54a-readiness.py`
+    (SHA-256 `31056d190d00a49ed338069267c7f1538f34d387e08ba0fa7e03636eda8be604`)
+  - `scripts/production-g1-ops/g1-notify-evidence.py`
+    (SHA-256 `7b3807923e83282962219827c4b1647bac03b9e29e4ab0ffedf2f4758188806c`)
+  - Both are pinned by the updated `scripts/production-g1-ops/SHA256SUMS`
+    (new file digest
+    `bacd8a62172420fac0dd80b56705ec888b8fb8fbdedd5fb0d2cea18f86f9cfeb`).
+  - Neither is approved by its local synthetic tests; independent Integration QA
+    and AppSec PASS records are required before their output is used in a GO
+    decision.
+
+## Readiness evidence collector
+
+Run from the approved root console, read-only:
+
+```
+python3 -I -B /path/to/scripts/production-g1-ops/go54a-readiness.py [--package DIR]
+```
+
+`--package DIR` additionally validates an already staged GO-5.4a package
+directory (root:root 0700, exactly the three payloads plus `SHA256SUMS`,
+root:root 0600 each, hashes equal to the NEW pins). Without it, `/root` is
+scanned for `wpcg-go54a-*` staging directories; an unverified
+`*.incoming-UNVERIFIED` directory is a HOLD, an unrecognized or invalid staged
+directory is a HOLD, and nothing is accepted implicitly.
+
+Classification is fail-closed:
+
+- `G1_GO54A_READINESS=PASS` (exit 0) — every host-technical item verified.
+- `G1_GO54A_READINESS=HOLD` (exit 3) — a precondition is violated or an unsafe
+  state is detected (including the expected post-transaction
+  `already_upgraded_baseline=new`).
+- `G1_GO54A_READINESS=UNKNOWN` (exit 4) — evidence could not be collected
+  (for example not run as root, AppArmor state file unreadable, datadir beyond
+  the tool's bounded walk).
+
+`BACKUP_EVIDENCE=UNKNOWN` is always reported: a host read cannot verify backup
+recoverability. It is a separate Owner item (see the Rackforest checklist) and
+never turns a technical PASS into a false GO.
+
+## Complete preflight checklist
+
+Every item is required before the Owner may issue a GO-5.4a execution GO.
+
+| # | Preflight item | Required state | Evidence |
+|---|---|---|---|
+| 1 | Both G1 systemd units | `mysql@wpcaregrid-production.service` and `mysql@wpcaregrid-production-restore.service` exactly `LoadState=loaded`, `ActiveState=inactive` (masked, not-found, active or failed are HOLD) | readiness `g1_units_inactive` |
+| 2 | Five installed artifacts | Each of the five pinned paths exists as a regular root:root file with the exact mode and the exact OLD SHA-256; any NEW hash is reported as already-upgraded (HOLD for this transaction), anything else is a mismatch | readiness `installed_baseline` (`baseline=old`) |
+| 3 | Both G1 AppArmor profiles | `wpcaregrid-mysql-production` and `wpcaregrid-mysql-production-restore` each loaded exactly once and `(enforce)`; the vendor `/usr/sbin/mysqld` loaded line present exactly once | readiness `apparmor_enforced` |
+| 4 | Vendor MySQL identity | `mysql.service` active with a numeric MainPID whose `/proc/<pid>/comm` is `mysqld`, and the MainPID stable across the run | readiness `vendor_mysql_service` + `vendor_mysql_stability` |
+| 5 | Vendor profile source | `/etc/apparmor.d/usr.sbin.mysqld` regular root:root, digest recorded for pre/post comparison | readiness `vendor_profile_source` |
+| 6 | Datadirs preserved | Both instance datadirs present, mysql:mysql, no group/other-write entries, no symlinks or special entries, bounded combined fingerprint recorded | readiness `datadirs_intact` |
+| 7 | Logs preserved | Both instance logs regular mysql:mysql 0600, bounded combined fingerprint recorded (no log content is printed) | readiness `mysql_logs_intact` |
+| 8 | No active/interrupted transaction | No upgrade journal or journal temporary file, no leftover temporary files, transaction lock absent or free, not held | readiness `transaction_leftovers`, `lock_state` |
+| 9 | Toolkit/package intake | Toolkit companions beside the tool match the reviewed pins (a mismatched companion is HOLD); any staged package validates exactly against the NEW pins; nothing unrecognized is accepted | readiness `toolkit_companions`, `package_intake` |
+| 10 | Recoverable backup evidence | Owner-verified per the Rackforest checklist; existence alone is not PASS | `BACKUP_EVIDENCE` + [checklist](RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md) |
+| 11 | Independent reviews | Current exact-artifact Integration QA and AppSec PASS records for the readiness/notify tools and the unchanged transaction toolkit | #174 ledger V3 records |
+| 12 | Notify investigation state | `/run/systemd/notify` denials collected and necessity decided; no profile widening without proof | `g1-notify-evidence.py` output + review |
+
+The readiness tool deliberately does not perform `apparmor_parser` compilation,
+generated-profile hash regeneration, or package acceptance: those are executed
+by the transaction tool itself at execution time, and the readiness notes say so.
+
+## Exact installation procedure (DO NOT EXECUTE without a separate Owner GO)
+
+1. **Freeze scope.** Confirm the protected primary and the reviewed toolkit
+   commit; verify `scripts/production-g1-ops/SHA256SUMS` against this reviewed
+   merge. Nothing below is authorized by reading or preparing it.
+2. **Collect evidence.** From the approved root console run
+   `go54a-readiness.py` and archive its full output. Required verdict for the
+   next step: `G1_GO54A_READINESS=PASS` (technical) with
+   `installed_baseline PASS baseline=old`.
+3. **Notify evidence.** Run `g1-notify-evidence.py` and archive its output;
+   the GO-5.4a transaction does not depend on it, but the open investigation
+   must stay visible and no profile may be widened meanwhile.
+4. **Stage the package.** On the host, from the root console:
+   `bash go54a-fetch-package.sh 0951d9e829364296796a1d4acd303feef698cbc7`
+   (or the exact reviewed commit recorded for this release). The script
+   refuses existing targets, downloads the three payloads plus `scripts/SHA256SUMS`
+   from the immutable commit, enforces root:root 0600 0700 metadata, verifies the
+   pinned checksum-file digest and every payload digest, and promotes
+   `/root/wpcg-go54a-<sha7>` only when everything matches.
+5. **Validate intake.** `python3 -I -B go54a-readiness.py --package /root/wpcg-go54a-<sha7>`
+   must report `package_intake PASS package_verified`.
+6. **Owner GO.** Only the Owner may issue the execution GO, and only after
+   items 1–12 above pass, including the backup-evidence decision.
+7. **Execute the transaction.** From the approved root console:
+   `python3 -I -B go54a-upgrade-apparmor.py /root/wpcg-go54a-<sha7>`.
+   It re-verifies everything itself, snapshots vendor identity, both datadirs
+   and logs, replaces only the five pinned files atomically, reloads only the
+   two G1 profiles, verifies the new helper statically, checks every invariant
+   again, and on failure performs a hash-checked rollback and reports whether
+   the rollback was verified. An interrupted journal is recovered and the run
+   then stops for manual review.
+8. **Post-transaction verification.** Re-run `go54a-readiness.py`; the expected
+   result is `installed_baseline HOLD already_upgraded_baseline=new` with every
+   other check PASS, the five NEW hashes on disk, both profiles enforced, the
+   vendor PID unchanged and identical datadir/log fingerprints. Any other
+   result: stop and investigate; do not retry.
+9. **Separate follow-up decisions.** A later GO-5.4 start of the production G1
+   instance is a separate Owner decision and must never be chained to this
+   transaction. The `/run/systemd/notify` investigation remains open until the
+   collected audit records prove or refute necessity.
+
+## Stop conditions
+
+Stop without retry and preserve evidence when: any readiness check is HOLD or
+UNKNOWN; any hash, owner, mode, unit state, profile state, PID, fingerprint or
+lock precondition differs from the above; the transaction reports
+`STOP;CODE=...;ROLLED_BACK=NO` (manual recovery, the journal is preserved); or
+an interrupted journal is discovered. Unknown state is never treated as pass.
