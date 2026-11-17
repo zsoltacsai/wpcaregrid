@@ -955,6 +955,17 @@ def test_candidate_store_rejects_lazy_fetch_config_hardlinks_and_corrupt_objects
                         "fetch", "-q", str(repo), "HEAD"], check=True)
         with mock.patch.object(V3, "CANDIDATE_GIT_STORE", store):
             assert V3.candidate_migration_inventory(candidate, owner_uid=OWNER)
+            database_tree = subprocess.check_output(["git", "-C", str(repo), "rev-parse",
+                                                     candidate + ":database"]).decode().strip()
+            loose_tree = store / "objects" / database_tree[:2] / database_tree[2:]
+            saved_tree = loose_tree.read_bytes()
+            import zlib
+            os.chmod(loose_tree, 0o600)
+            loose_tree.write_bytes(zlib.compress(b"tree 6\0broken"))
+            expect("CANDIDATE_OBJECT_HASH_MISMATCH", V3.candidate_migration_inventory,
+                   candidate, owner_uid=OWNER)
+            loose_tree.write_bytes(saved_tree)
+            os.chmod(loose_tree, 0o444)
             config = store / "config"
             original = config.read_text()
             config.write_text(original + '\n[remote "origin"]\n\tpromisor = true\n')
@@ -965,7 +976,6 @@ def test_candidate_store_rejects_lazy_fetch_config_hardlinks_and_corrupt_objects
             loose = store / "objects" / blob[:2] / blob[2:]
             assert loose.exists(), "fixture must use a loose blob object"
             original_object = loose.read_bytes()
-            import zlib
             os.chmod(loose, 0o600)
             loose.write_bytes(zlib.compress(b"blob 6\0broken"))
             expect("CANDIDATE_OBJECT_HASH_MISMATCH", V3.candidate_migration_inventory, candidate, owner_uid=OWNER)

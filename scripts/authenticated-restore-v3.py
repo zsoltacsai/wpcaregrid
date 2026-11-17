@@ -1165,6 +1165,21 @@ def candidate_migration_inventory(application_sha, *, owner_uid):
         if digest != oid:
             refuse("CANDIDATE_OBJECT_HASH_MISMATCH")
         return data
+    def tree_entries(data):
+        entries, names, offset = [], set(), 0
+        while offset < len(data):
+            space = data.find(b" ", offset)
+            nul = data.find(b"\0", space + 1) if space >= 0 else -1
+            if space <= offset or nul < 0 or nul + 21 > len(data):
+                refuse("CANDIDATE_TREE_INVALID")
+            mode, name = data[offset:space], data[space + 1:nul]
+            raw_oid = data[nul + 1:nul + 21]
+            if not name or b"/" in name or name in names or mode not in (b"40000", b"100644", b"100755", b"120000", b"160000"):
+                refuse("CANDIDATE_TREE_INVALID")
+            names.add(name)
+            entries.append((mode, name, raw_oid.hex()))
+            offset = nul + 21
+        return entries
     if git("rev-parse", "--is-bare-repository", maximum=64) != b"true\n":
         refuse("CANDIDATE_STORE_UNSAFE")
     if git("cat-file", "-t", application_sha, maximum=64) != b"commit\n":
@@ -1175,20 +1190,32 @@ def candidate_migration_inventory(application_sha, *, owner_uid):
     if not tree_match:
         refuse("CANDIDATE_COMMIT_INVALID")
     tree_oid = tree_match.group(1).decode("ascii")
-    verify_object(tree_oid, "tree", git("cat-file", "tree", tree_oid,
-                                         maximum=MAX_MIGRATION_FILES * 512))
-    tree = git("ls-tree", "-z", application_sha + ":database/migrations", maximum=MAX_MIGRATION_FILES * 256)
-    entries = tree.rstrip(b"\0").split(b"\0")
+    root_tree = verify_object(tree_oid, "tree", git("cat-file", "tree", tree_oid,
+                                                       maximum=16 * 1024 * 1024))
+    root_entries = tree_entries(root_tree)
+    database_matches = [(mode, oid) for mode, name, oid in root_entries if name == b"database"]
+    if len(database_matches) != 1 or database_matches[0][0] != b"40000":
+        refuse("CANDIDATE_TREE_INVALID")
+    database_oid = database_matches[0][1]
+    database_tree = verify_object(database_oid, "tree", git("cat-file", "tree", database_oid,
+                                                               maximum=16 * 1024 * 1024))
+    database_entries = tree_entries(database_tree)
+    migration_matches = [(mode, oid) for mode, name, oid in database_entries if name == b"migrations"]
+    if len(migration_matches) != 1 or migration_matches[0][0] != b"40000":
+        refuse("CANDIDATE_TREE_INVALID")
+    migrations_oid = migration_matches[0][1]
+    migrations_tree = verify_object(migrations_oid, "tree", git("cat-file", "tree", migrations_oid,
+                                                                   maximum=MAX_MIGRATION_FILES * 512))
+    entries = tree_entries(migrations_tree)
     if not entries or len(entries) > MAX_MIGRATION_FILES:
         refuse("CANDIDATE_MIGRATIONS_COUNT_INVALID")
     inventory = []
-    for entry in entries:
+    for mode_bytes, name_bytes, oid in entries:
         try:
-            metadata, name = entry.decode("ascii").split("\t")
-            mode, kind, oid = metadata.split(" ")
-        except (ValueError, UnicodeError):
+            mode, name = mode_bytes.decode("ascii"), name_bytes.decode("ascii")
+        except UnicodeError:
             refuse("CANDIDATE_TREE_INVALID")
-        if mode != "100644" or kind != "blob" or not MIGRATION_FILE_RE.fullmatch(name):
+        if mode != "100644" or not MIGRATION_FILE_RE.fullmatch(name):
             refuse("CANDIDATE_TREE_INVALID")
         data = verify_object(oid, "blob", git("cat-file", "blob", oid, maximum=MAX_MIGRATION_FILE_BYTES))
         inventory.append({"name": name[:-4], "sha256": _sha(data)})
