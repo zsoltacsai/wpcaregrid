@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "profile": "production",
+  "helper_version": "2.1.5",
+  "compatibility_contract": "wpcaregrid-deployment-profile-v2.2",
+  "supersedes_helper_version": "2.1.4",
+  "release_review_policy": "V3.1",
+  "privileged_invocation": "root-console-direct",
+  "transfer_identity": "deploy",
+  "production_sudoers": null,
+  "entrypoint": "scripts/wpcaregrid-deploy-production-priv-2_1_5.py",
+  "entrypoint_sha256": "d45e516071aa17a1c9c8b77bc4a6b6a332a3c6bd5d5ac30e15bc645f8ca07275",
+  "backend": "scripts/deployment_backend_v2_1_5.py",
+  "backend_sha256": "c1eef0ca22d5937c395169bd9e08bcc6fb69a20fcb2bba8c1d27cd7011ad3b63",
+  "transaction_module": "scripts/deployment_transaction_v2.py",
+  "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
+  "environment_contract": "scripts/deployment_environment_contract_2_1_5.py",
+  "environment_contract_sha256": "afdbccf5bfc7d734b383044a93363c1c4ecf50eb56eae4b3385bc765d7c3b7aa",
+  "release_review_policy_module": "scripts/release_review_policy_v3_1.py",
+  "release_review_policy_sha256": "5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f",
+  "helper_artifact_sha256": "66ef7cda0639b3b65cc242037f9be0746dcc2f8d58c007debb371ac129f1cf43",
+  "controller": "scripts/production_deploy_controller_2_1_5.py",
+  "controller_sha256": "bfa09face75ee85553f60f89b23e421abe16cf66836ef42781455f9ad08f0503",
+  "root_installer": "scripts/install_production_helper_2_1_5.py",
+  "root_installer_sha256": "8de386533746194a4b194cb017b62db557a8fdf937b2a230886d2f79b6d20b57",
+  "policy_schema": 2,
+  "php_fpm_confinement_pin": {
+    "schema": 3,
+    "package_version": "1.0.6",
+    "sha256sums_sha256": "bf6e734ef0489c34006862c706a6d0fc59d62b8c18b00bbe04a276512c0a5e18",
+    "package_tree": "6d239b64d5637971bf28ec7a2de6d7a5686804df",
+    "files": 17,
+    "services": [
+      "production",
+      "staging-next",
+      "staging-legacy",
+      "nginx",
+      "jobs-supervisor",
+      "jobs-scheduler",
+      "jobs-legacy-scheduler"
+    ],
+    "transients": [
+      "production-deploy-cli",
+      "production-build-cli"
+    ],
+    "binding_sha256": "c349684665ac8a563d9b948dd4a03bc63ecd3e06e396fcd34daf5894ca33df4d"
+  },
+  "phase_b_default": "DISABLED",
+  "production_activation": "BLOCKED_UNTIL_CONFINEMENT_PIN_APPROVED_POLICY_AND_RECOVERY_EVIDENCE",
+  "php_runtime": {
+    "production": "8.5",
+    "production_unit": "wpcaregrid-production-php8.5-fpm.service",
+    "production_socket": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+  },
+  "coexists_with_helper_versions": [
+    "2.1.4"
+  ]
+}
