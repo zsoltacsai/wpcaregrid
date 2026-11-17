@@ -54,8 +54,10 @@ CONTROL_PREFIXES = ("/etc/wpcaregrid-deploy", "/home", "/root", "/var/lib/mysql"
 # socket path would pass as "generic".
 RUNTIME_PREFIXES = {
     "production": ("/run/php/wpcaregrid-production-php8.5-fpm.sock", "/etc/php/8.5/fpm-wpcaregrid-production"),
-    "staging-next": ("/run/php/php8.5-fpm.sock", "/run/php/php8.5-fpm.pid"),
-    "staging-legacy": ("/run/php/php8.4-fpm.sock", "/run/php/php8.4-fpm.pid"),
+    "staging-next": ("/run/php/php8.5-fpm.sock", "/run/php/php8.5-fpm.pid",
+                     "/etc/php/8.5/fpm/pool.d", "/etc/php/8.5/fpm/php-fpm.conf"),
+    "staging-legacy": ("/run/php/php8.4-fpm.sock", "/run/php/php8.4-fpm.pid",
+                       "/etc/php/8.4/fpm/pool.d", "/etc/php/8.4/fpm/php-fpm.conf", "/var/log/php8.4-fpm.log"),
 }
 ROLE_PREFIXES = {
     "production": ("/var/www/wpcaregrid-production", "/var/lib/wpcaregrid-deploy/production", "/var/log/wpcaregrid-production")

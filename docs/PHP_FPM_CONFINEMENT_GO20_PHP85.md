@@ -54,9 +54,9 @@ Packages are immutable: **1.0.0–1.0.5 are frozen** and unchanged by this relea
 | 1.0.3 | `dcf18aa07cbdb8bcddde8f2a0527a13701ab0316` |
 | 1.0.4 | `71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912` |
 | 1.0.5 | `e8e59b769ed6c6acd85a3bf259364bace5ec374b` |
-| **1.0.6** (this release) | `970b46397eeedd3581ae58493b9de839716971b9` |
+| **1.0.6** (this release) | `6d239b64d5637971bf28ec7a2de6d7a5686804df` |
 
-Pin for the helper successor: `SHA256SUMS` of 1.0.6 has SHA-256 `dd07a01779b469e7e5aa420cf4a083983f7dde35ce11519c1a272976ba25ae93`.
+Pin for the helper successor: `SHA256SUMS` of 1.0.6 has SHA-256 `bf6e734ef0489c34006862c706a6d0fc59d62b8c18b00bbe04a276512c0a5e18`.
 
 **Not bound by any helper:** package 1.0.6 is not bound by any helper yet. Production helper 2.1.4 and `scripts/deployment_environment_contract_2_1_4.py` are untouched and stay bound to package 1.0.5 (PHP 8.4 production). A separate helper 2.1.5 successor will bind 1.0.6 later; until then 1.0.6 must not be installed on a host that runs helper 2.1.4, because the helper checks unit names, profile hashes and the PHP 8.4 interpreter of 1.0.5.
 
@@ -66,6 +66,8 @@ Everything in GO-13 (preconditions, Stages 0–8, live acceptance, rollback) app
 
 * Stage 0 package/harness directories use `1.0.6` (`/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.6/`, `/usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.6/`).
 * Stage 2 (staging-next): the production configuration directory does not exist yet; the new `InaccessiblePaths=-/etc/php/8.5/fpm-wpcaregrid-production` in the drop-in is harmless until it does.
+* **`-` InaccessiblePaths resolve only at unit start.** The `-/etc/php/8.5/fpm-wpcaregrid-production` entries (staging-next `php8.5-fpm.service` and legacy `php8.4-fpm.service` drop-ins) are skipped while the directory is absent and are not re-evaluated afterwards. After Stage 5 creates the production configuration directory, `php8.5-fpm.service` (and `php8.4-fpm.service`) must be restarted **inside the staging window**, and the nsenter acceptance check re-run, before the entry counts as effective. The AppArmor deny applies regardless; the optional `production-fpm-config-read` checks stay UNPROVEN until the directory exists.
+* **Accepted residual (finding 5):** production and staging-next share `/etc/php/8.5/fpm/php.ini` and `conf.d/`. A staging-next process could read them, and a change there affects both pools. Accepted; optional hardening is `php_admin_value[...]` settings in the pool configuration or a dedicated production ini via `-c` (own file, not the shared one), each needing its own review.
 * Stage 5: the unit is `wpcaregrid-production-php8.5-fpm.service`, the configuration is installed to `/etc/php/8.5/fpm-wpcaregrid-production/{php-fpm.conf,pool.d/wpcaregrid-production.conf}`, and the local FastCGI exercise targets `/run/php/wpcaregrid-production-php8.5-fpm.sock`. The production CLI helper commands run `/usr/bin/php8.5` under `wpcaregrid-php-cli-production-deploy` / `-build`.
 * The post-phase acceptance is run for all seven profiles as before; the new live checks are `exec-php84`, `exec-php84-cli` and the optional pool-configuration denies (a baseline that cannot reach the optional target is reported **UNPROVEN**, never PASS).
 * R1: `systemctl stop wpcaregrid-production-php8.5-fpm.service`.

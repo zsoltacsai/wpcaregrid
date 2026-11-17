@@ -147,7 +147,8 @@ REQUIRED_DENIES = {
                                         "/var/www/wpcaregrid/{,**}", "/run/mysqld/{,**}",
                                         "/run/php/wpcaregrid-production-php[0-9].[0-9]-fpm.{sock,pid}",
                                         "/etc/php/8.5/fpm-wpcaregrid-production/{,**}"),
-    "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
+    "wpcaregrid-php-fpm-staging-legacy": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}", "/run/mysqld/{,**}",
+                                        "/etc/php/8.5/fpm-wpcaregrid-production/{,**}"),
     "wpcaregrid-php-cli-staging": ("/var/lib/wpcaregrid-deploy/production/{,**}", "/var/www/wpcaregrid-production/{,**}",
                                    "/var/log/wpcaregrid-production/{,**}", "/run/mysqld/{,**}"),
     "wpcaregrid-php-cli-production-deploy": ("/var/lib/wpcaregrid-deploy/staging-next/{,**}", "/var/www/wpcaregrid-staging-new/{,**}",
@@ -2910,7 +2911,7 @@ class DeployCliProfile(unittest.TestCase):
 
 
 # Profiles whose bytes changed in the 1.0.6 PHP 8.5 production successor (see Package106Successor).
-CHANGED_IN_106 = {"wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next", "wpcaregrid-nginx"}
+CHANGED_IN_106 = {"wpcaregrid-php-fpm-production", "wpcaregrid-php-fpm-staging-next", "wpcaregrid-nginx", "wpcaregrid-php-fpm-staging-legacy"}
 
 
 class OtherProfilesUnchangedSince102(unittest.TestCase):
@@ -3132,7 +3133,7 @@ class PackageImmutability(unittest.TestCase):
     # The tree id is the durable pin: protected squash merges need not preserve the source PR commit as an ancestor.
     FROZEN = {
         # 1.0.6 (PHP 8.5 production) is pinned by tree id alone: its provenance is the commit that adds it.
-        "1.0.6": ("970b46397eeedd3581ae58493b9de839716971b9", None),
+        "1.0.6": ("6d239b64d5637971bf28ec7a2de6d7a5686804df", None),
         "1.0.5": ("e8e59b769ed6c6acd85a3bf259364bace5ec374b", "37eefe29e694be434dff2dc70d80cfb221c9903b"),
         "1.0.4": ("71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912", "9a54ca6581ea0fe173667236dcd6555f10ccdc12"),
         "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
@@ -3624,6 +3625,7 @@ class Package106Successor(unittest.TestCase):
         "apparmor/wpcaregrid-php-cli-production-deploy", "apparmor/wpcaregrid-php-fpm-production",
         "apparmor/wpcaregrid-php-fpm-staging-next",
         "php-fpm/production/php-fpm.conf", "php-fpm/production/pool.d/wpcaregrid-production.conf",
+        "apparmor/wpcaregrid-php-fpm-staging-legacy", "systemd/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf",
         "systemd/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf", "systemd/" + PROD_UNIT_106,
     }
 
@@ -3662,6 +3664,14 @@ class Package106Successor(unittest.TestCase):
                 for stale in ("/etc/php/8.4/fpm-wpcaregrid-production", "wpcaregrid-production-php8.4-fpm.sock",
                               "wpcaregrid-production-php8.4-fpm.service"):
                     self.assertNotIn(stale, text, f"{path.relative_to(ARTIFACTS)}: {stale}")
+
+    def test_staging_legacy_also_denies_the_production_fpm_config_directory(self) -> None:
+        old = (self.OLD / "apparmor/wpcaregrid-php-fpm-staging-legacy").read_text().splitlines()
+        new = (ARTIFACTS / "apparmor/wpcaregrid-php-fpm-staging-legacy").read_text().splitlines()
+        self.assertEqual([l for l in new if l not in old and not l.startswith("#")],
+                         [f"  audit deny {PROD_POOL_DIR_106}/{{,**}} rwklm,"])
+        unit = parse_unit(ARTIFACTS / "systemd/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf")
+        self.assertIn("-" + PROD_POOL_DIR_106, " ".join(unit_values(unit, "InaccessiblePaths")).split())
 
     def test_frozen_predecessors_are_pinned_withdrawn_or_present(self) -> None:
         for version in ("1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"):

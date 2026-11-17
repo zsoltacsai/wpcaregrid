@@ -1965,6 +1965,7 @@
           "expect": "deny",
           "id": "staging-next-pool-config-read",
           "optional": true,
+          "optional_reason": "the packaged pool.d/www.conf may be absent or unreadable to www-data on the host; the check is then reported UNPROVEN, never PASS",
           "path": "/etc/php/8.5/fpm/pool.d/www.conf"
         }
       ],
@@ -2331,6 +2332,14 @@
           "optional": true,
           "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
           "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-fpm-config-read",
+          "optional": true,
+          "optional_reason": "the production configuration directory exists only after Stage 5; before that the target is absent and the check is reported UNPROVEN, never PASS",
+          "path": "/etc/php/8.5/fpm-wpcaregrid-production/php-fpm.conf"
         }
       ],
       "environment": "staging-legacy",
@@ -2721,6 +2730,7 @@
           "expect": "deny",
           "id": "production-fpm-config-read",
           "optional": true,
+          "optional_reason": "the production configuration directory exists only after Stage 5; before that the target is absent and the check is reported UNPROVEN, never PASS",
           "path": "/etc/php/8.5/fpm-wpcaregrid-production/php-fpm.conf"
         }
       ],
