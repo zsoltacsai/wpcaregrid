@@ -78,7 +78,8 @@ def read_json(path):
 
 def observe_ok(_policy=None):
     return {"current_user": BACKUP_ACCOUNT, "database": "wpcaregrid", "server_uuid_sha256": sha(SOURCE_UUID),
-            "mysql_version": "8.4.11", "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0"}
+            "mysql_version": "8.4.11", "log_bin": "1", "binlog_format": "ROW", "trust_function_creators": "0",
+            "database_charset": "utf8mb4", "database_collation": "utf8mb4_unicode_ci"}
 
 
 class World:
@@ -102,6 +103,7 @@ class World:
         self.source_policy = {
             "schema_version": 1, "policy_id": "synthetic-source-policy", "environment_id": "source-env",
             "host_id": "source-host", "schema": "wpcaregrid", "backup_account": BACKUP_ACCOUNT,
+            "approved_definer": self.manifest["approved_definer"],
             "server_uuid_sha256": sha(SOURCE_UUID),
             "mysql": {"host": "127.0.0.1", "port": 3308, "defaults_file": self.policy["mysql"]["defaults_file"]},
             "recovery_point_kind": V3.RECOVERY_POST_BOOTSTRAP,
@@ -127,14 +129,22 @@ class World:
         stamp = (self.t0 - datetime.timedelta(minutes=10)).timestamp()
         os.utime(self.archive_path, (stamp, stamp))
 
-    def capture(self, observe=observe_ok):
-        sql = gzip.decompress(self.archive_path.read_bytes())
+    def capture(self, observe=observe_ok, dump_sql=None):
+        original_sql = gzip.decompress(self.archive_path.read_bytes())
+        # mysqldump without --databases emits the selected schema's objects,
+        # not CREATE DATABASE/USE selectors. The production capture adds those
+        # from the independently observed schema metadata.
+        sql = dump_sql if dump_sql is not None else b"\n".join(
+            line for line in original_sql.splitlines()
+            if not line.lstrip().upper().startswith((b"CREATE DATABASE", b"USE `WPCAREGRID`"))
+        ) + b"\n"
         self.archive_path.unlink()
         observations = iter((observe_ok(), observe(self.source_policy)))
         def dump(argv, consume, **kw):
             assert argv[0] == "/usr/bin/mysqldump"
             assert argv[1] == "--defaults-file=" + self.source_policy["mysql"]["defaults_file"]
             assert "--single-transaction" in argv and "--set-gtid-purged=OFF" in argv
+            assert "--skip-set-charset" in argv and "--databases" not in argv
             assert argv[-2:] == ["--", "wpcaregrid"]
             consume(sql)
         with (mock.patch.object(V3, "_bounded_process", side_effect=dump),
@@ -251,6 +261,26 @@ def test_capture_refuses_identity_drift_and_wrong_identity():
         world = World(directory)
         expect("SOURCE_IDENTITY_CHANGED_DURING_CAPTURE", world.capture,
                observe=lambda p: observe_ok() | {"mysql_version": "8.4.12"})
+        assert not world.record_path.exists()
+
+
+def test_capture_adds_audited_mysql84_selector_and_audits_before_signing():
+    with tempfile.TemporaryDirectory() as directory:
+        world = World(directory)
+        world.capture()
+        captured = V2.decode_verified_archive(world.archive_path.read_bytes(),
+                                              hashlib.sha256(world.archive_path.read_bytes()).hexdigest())
+        assert captured.startswith(
+            b"CREATE DATABASE /*!32312 IF NOT EXISTS*/ `wpcaregrid` "
+            b"/*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */;\n"
+            b"USE `wpcaregrid`;\n"
+        )
+        V2.audit_sql(captured, V3.CAPTURE_AUDIT_TARGET, world.manifest["approved_definer"])
+    with tempfile.TemporaryDirectory() as directory:
+        world = World(directory)
+        unsafe_dump = b"SET NAMES gbk;\nCREATE TABLE `migrations` (`id` int NOT NULL);\n"
+        expect("DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED", world.capture,
+               dump_sql=unsafe_dump)
         assert not world.record_path.exists()
 
 
@@ -1146,6 +1176,7 @@ def main():
         test_signature_binds_body_purpose_and_key,
         test_capture_record_binds_identity_without_raw_uuid_or_secrets,
         test_capture_refuses_identity_drift_and_wrong_identity,
+        test_capture_adds_audited_mysql84_selector_and_audits_before_signing,
         test_capture_refuses_stale_oversized_or_untrusted_archives_and_begin_records,
         test_verify_capture_rejects_stale_expired_incomplete_and_oversized_records,
         test_pre_bootstrap_state_is_explicit_and_cannot_be_restored_as_a_post_bootstrap_backup,

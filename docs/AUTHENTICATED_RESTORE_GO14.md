@@ -33,12 +33,22 @@ facts honestly. Every receipt carries `limitations` saying so.
 ## 1. Authenticated capture record
 
 Source policy (root-protected JSON, schema 1) names the source environment/host,
-schema, expected backup account, server UUID hash, loopback MySQL endpoint and
-protected defaults file. `capture` runs a fixed `/usr/bin/mysqldump` command
-(single transaction, quick, no tablespaces, GTID purging OFF, triggers included,
-routines/events excluded), streams bounded SQL into gzip, requires successful
+schema, expected backup account and DEFINER, server UUID hash, loopback MySQL
+endpoint and protected defaults file. The source identity query also observes
+the selected schema's default character set and collation. `capture` runs a
+fixed `/usr/bin/mysqldump` command (single transaction, quick, no tablespaces,
+GTID purging OFF, `--skip-set-charset`, triggers included, routines/events
+excluded), streams bounded SQL into gzip, requires successful
 process exit, and creates the archive exclusively (`0600`, root-owned). SQL and
 compressed output are limited to 32 MiB, stderr to 16 KiB, runtime to 300 seconds.
+Because single-schema mysqldump omits database selectors, capture adds a
+deterministic `CREATE DATABASE`/`USE` header using the authenticated schema
+charset/collation. Before signing, it decompresses the exact written archive and
+runs the same v2 SQL audit used by restore, including the root-policy-approved
+DEFINER. Invalid charset changes, selectors, or other unsafe dump SQL therefore
+cannot receive a capture record. The regression fixture models the MySQL 8.4
+single-schema dump body; a real mysqldump binary and real MySQL import remain
+unverified host gates.
 Partial archives remain unsigned and cannot be reused. Older capture records
 without controlled-process/deployment evidence are rejected and require a fresh
 controlled capture. External `capture-begin`

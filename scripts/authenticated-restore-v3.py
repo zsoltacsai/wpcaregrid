@@ -66,6 +66,7 @@ MAX_KEY_BYTES = 4096
 MAX_ARCHIVE_BYTES = V2.MAX_COMPRESSED_BACKUP_BYTES
 MAX_CAPTURE_DURATION = datetime.timedelta(hours=6)
 MAX_CAPTURE_AGE = datetime.timedelta(hours=72)
+CAPTURE_AUDIT_TARGET = "wpcg_recovery_restore_20000101_00000000"
 MAX_RECORD_LIFETIME = datetime.timedelta(days=7)
 MAX_RESTORE_RECEIPT_AGE = datetime.timedelta(hours=24)
 MAX_MIGRATION_RECEIPT_AGE = datetime.timedelta(hours=24)
@@ -421,7 +422,8 @@ def verify_config_reference_against_config(reference, config_path, *, owner_uid)
 
 SOURCE_POLICY_SPEC = {
     "schema_version": 1, "policy_id": _rx(POLICY_ID_RE), "environment_id": _text(), "host_id": _text(),
-    "schema": _rx(IDENT_RE), "backup_account": _rx(V2.DEFINER_RE), "server_uuid_sha256": _hex(64),
+    "schema": _rx(IDENT_RE), "backup_account": _rx(V2.DEFINER_RE), "approved_definer": _rx(V2.DEFINER_RE),
+    "server_uuid_sha256": _hex(64),
     "mysql": {"host": _one_of("127.0.0.1", "localhost"), "port": _int(1, 65535),
               "defaults_file": lambda value: isinstance(value, str) and Path(value).is_absolute()},
     "recovery_point_kind": _one_of(RECOVERY_POST_BOOTSTRAP, RECOVERY_PRE_BOOTSTRAP),
@@ -457,18 +459,21 @@ def observe_source_identity(policy):
     raw = V2.mysql_query(
         _source_mysql_policy(policy),
         "SELECT CURRENT_USER(),DATABASE(),@@server_uuid,VERSION(),@@GLOBAL.log_bin,"
-        "@@GLOBAL.binlog_format,@@GLOBAL.log_bin_trust_function_creators",
+        "@@GLOBAL.binlog_format,@@GLOBAL.log_bin_trust_function_creators,"
+        "DEFAULT_CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.SCHEMATA "
+        "WHERE SCHEMA_NAME=DATABASE()",
         database=policy["schema"], maximum=2048)
     try:
         fields = raw.decode("ascii", "strict").rstrip("\n").split("\t")
     except UnicodeError:
         refuse("SOURCE_IDENTITY_INVALID")
-    if len(fields) != 7:
+    if len(fields) != 9:
         refuse("SOURCE_IDENTITY_INVALID")
     observation = {"current_user": fields[0], "database": fields[1],
                    "server_uuid_sha256": _sha(fields[2].encode("ascii", "replace")),
                    "mysql_version": fields[3], "log_bin": fields[4], "binlog_format": fields[5],
-                   "trust_function_creators": fields[6]}
+                   "trust_function_creators": fields[6], "database_charset": fields[7],
+                   "database_collation": fields[8]}
     return observation
 
 
@@ -477,6 +482,8 @@ def check_source_observation(policy, observation):
             or observation["database"] != policy["schema"]
             or not hmac.compare_digest(observation["server_uuid_sha256"], policy["server_uuid_sha256"])
             or not V2.MYSQL_VERSION_RE.fullmatch(observation["mysql_version"])
+            or not IDENT_RE.fullmatch(observation["database_charset"])
+            or not IDENT_RE.fullmatch(observation["database_collation"])
             or observation["log_bin"] != "1" or observation["binlog_format"] != "ROW"
             or observation["trust_function_creators"] != "0"):
         refuse("SOURCE_IDENTITY_MISMATCH")
@@ -485,7 +492,8 @@ def check_source_observation(policy, observation):
 OBSERVATION_SPEC = {
     "current_user": _rx(V2.DEFINER_RE), "database": _rx(IDENT_RE), "server_uuid_sha256": _hex(64),
     "mysql_version": _rx(V2.MYSQL_VERSION_RE), "log_bin": "1", "binlog_format": "ROW",
-    "trust_function_creators": "0",
+    "trust_function_creators": "0", "database_charset": _rx(IDENT_RE),
+    "database_collation": _rx(IDENT_RE),
 }
 CAPTURE_BEGIN_SPEC = {
     "schema_version": 1, "kind": "wpcg_capture_begin", "record_id": _rx(RECORD_ID_RE),
@@ -623,12 +631,14 @@ def capture(source_policy_path, archive_path, archive_id, config_reference_path,
             "--protocol=tcp", "--host=" + policy["mysql"]["host"], "--port=" + str(policy["mysql"]["port"]),
             "--single-transaction", "--skip-lock-tables", "--quick", "--no-tablespaces",
             "--set-gtid-purged=OFF", "--hex-blob", "--default-character-set=utf8mb4",
-            "--triggers", "--skip-routines", "--skip-events", "--", policy["schema"]]
+            "--skip-set-charset", "--triggers", "--skip-routines", "--skip-events", "--", policy["schema"]]
     fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as output:
         os.fchown(output.fileno(), owner_uid, -1)
         os.fchmod(output.fileno(), 0o600)
         with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed:
+            compressed.write(V2.wrap_single_schema_dump(
+                b"", policy["schema"], observation["database_charset"], observation["database_collation"]))
             def consume(block):
                 compressed.write(block)
                 if output.tell() > MAX_ARCHIVE_BYTES:
@@ -638,7 +648,8 @@ def capture(source_policy_path, archive_path, archive_id, config_reference_path,
         os.fsync(output.fileno())
     _fsync_directory(archive.parent)
     raw, _ = _read_protected_bytes(archive, owner_uid=owner_uid, maximum=MAX_ARCHIVE_BYTES, code="ARCHIVE")
-    V2.decode_verified_archive(raw, _sha(raw))
+    captured_sql = V2.decode_verified_archive(raw, _sha(raw))
+    V2.audit_sql(captured_sql, CAPTURE_AUDIT_TARGET, policy["approved_definer"])
     after = (observe or observe_source_identity)(policy)
     check_source_observation(policy, after)
     if observation != after:

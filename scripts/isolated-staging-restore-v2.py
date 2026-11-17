@@ -46,6 +46,19 @@ CREATE_DB_RE = re.compile(
 USE_DB_RE = re.compile(rb"USE\s+`?wpcaregrid`?\s*;\Z", re.IGNORECASE)
 
 
+def wrap_single_schema_dump(sql, source_schema, charset, collation):
+    """Add the constrained database selector framing omitted by single-schema mysqldump."""
+    if (not isinstance(sql, bytes) or not IDENT_RE.fullmatch(source_schema)
+            or not IDENT_RE.fullmatch(charset) or not IDENT_RE.fullmatch(collation)):
+        refuse("DUMP_SELECTOR_METADATA_INVALID")
+    header = (f"CREATE DATABASE /*!32312 IF NOT EXISTS*/ `{source_schema}` "
+              f"/*!40100 DEFAULT CHARACTER SET {charset} COLLATE {collation} */;\n"
+              f"USE `{source_schema}`;\n").encode("ascii")
+    if len(sql) + len(header) > MAX_UNCOMPRESSED_SQL_BYTES:
+        refuse("DUMP_SIZE_LIMIT")
+    return header + sql
+
+
 class RestoreRefused(Exception):
     """Fixed-code refusal; messages must never contain dump or DB values."""
 
