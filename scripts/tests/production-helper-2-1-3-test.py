@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import py_compile
@@ -413,6 +414,27 @@ class FrozenAndManifestTests(unittest.TestCase):
                     artifact_sha=artifact_sha, helper_artifact_sha256=CONTROLLER.HELPER_ARTIFACT_SHA256)
                 self.assertIn("public/build/assets/app.js", files)
                 self.assertNotIn("storage/logs/.gitignore", files)
+
+                # The production-bound extractor must refuse an otherwise
+                # self-consistent archive that declares the staging profile.
+                altered = io.BytesIO()
+                with tarfile.open(archive_path, "r:") as source, tarfile.open(fileobj=altered, mode="w:") as target:
+                    for member in source.getmembers():
+                        raw = source.extractfile(member).read()
+                        if member.name == "release-manifest.json":
+                            document = json.loads(raw)
+                            document["profile"] = "staging-next"
+                            raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                            member.size = len(raw)
+                        target.addfile(member, io.BytesIO(raw))
+                altered_bytes = altered.getvalue()
+                rejected_destination = temp / "rejected-extracted"
+                rejected_destination.mkdir()
+                with self.assertRaisesRegex(BACKEND.DeployRefused, "^release_manifest_identity_mismatch$"):
+                    BACKEND._extract_archive(
+                        altered_bytes, rejected_destination, app_sha=app_sha, base_sha=base_sha,
+                        artifact_sha=hashlib.sha256(altered_bytes).hexdigest(),
+                        helper_artifact_sha256=CONTROLLER.HELPER_ARTIFACT_SHA256)
             finally:
                 BACKEND.PROFILE, BACKEND.PHP_VERSION = old_profile, old_php
         finally:
@@ -1027,7 +1049,9 @@ class BackendProfileTests(unittest.TestCase):
                       f"p=subprocess.Popen([sys.executable,'-c',{child!r}]); "
                       f"open({str(pid_file)!r},'w').write(str(p.pid)); time.sleep(30)")
             with self.assertRaisesRegex(BACKEND.DeployRefused, "^runtime_probe_timeout$"):
-                BACKEND._run_fixed([sys.executable, "-c", parent], timeout=0.3, maximum=4096)
+                # Leave room for a loaded CI runner to start both Python
+                # interpreters before the timeout path is exercised.
+                BACKEND._run_fixed([sys.executable, "-c", parent], timeout=3.0, maximum=4096)
             self.assertTrue(pid_file.exists(), "grandchild should have started before timeout")
             child_pid = int(pid_file.read_text())
             deadline = time.monotonic() + 2

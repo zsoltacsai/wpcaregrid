@@ -888,7 +888,8 @@ def main():
             raise RuntimeError(f"laravel_http_readiness_timeout:{last_probe}")
 
         artifact_path, artifact_sha = CONTROLLER._package_release(candidate_sha, base_sha, test_only=True)
-        tree_names = set(BACKEND._local_git_tree(profile, candidate_sha))
+        tree_names = {name for name in BACKEND._local_git_tree(profile, candidate_sha)
+                      if not name.startswith("public/build/")}
         with tarfile.open(artifact_path, mode="r:") as packaged:
             artifact_names = {member.name for member in packaged.getmembers()
                               if member.isfile() and member.name != "release-manifest.json"}
