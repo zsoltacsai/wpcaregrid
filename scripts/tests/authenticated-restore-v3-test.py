@@ -45,6 +45,7 @@ DEST_UUID = "123e4567-e89b-42d3-a456-426614174000"
 BACKUP_ACCOUNT = "wpcg_backup@localhost"
 APP_ACCOUNT = "wpcg_app@localhost"
 DEFINER = "restore_owner@localhost"
+DBA_EXECUTOR = "wpcg_dba_executor@localhost"
 CLONE_SCHEMA = "wpcg_recovery_restore_20261115_b2c3d4e5"
 TABLES = ["migrations", "synthetic"]
 BASE_LEDGER = ["2026_11_02_000001_create_deployment_transition_fences_table"]
@@ -135,7 +136,8 @@ class World:
                    "release_path": str(release)})
         write_json(release / ".wpcg-release.json", {"application_sha": "d" * 40,
                    "deployment_receipt_sha256": hashlib.sha256((self.dir / "deployment.json").read_bytes()).hexdigest()})
-        Path(self.source_policy["mysql"]["defaults_file"]).write_text("[client]\nuser=synthetic\n")
+        Path(self.source_policy["mysql"]["defaults_file"]).write_text(
+            "[client]\nuser=" + BACKUP_ACCOUNT.split("@", 1)[0] + "\n")
         os.chmod(self.source_policy["mysql"]["defaults_file"], 0o600)
         self.source_policy_path = self.dir / "source-policy.json"
         write_json(self.source_policy_path, self.source_policy)
@@ -623,7 +625,7 @@ class Rehearsal:
         self.inputs = {
             "schema_version": 1, "rehearsal_id": "synthetic-rehearsal-1",
             "candidate": self.world.manifest["release"],
-            "accounts": {"app": APP_ACCOUNT, "dba_executor": DEFINER, "definer": DEFINER},
+            "accounts": {"app": APP_ACCOUNT, "dba_executor": DBA_EXECUTOR, "definer": DEFINER},
             "dba_window": {"granted_at": V3._iso(base_time + datetime.timedelta(seconds=10)),
                            "revoked_at": V3._iso(base_time + datetime.timedelta(seconds=20)),
                            "sessions_terminated_at": V3._iso(base_time + datetime.timedelta(seconds=30))},
@@ -634,7 +636,8 @@ class Rehearsal:
         self.trigger = dict(self.world.manifest["expected"]["triggers"][0])
         self.state = {"after": self.after, "tables": ["migrations", "synthetic", "new_table"],
                       "triggers": [self.trigger], "baseline_schema_sha": "f" * 64, "sessions": b"0\n",
-                      "app": grants(CLONE_SCHEMA), "definer": grants(CLONE_SCHEMA, privileges="TRIGGER, SELECT"),
+            "app": grants(CLONE_SCHEMA), "definer": grants(CLONE_SCHEMA, privileges="TRIGGER, SELECT"),
+                      "dba": ["GRANT USAGE ON *.* TO `{a}`"],
                       "baseline_data": "2" * 64, "identity_uuid": DEST_UUID}
         write_json(self.inputs_path, self.inputs)
 
@@ -654,7 +657,7 @@ class Rehearsal:
         if sql.startswith("SHOW GRANTS FOR"):
             user_part, host_part = sql.split("FOR ", 1)[1].split("@")
             account = "`" + user_part.strip("'") + "`@`" + host_part.strip("'") + "`"
-            kind = "app" if "wpcg_app" in sql else "definer"
+            kind = "app" if "wpcg_app" in sql else "dba" if "wpcg_dba_executor" in sql else "definer"
             return "\n".join(line.replace("{a}", account) for line in self.state[kind]).encode()
         if "performance_schema.threads" in sql:
             return self.state["sessions"]
@@ -720,6 +723,14 @@ def test_migration_receipt_is_machine_checkable_and_binds_the_whole_chain():
                owner_uid=OWNER, now=rehearsal.now + datetime.timedelta(days=3), contract=rehearsal.contract)
         expect("MIGRATION_RECEIPT_CLONE_MISMATCH", V3.verify_migration_receipt, rehearsal.out, rehearsal.world.key,
                owner_uid=OWNER, now=rehearsal.now, contract=rehearsal.contract, expect_clone_receipt_sha256="0" * 64)
+        hold = V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt)))
+        V3._write_signed(hold, {"schema_version": 1, "kind": "wpcg_migration_rehearsal_failure",
+                                "result": "HOLD", "code": "LATER_REHEARSAL_FAILED",
+                                "failed_at": V3._iso(rehearsal.now), "clone_receipt_sha256": "a" * 64,
+                                "destination_policy_sha256": "b" * 64, "clone_schema": CLONE_SCHEMA},
+                         rehearsal.world.key, V3.PURPOSE_MIGRATION_FAILURE, owner_uid=OWNER)
+        expect("FAILED_REHEARSAL_HOLD_PRESENT", V3.verify_migration_receipt, rehearsal.out,
+               rehearsal.world.key, owner_uid=OWNER, now=rehearsal.now, contract=rehearsal.contract)
 
 
 def resign(rehearsal, mutate):
@@ -822,7 +833,8 @@ def test_rehearsal_refuses_untrusted_stale_or_mismatched_inputs():
                 (lambda i: i["candidate"].update(application_sha="1" * 40), "CANDIDATE_BINDING_MISMATCH"),
                 (lambda i: i["accounts"].update(definer="other_definer@localhost"), "ACCOUNT_IDENTITY_SEPARATION_INVALID"),
                 (lambda i: i["accounts"].update(app=DEFINER), "ACCOUNT_IDENTITY_SEPARATION_INVALID"),
-                (lambda i: i["accounts"].update(app=DEFINER, dba_executor=APP_ACCOUNT), "ACCOUNT_IDENTITY_SEPARATION_INVALID"),
+                (lambda i: i["accounts"].update(app=DEFINER), "ACCOUNT_IDENTITY_SEPARATION_INVALID"),
+                (lambda i: i["accounts"].update(dba_executor=DEFINER), "ACCOUNT_IDENTITY_SEPARATION_INVALID"),
                 (lambda i: i["dba_window"].update(granted_at="2000-01-01T00:00:00Z"), "DBA_WINDOW_ORDER_INVALID"),
                 (lambda i: i["dba_window"].update(sessions_terminated_at="2099-01-01T00:00:00Z"), "DBA_WINDOW_ORDER_INVALID"),
                 (lambda i: i["guarded_writes"].update(rejected_write_passed=False), "REHEARSAL_INPUTS_INVALID"),
@@ -839,7 +851,7 @@ def test_rehearsal_refuses_untrusted_stale_or_mismatched_inputs():
         rehearsal.inputs_path.write_text('{"a":1,"a":2}')
         os.chmod(rehearsal.inputs_path, 0o600)
         expect("MANIFEST_JSON_DUPLICATE_KEY", rehearsal.create)
-        V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).unlink()
+        assert not V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).exists()
         write_json(rehearsal.inputs_path, inputs)
         wrong_policy = copy.deepcopy(rehearsal.world.policy)
         wrong_policy["policy_id"] = "another-policy"
@@ -883,7 +895,10 @@ def test_candidate_migration_inventory_is_bounded_and_rejects_unsafe_files():
             return subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
         good = commit()
         store = root / "store.git"
-        subprocess.run(["git", "clone", "--bare", "-q", str(repo), str(store)], check=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(store)], check=True)
+        subprocess.run(["git", "-c", "fetch.unpackLimit=999999", "-c", "gc.auto=0",
+                        "-c", "maintenance.auto=false", "--git-dir=" + str(store),
+                        "fetch", "-q", str(repo), "HEAD"], check=True)
         with mock.patch.object(V3, "CANDIDATE_GIT_STORE", store):
             inventory = V3.candidate_migration_inventory(good, owner_uid=OWNER)
             assert inventory == [{"name": PENDING[0], "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}]
@@ -897,17 +912,20 @@ def test_candidate_migration_inventory_is_bounded_and_rejects_unsafe_files():
             file.unlink()
             file.symlink_to("/etc/passwd")
             bad = commit()
-            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+                            "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
             expect("CANDIDATE_TREE_INVALID", V3.candidate_migration_inventory, bad, owner_uid=OWNER)
             file.unlink()
             file.write_text("<?php executable")
             os.chmod(file, 0o755)
             executable = commit()
-            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+                            "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
             expect("CANDIDATE_TREE_INVALID", V3.candidate_migration_inventory, executable, owner_uid=OWNER)
             (migrations / (PENDING[1] + ".php")).write_text("<?php second")
             crowded = commit()
-            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+                            "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
             with mock.patch.object(V3, "MAX_MIGRATION_FILES", 1):
                 expect("CANDIDATE_MIGRATIONS_COUNT_INVALID", V3.candidate_migration_inventory, crowded, owner_uid=OWNER)
             (store / "objects/info/alternates").write_text("/untrusted")
@@ -915,6 +933,46 @@ def test_candidate_migration_inventory_is_bounded_and_rejects_unsafe_files():
             (store / "objects/info/alternates").unlink()
             with mock.patch.object(V3, "MAX_MIGRATION_FILE_BYTES", 1):
                 expect("CAPTURE_PROCESS_SIZE_LIMIT", V3.candidate_migration_inventory, good, owner_uid=OWNER)
+
+
+def test_candidate_store_rejects_lazy_fetch_config_hardlinks_and_corrupt_objects():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        repo = root / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        migrations = repo / "database/migrations"
+        migrations.mkdir(parents=True)
+        file = migrations / (PENDING[0] + ".php")
+        file.write_text("<?php trusted candidate")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.test",
+                        "commit", "-qm", "fixture"], check=True)
+        candidate = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+        store = root / "candidate.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(store)], check=True)
+        subprocess.run(["git", "-c", "fetch.unpackLimit=999999", "-c", "gc.auto=0",
+                        "-c", "maintenance.auto=false", "--git-dir=" + str(store),
+                        "fetch", "-q", str(repo), "HEAD"], check=True)
+        with mock.patch.object(V3, "CANDIDATE_GIT_STORE", store):
+            assert V3.candidate_migration_inventory(candidate, owner_uid=OWNER)
+            config = store / "config"
+            original = config.read_text()
+            config.write_text(original + '\n[remote "origin"]\n\tpromisor = true\n')
+            expect("CANDIDATE_STORE_UNSAFE", V3.candidate_migration_inventory, candidate, owner_uid=OWNER)
+            config.write_text(original)
+            blob = subprocess.check_output(["git", "-C", str(repo), "rev-parse",
+                                            candidate + ":database/migrations/" + file.name]).decode().strip()
+            loose = store / "objects" / blob[:2] / blob[2:]
+            assert loose.exists(), "fixture must use a loose blob object"
+            original_object = loose.read_bytes()
+            import zlib
+            os.chmod(loose, 0o600)
+            loose.write_bytes(zlib.compress(b"blob 6\0broken"))
+            expect("CANDIDATE_OBJECT_HASH_MISMATCH", V3.candidate_migration_inventory, candidate, owner_uid=OWNER)
+            loose.write_bytes(original_object)
+            os.chmod(loose, 0o444)
+            os.link(loose, root / "object-hardlink")
+            expect("CANDIDATE_STORE_UNSAFE", V3.candidate_migration_inventory, candidate, owner_uid=OWNER)
 
 
 def phase2b_contract(directory, *, names):
@@ -1110,6 +1168,14 @@ def test_application_privileges_are_allowlisted_online_and_offline():
                    rehearsal.world.key, owner_uid=OWNER, now=rehearsal.now, contract=rehearsal.contract)
 
 
+def test_application_grant_scope_requires_exact_schema_object():
+    with tempfile.TemporaryDirectory() as directory:
+        rehearsal = Rehearsal(directory)
+        rehearsal.state["app"] = ["GRANT USAGE ON *.* TO `{a}`",
+                                   "GRANT SELECT ON `wpcg_recovery_restore_20261115_b2c3d4e5.other`.* TO `{a}`"]
+        expect("ACCOUNT_SCOPE_EXCESSIVE", rehearsal.create)
+
+
 def test_holds_survive_interruptions_publication_errors_and_output_changes():
     for error in (KeyboardInterrupt(), RuntimeError("failure"), OSError("publication")):
         with tempfile.TemporaryDirectory() as directory:
@@ -1154,13 +1220,30 @@ def test_defaults_metadata_and_deployment_identity_are_observed():
         expect("MYSQL_DEFAULTS_UNAVAILABLE", V3._validate_defaults, policy, OWNER)
         defaults.write_text("!include /untrusted\n")
         expect("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
-        for group in ("[mysqldump]", "[mysqldump ]arbitrary-tail", "[mysql ] trailing"):
+        for group, expected_code in (("[mysqldump]", "MYSQL_TOOL_DEFAULTS_GROUP_FORBIDDEN"),
+                                     ("[mysqldump ]arbitrary-tail", "MYSQL_DEFAULTS_GROUP_INVALID"),
+                                     ("[mysql ] trailing", "MYSQL_DEFAULTS_GROUP_INVALID")):
             defaults.write_text(f"[client]\nuser=synthetic\n{group}\nuser=other\n")
-            expect("MYSQL_TOOL_DEFAULTS_GROUP_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+            expect(expected_code, V3._validate_defaults, world.source_policy, OWNER)
+        for option in ("plugin-dir=/tmp/plugins", "default-auth=cleartext", "host=attacker", "protocol=TCP",
+                       "skip-triggers", "no-data"):
+            defaults.write_text("[client]\nuser=synthetic\n" + option + "\n")
+            expect("MYSQL_DEFAULTS_OPTION_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        defaults.write_text("[client]\nuser=other\n")
+        expect("MYSQL_DEFAULTS_ACCOUNT_MISMATCH", V3._validate_defaults, world.source_policy, OWNER)
         defaults.write_text("[broken\nuser=synthetic\n")
         expect("MYSQL_DEFAULTS_GROUP_INVALID", V3._validate_defaults, world.source_policy, OWNER)
-        defaults.write_text("[client]\nuser=synthetic\n")
+        defaults.write_text("[client]\nuser=" + BACKUP_ACCOUNT.split("@", 1)[0] + "\n")
         V3.observe_deployment(world.source_policy, owner_uid=OWNER)
+        active = world.dir / "current"
+        release = world.dir / ("d" * 40)
+        intermediate = world.dir / "release-pointer"
+        intermediate.symlink_to(release)
+        active.unlink()
+        active.symlink_to(intermediate)
+        expect("ACTIVE_RELEASE_MISMATCH", V3.observe_deployment, world.source_policy, owner_uid=OWNER)
+        active.unlink()
+        active.symlink_to(release)
         receipt = read_json(world.dir / "deployment.json")
         write_json(world.dir / "deployment.json", receipt | {"application_sha": "e" * 40})
         expect("ACTIVE_RELEASE_MISMATCH", V3.observe_deployment, world.source_policy, owner_uid=OWNER)
@@ -1248,6 +1331,8 @@ def main():
         test_destination_identity_and_unexpected_objects_fail_closed,
         test_command_line_requires_root_and_reports_fixed_codes_only,
         test_source_has_no_shell_execution_secret_argv_or_remote_code_surface,
+        test_candidate_store_rejects_lazy_fetch_config_hardlinks_and_corrupt_objects,
+        test_application_grant_scope_requires_exact_schema_object,
     )
     for test in tests:
         test()

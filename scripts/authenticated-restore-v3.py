@@ -171,6 +171,8 @@ LIMITATIONS = [
     "isolated_rehearsal_evidence_only",
     "not_a_production_authorization",
     "hmac_symmetric_key_same_trust_domain",
+    "migration_execution_and_artifact_tree_binding_external",
+    "mysqldump_connection_uuid_not_independently_observed",
 ]
 
 
@@ -527,20 +529,39 @@ def capture_finish(*args, **kwargs):
 def _validate_defaults(policy, owner_uid):
     raw, _ = _read_protected_bytes(policy["mysql"]["defaults_file"], owner_uid=owner_uid,
                                     maximum=64 * 1024, code="MYSQL_DEFAULTS")
-    # Included files would escape the metadata validation boundary.
-    if any(line.lstrip().startswith(b"!") for line in raw.splitlines()):
-        refuse("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN")
-    # mysqldump reads both [client] and [mysqldump]. Keep its option group out
-    # of the trusted defaults file so the fixed command determines dump shape.
+    # This file supplies credentials only. Option groups and option keys can
+    # change dump semantics or load client plugins even when the argv is fixed.
+    group = None
+    seen = set()
+    configured_user = None
     for line in raw.splitlines():
-        stripped = line.lstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith((b"#", b";")):
+            continue
+        if stripped.startswith(b"!"):
+            refuse("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN")
         if stripped.startswith(b"["):
-            closing = stripped.find(b"]")
-            if closing < 0:
+            if not stripped.endswith(b"]"):
                 refuse("MYSQL_DEFAULTS_GROUP_INVALID")
-            group = stripped[1:closing].strip().lower()
-            if group in {b"mysql", b"mysqldump"}:
+            group = stripped[1:-1].strip().lower()
+            if group != b"client":
                 refuse("MYSQL_TOOL_DEFAULTS_GROUP_FORBIDDEN")
+            continue
+        if group != b"client" or b"=" not in stripped:
+            refuse("MYSQL_DEFAULTS_OPTION_FORBIDDEN")
+        key, _value = stripped.split(b"=", 1)
+        key = key.strip().lower()
+        if key not in {b"user", b"password"} or not key:
+            refuse("MYSQL_DEFAULTS_OPTION_FORBIDDEN")
+        if key in seen:
+            refuse("MYSQL_DEFAULTS_OPTION_DUPLICATE")
+        seen.add(key)
+        if key == b"user":
+            configured_user = _value.strip()
+    if "backup_account" in policy:
+        expected_user = policy["backup_account"].split("@", 1)[0].encode("ascii", "strict")
+        if configured_user != expected_user:
+            refuse("MYSQL_DEFAULTS_ACCOUNT_MISMATCH")
     return _sha(raw)
 
 
@@ -560,7 +581,10 @@ def observe_deployment(policy, *, owner_uid):
     V2._check_protected_path_parents(release / "identity", owner_uid=owner_uid)
     try:
         info = active.lstat()
+        # The activation link must point directly at the immutable release. A
+        # chain through a second mutable symlink would weaken that identity.
         if (not stat.S_ISLNK(info.st_mode) or info.st_uid != owner_uid
+                or os.readlink(active) != str(release)
                 or active.resolve(strict=True) != release or release.name != receipt["application_sha"]):
             refuse("ACTIVE_RELEASE_MISMATCH")
     except OSError:
@@ -582,7 +606,9 @@ def _bounded_process(argv, consume, *, maximum, timeout=300):
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env={**V2._mysql_child_env(),
                                    "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
-                                   "GIT_NO_REPLACE_OBJECTS": "1", "HOME": "/nonexistent"}, close_fds=True)
+                                   "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1",
+                                   "GIT_PROTOCOL_FROM_USER": "0", "GIT_ALLOW_PROTOCOL": "",
+                                   "HOME": "/nonexistent"}, close_fds=True)
         deadline = time.monotonic() + timeout
         streams = {process.stdout.fileno(): True, process.stderr.fileno(): False}
         while streams:
@@ -966,7 +992,9 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
             globals_seen = True
             if privileges != ("usage",):
                 refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
-        elif obj.split(".", 1)[0] == scoped and "." in obj:
+        # Match one complete quoted schema identifier followed by .*; do not
+        # accept a dotted identifier whose prefix happens to match the schema.
+        elif obj == scoped + ".*":
             if not set(privileges) <= allowed_privileges:
                 refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
             schema_privileges.update(privileges)
@@ -1060,20 +1088,95 @@ def candidate_migration_inventory(application_sha, *, owner_uid):
     for root, dirs, files in os.walk(store, followlinks=False):
         for name in dirs + files:
             path = Path(root) / name
-            info = path.lstat()
+            try:
+                info = path.lstat()
+            except OSError:
+                refuse("CANDIDATE_STORE_UNSAFE")
             if (info.st_uid != owner_uid or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode)
+                    or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)
                     or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
                 refuse("CANDIDATE_STORE_UNSAFE")
+    # Git's repository config is executable policy: partial-clone promisor
+    # settings may trigger fetches and core.sshCommand may run a program.
+    # Accept only the minimal bare-repository config emitted by git init.
+    config_path = store / "config"
+    try:
+        config_info = config_path.lstat()
+        if (not stat.S_ISREG(config_info.st_mode) or config_info.st_uid != owner_uid
+                or config_info.st_mode & 0o022 or config_info.st_nlink != 1
+                or config_info.st_size > 16 * 1024):
+            refuse("CANDIDATE_STORE_UNSAFE")
+        config_fd = os.open(config_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(config_fd)
+            if (opened.st_ino != config_info.st_ino or opened.st_dev != config_info.st_dev
+                    or opened.st_nlink != 1 or opened.st_uid != owner_uid):
+                refuse("CANDIDATE_STORE_UNSAFE")
+            config_raw = os.read(config_fd, 16 * 1024 + 1)
+        finally:
+            os.close(config_fd)
+    except RestoreRefused:
+        raise
+    except OSError:
+        refuse("CANDIDATE_STORE_UNSAFE")
+    if len(config_raw) > 16 * 1024:
+        refuse("CANDIDATE_STORE_UNSAFE")
+    try:
+        config_text = config_raw.decode("utf-8", "strict")
+    except UnicodeError:
+        refuse("CANDIDATE_STORE_UNSAFE")
+    config_keys = set()
+    section = None
+    for line in config_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip().lower()
+            if section != "core":
+                refuse("CANDIDATE_STORE_UNSAFE")
+            continue
+        key, sep, value = stripped.partition("=")
+        if not sep:
+            refuse("CANDIDATE_STORE_UNSAFE")
+        key, value = key.strip().lower(), value.strip().lower()
+        if section != "core" or key not in {"repositoryformatversion", "filemode", "bare"}:
+            refuse("CANDIDATE_STORE_UNSAFE")
+        if key in config_keys:
+            refuse("CANDIDATE_STORE_UNSAFE")
+        config_keys.add(key)
+        expected = {"repositoryformatversion": "0", "filemode": "true", "bare": "true"}[key]
+        if value != expected:
+            refuse("CANDIDATE_STORE_UNSAFE")
+    if config_keys != {"repositoryformatversion", "filemode", "bare"}:
+        refuse("CANDIDATE_STORE_UNSAFE")
     if any((store / name).exists() for name in ("objects/info/alternates", "info/grafts", "shallow")):
         refuse("CANDIDATE_STORE_UNSAFE")
     def git(*args, maximum):
         chunks = []
-        _bounded_process(["/usr/bin/git", "--git-dir=" + str(store), *args], chunks.append, maximum=maximum)
+        _bounded_process(["/usr/bin/git", "-c", "protocol.allow=never", "-c", "gc.auto=0",
+                          "-c", "maintenance.auto=false", "--git-dir=" + str(store), *args],
+                         chunks.append, maximum=maximum)
         return b"".join(chunks)
+    def verify_object(oid, kind, data):
+        if not re.fullmatch(r"[0-9a-f]{40}", oid):
+            refuse("CANDIDATE_OBJECT_INVALID")
+        digest = hashlib.sha1(kind.encode("ascii") + b" " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+        if digest != oid:
+            refuse("CANDIDATE_OBJECT_HASH_MISMATCH")
+        return data
     if git("rev-parse", "--is-bare-repository", maximum=64) != b"true\n":
         refuse("CANDIDATE_STORE_UNSAFE")
     if git("cat-file", "-t", application_sha, maximum=64) != b"commit\n":
         refuse("CANDIDATE_SHA_INVALID")
+    commit_raw = verify_object(application_sha, "commit", git("cat-file", "commit", application_sha,
+                                                                 maximum=MAX_RECORD_BYTES))
+    tree_match = re.match(rb"tree ([0-9a-f]{40})\n", commit_raw)
+    if not tree_match:
+        refuse("CANDIDATE_COMMIT_INVALID")
+    tree_oid = tree_match.group(1).decode("ascii")
+    verify_object(tree_oid, "tree", git("cat-file", "tree", tree_oid,
+                                         maximum=MAX_MIGRATION_FILES * 512))
     tree = git("ls-tree", "-z", application_sha + ":database/migrations", maximum=MAX_MIGRATION_FILES * 256)
     entries = tree.rstrip(b"\0").split(b"\0")
     if not entries or len(entries) > MAX_MIGRATION_FILES:
@@ -1087,7 +1190,7 @@ def candidate_migration_inventory(application_sha, *, owner_uid):
             refuse("CANDIDATE_TREE_INVALID")
         if mode != "100644" or kind != "blob" or not MIGRATION_FILE_RE.fullmatch(name):
             refuse("CANDIDATE_TREE_INVALID")
-        data = git("cat-file", "blob", oid, maximum=MAX_MIGRATION_FILE_BYTES)
+        data = verify_object(oid, "blob", git("cat-file", "blob", oid, maximum=MAX_MIGRATION_FILE_BYTES))
         inventory.append({"name": name[:-4], "sha256": _sha(data)})
     return sorted(inventory, key=lambda item: item["name"])
 
@@ -1153,6 +1256,28 @@ def _migration_failure_path(clone):
     return REHEARSAL_HOLD_ROOT / (_sha(_canonical(identity)) + ".json")
 
 
+def _assert_no_migration_hold(body, *, owner_uid):
+    restore_point = body["restore_point"]
+    identity = {"server": restore_point["destination_server_uuid_sha256"],
+                "schema": restore_point["clone_schema"]}
+    path = REHEARSAL_HOLD_ROOT / (_sha(_canonical(identity)) + ".json")
+    try:
+        V2._check_protected_path_parents(path, owner_uid=owner_uid)
+        root_info = REHEARSAL_HOLD_ROOT.lstat()
+        if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != owner_uid
+                or root_info.st_mode & 0o022):
+            refuse("FAILED_REHEARSAL_HOLD_UNREADABLE")
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        refuse("FAILED_REHEARSAL_HOLD_UNREADABLE")
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_mode & 0o077 or info.st_nlink != 1:
+        refuse("FAILED_REHEARSAL_HOLD_PRESENT")
+    # Any marker, including a malformed or stale one, is a fail-closed hold.
+    refuse("FAILED_REHEARSAL_HOLD_PRESENT")
+
+
 def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_manifest_path, policy_path,
                              rehearsal_inputs_path, out_path, key_path, *, owner_uid, now=None,
                              contract=None):
@@ -1166,8 +1291,6 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     failure_path = _migration_failure_path(clone)
     if failure_path.exists() or failure_path.is_symlink():
         refuse("FAILED_REHEARSAL_HOLD_PRESENT")
-    _write_signed(failure_path, {"result": "IN_PROGRESS", "clone_receipt_sha256": clone_sha},
-                  key, PURPOSE_MIGRATION_FAILURE, owner_uid=owner_uid)
     manifest_raw, manifest_sha = V2.read_protected_json(clone_manifest_path, owner_uid=owner_uid, maximum=256 * 1024)
     policy_raw, policy_sha = V2.read_protected_json(policy_path, owner_uid=owner_uid, maximum=32 * 1024)
     # Receipt times are second-truncated; evaluate the manifest as of restore completion (+1s).
@@ -1189,8 +1312,7 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     if inputs["candidate"] != manifest["release"]:
         refuse("CANDIDATE_BINDING_MISMATCH")
     accounts = inputs["accounts"]
-    if (accounts["definer"] != manifest["approved_definer"] or len({accounts["app"], accounts["definer"]}) != 2
-            or accounts["app"] == accounts["dba_executor"]):
+    if (accounts["definer"] != manifest["approved_definer"] or len(set(accounts.values())) != 3):
         refuse("ACCOUNT_IDENTITY_SEPARATION_INVALID")
     window = {key_: _utc(value) for key_, value in inputs["dba_window"].items()}
     if not (_utc(clone["completed_at"]) <= window["granted_at"] <= window["revoked_at"]
@@ -1205,6 +1327,10 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     clone_schema, baseline_schema = clone["destination"]["target_schema"], baseline["destination"]["target_schema"]
 
     _validate_defaults(policy, owner_uid)
+    # Start the durable hold only after all static inputs and candidate
+    # provenance have passed, immediately before the first database query.
+    _write_signed(failure_path, {"result": "IN_PROGRESS", "clone_receipt_sha256": clone_sha},
+                  key, PURPOSE_MIGRATION_FAILURE, owner_uid=owner_uid)
     try:
         identity = V2._mysql_identity(policy)
         if (_sha(identity["server_uuid"].encode("ascii", "replace")) != clone["destination"]["server_uuid_sha256"]
@@ -1248,11 +1374,8 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
         app_report = account_privilege_report(policy, clone_schema, accounts["app"], allow_schema_privileges=True)
         if not app_report["schema_privileges"]:
             refuse("APP_ACCOUNT_GRANTS_MISSING")
-        if accounts["dba_executor"] == accounts["definer"]:
-            executor_report = definer_report
-        else:
-            executor_report = account_privilege_report(policy, clone_schema, accounts["dba_executor"],
-                                                       allow_schema_privileges=False)
+        executor_report = account_privilege_report(policy, clone_schema, accounts["dba_executor"],
+                                                   allow_schema_privileges=False)
         sessions = sum(foreground_sessions(policy, clone_schema, account)
                        for account in sorted({accounts["definer"], accounts["dba_executor"]}))
         if sessions != 0:
@@ -1297,7 +1420,7 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     verify_migration_consistency(body, contract=contract)
     _write_signed(out_path, body, key, PURPOSE_MIGRATION_RECEIPT, owner_uid=owner_uid)
     verify_migration_receipt(out_path, key, owner_uid=owner_uid, now=now, contract=contract,
-                             expect_clone_receipt_sha256=clone_sha)
+                             expect_clone_receipt_sha256=clone_sha, allow_matching_hold=True)
     failure_path.unlink()
     _fsync_directory(failure_path.parent)
     return body
@@ -1334,13 +1457,13 @@ def verify_migration_consistency(body, *, contract=None):
         refuse("MIGRATION_RECEIPT_LEDGER_INVALID")
     _check_checkpoints(before, body["pending"], body["checkpoints"], body["after"]["schema_sha256"])
     attested = body["attested"]["accounts"]
-    if (len({attested["app"], attested["definer"]}) != 2 or attested["app"] == attested["dba_executor"]
+    if (len(set(attested.values())) != 3
             or body["observed"]["app_account"]["account"] != attested["app"]
             or body["observed"]["definer"]["account"] != attested["definer"]
             or body["observed"]["dba_executor"]["account"] != attested["dba_executor"]):
         refuse("ACCOUNT_IDENTITY_SEPARATION_INVALID")
     for role, allowed in (("app_account", APP_SCHEMA_PRIVILEGES), ("definer", DEFINER_SCHEMA_PRIVILEGES),
-                          ("dba_executor", DEFINER_SCHEMA_PRIVILEGES if attested["dba_executor"] == attested["definer"] else frozenset())):
+                          ("dba_executor", frozenset())):
         privileges = body["observed"][role]["schema_privileges"]
         if privileges != sorted(set(privileges)) or not set(privileges) <= allowed:
             refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
@@ -1365,7 +1488,8 @@ def verify_migration_consistency(body, *, contract=None):
         refuse("DBA_WINDOW_ORDER_INVALID")
 
 
-def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, expect_clone_receipt_sha256=None):
+def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, expect_clone_receipt_sha256=None,
+                             allow_matching_hold=False):
     now = _now(now)
     body, file_sha = _load_signed(path, key, PURPOSE_MIGRATION_RECEIPT, MIGRATION_RECEIPT_SPEC,
                                   owner_uid=owner_uid, maximum=MAX_RECEIPT_BYTES, code="MIGRATION_RECEIPT_INVALID")
@@ -1377,6 +1501,8 @@ def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, e
     verify_migration_consistency(body, contract=contract)
     if expect_clone_receipt_sha256 is not None and body["clone_receipt_sha256"] != expect_clone_receipt_sha256:
         refuse("MIGRATION_RECEIPT_CLONE_MISMATCH")
+    if not allow_matching_hold:
+        _assert_no_migration_hold(body, owner_uid=owner_uid)
     return body, file_sha
 
 

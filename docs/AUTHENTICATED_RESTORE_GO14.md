@@ -73,9 +73,11 @@ The receipt environment/host/SHA must match policy. Receipt hash and current
 active identity are checked before and after the dump. The record retains the
 receipt hash and successful dump exit status. Defaults files must be root-owned,
 single-link regular `0600` files with protected ancestors; symlinks and include
-directives are refused before client use. `[mysql]` and `[mysqldump]` defaults
-groups are refused so both identity observation and the fixed dump command use
-the same shared `[client]` credentials. Policy/defaults drift also stops signing.
+directives are refused before client use. The defaults file permits only
+`[client]` `user` and `password` keys. During source capture, the username must
+match the authenticated backup account. Other groups and options are refused so
+the dump shape and client-plugin behavior cannot be changed through defaults.
+Policy/defaults drift also stops signing.
 
 This observes the deployment receipt and active release identity. **The source
 application SHA is attested by the trusted successful-deployment publisher**;
@@ -147,27 +149,41 @@ where possible:
   `DELETE` allowlist. DDL, TRIGGER, SUPER, unknown privileges, grant option and
   roles are refused online and offline; the DBA executor has no
   global privilege other than `USAGE`; no foreground session remains for the
-  definer/executor; app, definer and executor identities are separated;
+  definer/executor; app, definer and DBA executor must be three distinct identities;
 - MySQL settings are unchanged (binlog ON, ROW, trust OFF).
 
 DBA grant/revoke/termination times and the guarded allowed/rejected write results
 come from the protected rehearsal input and are recorded under `attested`, not
-`observed`. Before any rehearsal DB observation a durable authenticated
+`observed`. Migration bytes are authenticated from the selected commit, but the
+tool does not derive the release artifact hash from that Git tree, execute those
+migrations itself, or prove that the external migration controller ran those
+exact bytes; source-to-artifact admission and checkpoint provenance remain
+separate release evidence/attested input. Before the first rehearsal DB observation a durable authenticated
 `IN_PROGRESS` marker is created under the fixed pre-provisioned root-owned
 `/var/lib/wpcaregrid/rehearsal-holds/` directory. Its filename hashes the clone
 server UUID hash and schema, independent of output path or receipt reissuance.
-Failure to persist it stops before database work. Exceptions, process interruption,
-validation failures and receipt publication failures retain it. Retries refuse
+Failure to persist it stops before database work. Failures after the first
+database observation, process interruption and receipt publication failures
+retain it. Invalid static inputs are rejected before a hold is created. Retries refuse
 `FAILED_REHEARSAL_HOLD_PRESENT`; only publication and offline validation of a
-durable PASS receipt clears it (directory fsynced). Operators must review and
+durable PASS receipt clears it (directory fsynced). Offline receipt verification
+also refuses while any hold exists for that clone, including a later failed
+rehearsal that postdates the PASS receipt. Operators must review and
 resolve failed holds outside this tool; no CLI bypass is provided.
 `verify-migration-receipt` re-derives consistency and privilege/trigger constraints.
 
 The bare Git store and all contents must be root-owned without group/other write
-access, symlinks or special files. Alternates, grafts and shallow stores are
-refused; replace objects and inherited Git configuration are disabled. Populate
-it through the approved artifact/deployment channel. The commit must exist as a
-commit object; no branch/ref resolution or caller path is accepted.
+access, hard-linked files, symlinks or special files. Only the minimal bare
+`core.*` configuration is accepted; remotes, promisor settings, alternates,
+grafts and shallow stores are refused. Lazy fetch and all Git protocols are
+disabled, and each consumed commit, tree and migration blob is re-hashed against
+its Git object ID. Populate it through the approved artifact/deployment channel;
+no branch/ref resolution or caller path is accepted.
+
+The dump client and separate identity observer use the same fixed TCP endpoint
+and credential-only defaults file, but this source tool does not attest the UUID
+from inside the mysqldump connection itself. A host deployment must keep the
+configured endpoint local and directly bound to the intended MySQL instance.
 
 ## Commands (root, never run here)
 
