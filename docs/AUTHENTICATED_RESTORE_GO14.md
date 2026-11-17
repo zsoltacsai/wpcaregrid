@@ -145,7 +145,7 @@ where possible:
   ACTION_STATEMENT SHA-256,
   and the definer's SELECT tables are exactly the three reviewed transition
   tables; the definer is locked with exact `TRIGGER` + `SELECT` grants (v2 check);
-- the app account has global `USAGE` only, schema-confined grants restricted to the explicit `SELECT`, `INSERT`, `UPDATE`,
+- the app account grant row named in protected rehearsal input has global `USAGE` only, schema-confined grants restricted to the explicit `SELECT`, `INSERT`, `UPDATE`,
   `DELETE` allowlist. DDL, TRIGGER, SUPER, unknown privileges, grant option and
   roles are refused online and offline; the DBA executor has no
   global privilege other than `USAGE`; no foreground session remains for the
@@ -154,7 +154,9 @@ where possible:
 
 DBA grant/revoke/termination times and the guarded allowed/rejected write results
 come from the protected rehearsal input and are recorded under `attested`, not
-`observed`. Migration bytes are authenticated from the selected commit, but the
+`observed`. This tool does not open a connection using the application's actual
+database credentials to prove that MySQL resolves the app to that exact grant
+row. Migration bytes are authenticated from the selected commit, but the
 tool does not derive the release artifact hash from that Git tree, execute those
 migrations itself, or prove that the external migration controller ran those
 exact bytes; source-to-artifact admission and checkpoint provenance remain

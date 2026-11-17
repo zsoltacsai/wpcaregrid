@@ -173,6 +173,7 @@ LIMITATIONS = [
     "hmac_symmetric_key_same_trust_domain",
     "migration_execution_and_artifact_tree_binding_external",
     "mysqldump_connection_uuid_not_independently_observed",
+    "application_account_connection_identity_not_observed",
 ]
 
 
@@ -1446,8 +1447,8 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     _check(body, MIGRATION_RECEIPT_SPEC, "MIGRATION_RECEIPT_INVALID")
     verify_migration_consistency(body, contract=contract)
     _write_signed(out_path, body, key, PURPOSE_MIGRATION_RECEIPT, owner_uid=owner_uid)
-    verify_migration_receipt(out_path, key, owner_uid=owner_uid, now=now, contract=contract,
-                             expect_clone_receipt_sha256=clone_sha, allow_matching_hold=True)
+    _verify_migration_receipt_impl(out_path, key, owner_uid=owner_uid, now=now, contract=contract,
+                                   expect_clone_receipt_sha256=clone_sha, allow_matching_hold=True)
     failure_path.unlink()
     _fsync_directory(failure_path.parent)
     return body
@@ -1515,8 +1516,8 @@ def verify_migration_consistency(body, *, contract=None):
         refuse("DBA_WINDOW_ORDER_INVALID")
 
 
-def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, expect_clone_receipt_sha256=None,
-                             allow_matching_hold=False):
+def _verify_migration_receipt_impl(path, key, *, owner_uid, now=None, contract=None,
+                                   expect_clone_receipt_sha256=None, allow_matching_hold):
     now = _now(now)
     body, file_sha = _load_signed(path, key, PURPOSE_MIGRATION_RECEIPT, MIGRATION_RECEIPT_SPEC,
                                   owner_uid=owner_uid, maximum=MAX_RECEIPT_BYTES, code="MIGRATION_RECEIPT_INVALID")
@@ -1531,6 +1532,14 @@ def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, e
     if not allow_matching_hold:
         _assert_no_migration_hold(body, owner_uid=owner_uid)
     return body, file_sha
+
+
+def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None,
+                             expect_clone_receipt_sha256=None):
+    """Public offline verifier; a clone HOLD can never be overridden by caller."""
+    return _verify_migration_receipt_impl(
+        path, key, owner_uid=owner_uid, now=now, contract=contract,
+        expect_clone_receipt_sha256=expect_clone_receipt_sha256, allow_matching_hold=False)
 
 
 # --------------------------------------------------------------------------

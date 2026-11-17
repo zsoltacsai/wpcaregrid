@@ -731,6 +731,14 @@ def test_migration_receipt_is_machine_checkable_and_binds_the_whole_chain():
                          rehearsal.world.key, V3.PURPOSE_MIGRATION_FAILURE, owner_uid=OWNER)
         expect("FAILED_REHEARSAL_HOLD_PRESENT", V3.verify_migration_receipt, rehearsal.out,
                rehearsal.world.key, owner_uid=OWNER, now=rehearsal.now, contract=rehearsal.contract)
+        try:
+            V3.verify_migration_receipt(rehearsal.out, rehearsal.world.key, owner_uid=OWNER,
+                                        now=rehearsal.now, contract=rehearsal.contract,
+                                        allow_matching_hold=True)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("public verifier exposed a hold-bypass argument")
 
 
 def resign(rehearsal, mutate):
