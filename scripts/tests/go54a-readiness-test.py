@@ -69,6 +69,10 @@ class FakeHost:
         self.swap_before_open = set()
         self.swap_after_reads = {}
         self.read_counts = {}
+        # Round-7 simulation: when the mid-run artifact swap fires, a
+        # transaction lock file appears and is HELD (an updater running
+        # while readiness still collects evidence).
+        self.reveal_held_lock_on_swap = False
 
     def _all_paths(self):
         return list(self.files) + list(self.dirs) + list(self.symlinks)
@@ -125,6 +129,9 @@ class FakeHost:
         if self.read_counts[path] > self.swap_after_reads.get(path, 1 << 30):
             self.files[path]["content"] = self.files[path].get("content2",
                                                               self.files[path].get("content", b""))
+            if self.reveal_held_lock_on_swap:
+                self.files[rd.LOCK] = {"content": b"", "mode": 0o600, "uid": 0, "gid": 0}
+                self.lock[rd.LOCK] = "held"
         content = self.files[path].get("content", b"")
         if len(content) > max_bytes:
             raise rd.HostError("too_large", posixpath.basename(path))
@@ -219,9 +226,10 @@ class FakeHost:
                 digest = "-"
                 if stat.S_ISREG(st.st_mode):
                     if full in self.swap_before_open:
-                        # Models the production open-identity check: the file
-                        # was replaced between the walk stat and the open.
-                        raise rd.HostError("datadir_changed_during_read", rel)
+                        # Model the race, then run the PRODUCTION check so the
+                        # regression exercises the real logic (AppSec R7-F2).
+                        self.files[full]["ino"] = self.files[full].get("ino", 1) + 1
+                        rd.datadir_open_identity_check(rel, st, self.lstat(full))
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
                         raise rd.HostError("datadir_exceeds_bounds", rel)
                     data = self.read_regular(full, max_file_bytes)
@@ -981,6 +989,37 @@ class ReadinessTestCase(unittest.TestCase):
         self.host.swap_before_open = {rd.DATADIRS[0] + "/ib_logfile0"}
         self.assertEqual(self.run_main(), 4)
         self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0", self.output())
+
+    # -- AppSec round-7 findings (R7-F1 semantics, R7-F2 production logic) --
+
+    def test_datadir_open_identity_check_is_the_production_function(self):
+        # R7-F2: direct coverage of the shared production check.
+        st = fake_stat("file", 0o640, 105, 105, size=4, ino=7)
+        same = fake_stat("file", 0o640, 105, 105, size=4, ino=7)
+        replaced = fake_stat("file", 0o640, 105, 105, size=4, ino=8)
+        rd.datadir_open_identity_check("f", st, same)  # no raise
+        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read"):
+            rd.datadir_open_identity_check("f", st, replaced)
+
+    def test_lock_acquired_mid_run_yields_stale_evidence_unknown(self):
+        # R7-F1: a transaction acquiring the lock while readiness still
+        # collects evidence is caught by the closing re-observation.
+        files = dict(self.host.files)
+        files[rd.MANIFEST] = {"content": old_bytes(rd.MANIFEST),
+                               "content2": new_bytes(rd.MANIFEST),
+                               "mode": 0o644, "uid": 0, "gid": 0}
+        self.host = self.healthy_host(files=files)
+        self.host.swap_after_reads = {rd.MANIFEST: 1}
+        self.host.reveal_held_lock_on_swap = True
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("CHECK state_revalidation UNKNOWN evidence_stale", self.output())
+
+    def test_readiness_verdict_line_documents_advisory_semantics(self):
+        # R7-F1: the tool's own docstring must state the honest guarantee.
+        self.assertEqual(self.run_main(), 0)
+        doc = (Path(rd.__file__)).read_text(encoding="utf-8")
+        self.assertIn("ADVISORY", doc)
+        self.assertIn("NON-ATOMIC", doc)
 
 
 if __name__ == "__main__":

@@ -31,10 +31,18 @@ reviewed pins; a mismatched or partial companion set is a HOLD, and nothing
 unrecognized is accepted implicitly.
 
 Classification is fail-closed: every incomplete evidence item is HOLD or
-UNKNOWN, the verdict is the LAST line, and HOLD/UNKNOWN exit non-zero. Local
-synthetic test passes do NOT make this tool approved; independent Integration
-QA and AppSec PASS records plus a separate Owner GO are required before any
-GO-5.4a transaction.
+UNKNOWN, the verdict is the LAST line, and HOLD/UNKNOWN exit non-zero.
+
+The readiness verdict is ADVISORY, NON-ATOMIC evidence: the four critical
+transaction-relevant checks are re-observed at the end of the run and any
+deviation is reported as stale, but a read-only collector cannot serialize
+with a concurrent transaction. PASS never asserts that no transaction is
+active or will start — the Owner must serialize evidence collection against
+any transaction (the runbook requires this sequencing explicitly).
+
+Local synthetic test passes do NOT make this tool approved; independent
+Integration QA and AppSec PASS records plus a separate Owner GO are
+required before any GO-5.4a transaction.
 
 Usage: python3 -I -B go54a-readiness.py [--package DIR]
 """
@@ -51,7 +59,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -275,8 +283,7 @@ class RealHost:
                                  | getattr(os, "O_NONBLOCK", 0), dir_fd=dfd)
                     try:
                         opened = os.fstat(fd)
-                        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
-                            raise HostError("datadir_changed_during_read", rel)
+                        datadir_open_identity_check(rel, st, opened)
                         data = b""
                         while len(data) < max_file_bytes:
                             chunk = os.read(fd, min(65536, max_file_bytes - len(data)))
@@ -557,6 +564,15 @@ def validate_datadir_entry(rel, st, mysql_ids):
 
 def datadir_record(rel, st, digest):
     return (rel, st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, digest)
+
+
+def datadir_open_identity_check(rel, st, opened):
+    """Shared open-identity check used by BOTH the real host walk and the
+    synthetic test walk, so regressions exercise the production logic
+    (AppSec R7-F2): the opened descriptor must still be the regular file the
+    walk stat'ed, or the evidence fails closed as UNKNOWN."""
+    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+        raise HostError("datadir_changed_during_read", rel)
 
 
 def datadir_read_check(rel, st_before, st_after_fd, st_after_path, data_len, total, max_total_bytes):
@@ -845,13 +861,14 @@ def main(argv=None, host=None, stream=None):
         else:
             results.append(("vendor_mysql_stability", "PASS", "mainpid_stable_during_run=" + vendor_pid))
 
-    # AppSec R6-F1 fix: a concurrent GO-5.4a transaction must never be able
-    # to hide between the first observations and the final verdict. The four
-    # critical transaction-relevant checks are re-run quietly (through a
-    # sink so the evidence transcript is not duplicated) and any deviation
-    # from the initial observation classifies the whole evidence set as
-    # stale (UNKNOWN): a PASS would otherwise describe a baseline that no
-    # longer exists.
+    # AppSec R6-F1/R7-F1: the four critical transaction-relevant checks
+    # are re-run quietly (through a sink so the evidence transcript is not
+    # duplicated) and any deviation from the initial observation classifies
+    # the whole evidence set as stale (UNKNOWN). This NARROWS the concurrency
+    # window but cannot eliminate it: a read-only collector produces ADVISORY,
+    # NON-ATOMIC evidence. PASS never asserts that no transaction is active
+    # or will start — the Owner must serialize evidence collection against
+    # any transaction (the runbook requires this sequencing explicitly).
     def revalidate_critical_state():
         def sink(_line):
             return None

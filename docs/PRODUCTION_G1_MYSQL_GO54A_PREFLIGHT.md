@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `56982ee0dadc6422b94138bfb70318eaaa7e1ec12d7868894a0681cff0fe606d`)
+    (SHA-256 `4d703a6f24133789f270104f7f6b553c949daaae5e8b2863c5bcabac92360cb9`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `555bc0f805fc01fd4343309cd66807bf598bb78885ef49f2ab843e42cd2b0539`)
+    `1a698e4a383f24fac955d71df68a3e221793caebda546c0da4f61b6537de3bf3`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -104,6 +104,17 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     UNKNOWN uniformly; the log pathname stat happens while the descriptor is
     still open; the per-level enumeration bound residual is documented.
     The notify tool is unchanged in this round too (v1.4.0).
+  - Reviewer corrections included in v1.7.0 (AppSec round 7, readiness tool):
+    the verdict semantics are stated honestly everywhere — ADVISORY,
+    NON-ATOMIC evidence: the closing re-observation narrows but cannot
+    eliminate the concurrency window, PASS never asserts that no
+    transaction is active or will start, and the Owner must serialize
+    evidence collection against any transaction (tool docstring, this
+    preflight and the installation procedure step 2); the open-identity
+    datadir check is a shared production function directly covered by unit
+    regression; a held-lock-acquired-mid-run regression exercises the
+    closing re-observation; the per-level enumeration residual is now
+    stated substantively in this preflight as well.
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.
@@ -137,6 +148,22 @@ Classification is fail-closed:
 recoverability. It is a separate Owner item (see the Rackforest checklist) and
 never turns a technical PASS into a false GO.
 
+**Advisory and non-atomic evidence (AppSec round-7 semantics):** the verdict
+is ADVISORY, NON-ATOMIC evidence. The four critical transaction-relevant
+checks (lock state, both G1 units, the installed baseline, transaction
+leftovers) are re-observed at the end of the run and any deviation is
+reported as stale (`UNKNOWN evidence_stale`), which narrows the concurrency
+window — but a read-only collector cannot serialize with a concurrent
+transaction. `PASS` never asserts that no transaction is active or will
+start. **The Owner must serialize evidence collection against any
+transaction**: collect the evidence, decide, and only then issue the
+separate execution GO (the runbook states this sequencing requirement).
+Residual bound (documented, AppSec R6-F4/R7-F3): the per-level entry cap is
+enforced while processing a level's entries; a single directory's name
+enumeration and sort happen before that cap, so a pathological single
+directory can consume OS-bounded enumeration memory/time before the walk
+fails closed.
+
 ## Complete preflight checklist
 
 Every item is required before the Owner may issue a GO-5.4a execution GO.
@@ -165,10 +192,13 @@ by the transaction tool itself at execution time, and the readiness notes say so
 1. **Freeze scope.** Confirm the protected primary and the reviewed toolkit
    commit; verify `scripts/production-g1-ops/SHA256SUMS` against this reviewed
    merge. Nothing below is authorized by reading or preparing it.
-2. **Collect evidence.** From the approved root console run
-   `go54a-readiness.py` and archive its full output. Required verdict for the
-   next step: `G1_GO54A_READINESS=PASS` (technical) with
-   `installed_baseline PASS baseline=old`.
+2. **Collect evidence — Owner serialization required.** Ensure no GO-5.4a
+   transaction is running or scheduled while evidence is collected: the
+   readiness verdict is ADVISORY, NON-ATOMIC evidence and cannot serialize
+   with the transaction; the Owner owns this sequencing. From the approved
+   root console run `go54a-readiness.py` and archive its full output.
+   Required verdict for the next step: `G1_GO54A_READINESS=PASS`
+   (technical) with `installed_baseline PASS baseline=old`.
 3. **Notify evidence.** Run `g1-notify-evidence.py` and archive its output;
    the GO-5.4a transaction does not depend on it, but the open investigation
    must stay visible and no profile may be widened meanwhile.
