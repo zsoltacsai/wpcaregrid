@@ -447,6 +447,16 @@ Before execution, require and record all of the following:
    A verified recoverable backup or provider snapshot must exist for the applicable host
    data and files; record its location/metadata and integrity plus restore evidence without
    reading secret payloads. Missing or unverified recovery evidence is HOLD.
+   **Narrow Owner exception (GO-5.4a preparation scope, 2026-11-17):** the Owner has
+   waived the restore-test requirement for this GO-5.4a preparation only, recorded in
+   [RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md](RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md)
+   (existence OWNER-CONFIRMED, restore tested NO, requirement OWNER-WAIVED, residual
+   risks documented, contents and recoverability NOT INDEPENDENTLY VERIFIED). That
+   waiver records an accepted risk; it does not verify recoverability and does not
+   produce `BACKUP_VERIFIED=PASS`. Every other use of this runbook — including any
+   GO-5.4 MySQL start, initialization or restore activity — still requires the
+   verified recoverable backup above, and this exception does not transfer to any
+   other gate.
 5. The fetch package and the updater validate their exact hashes, package ownership/modes,
    regenerated profile hashes, and parser compile before the updater writes anything.
 

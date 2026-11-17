@@ -50,8 +50,60 @@ NOT VERIFIED, never assumed.
 
 - Existence: **OWNER-CONFIRMED** (Rackforest performs backups; snapshot exists).
 - Recoverability: **NOT VERIFIED** — no restore evidence available yet.
-- Effect on gates: any gate requiring verified backup evidence remains HOLD,
-  including a future GO-5.4a execution GO.
+- **Owner risk-acceptance (2026-11-17, GO-20.9 amendment):** for the GO-5.4a
+  preparation scope the restore-test requirement is **OWNER-WAIVED** and
+  recorded below as `BACKUP_WAIVER_ACCEPTED` (with explicit residual risks).
+  This does not verify anything and does not produce `BACKUP_VERIFIED=PASS`.
+- Effect on gates: the GO-5.4a preparation/decision gate may record the waiver
+  as the Owner's backup-evidence decision; every other backup-dependent gate
+  remains HOLD.
+
+## Owner risk-acceptance exception (GO-5.4a preparation scope only — 2026-11-17)
+
+The Owner has issued a narrowly scoped amendment (GO-20.9): for the GO-5.4a
+**preparation** (the read-only preflight and any future decision about the
+AppArmor socket-lock hotfix transaction on the G1 instances), the isolated
+restore-test requirement is **waived**. No isolated restore test may be
+requested or performed under this waiver, and none was performed.
+
+| Field | Record |
+|---|---|
+| Backup existence | OWNER-CONFIRMED (Rackforest VPS backup exists) |
+| Restore tested | NO |
+| Restore-test requirement | OWNER-WAIVED (GO-20.9 amendment, 2026-11-17; no restore test requested or performed) |
+| Existing backup contents and recoverability | NOT INDEPENDENTLY VERIFIED (identifier, timestamp, exact disk scope, retention and provider restore method remain unrecorded — checklist items 1–6 are NOT VERIFIED) |
+| Recorded status | `BACKUP_WAIVER_ACCEPTED` — **not** `BACKUP_VERIFIED=PASS`; PASS stays reserved for recorded restore evidence |
+
+### Explicitly documented residual recovery risks (accepted by the Owner for this scope)
+
+1. **Unknown snapshot age (RPO window):** the age of the newest recoverable
+   backup is not recorded, so the data-loss window for any incident is unknown.
+2. **Unknown content scope:** whole-image versus partial (which disks/volumes)
+   is not recorded; a future restore might not contain everything expected.
+3. **Untested recoverability:** the restore path has never been exercised; it
+   may fail or be incomplete precisely when needed.
+4. **Consistency and custody unverified:** crash-consistent versus
+   application-consistent snapshots, and any encryption/key custody, are
+   unrecorded.
+5. **Mitigation context for this specific scope:** the GO-5.4a transaction
+   itself does not read or write either datadir or log; its primary recovery
+   path is the transaction tool's own hash-checked rollback to the exact OLD
+   five-file state. The provider backup is defense-in-depth for failures
+   outside the tool's scope, and its unverified state is the accepted risk.
+
+### Scope boundary (no weakening of unrelated gates)
+
+- This waiver applies **only** to the GO-5.4a preparation/decision gate in
+  [PRODUCTION_G1_MYSQL_GO54A_PREFLIGHT.md](PRODUCTION_G1_MYSQL_GO54A_PREFLIGHT.md)
+  and the matching precondition of
+  [PRODUCTION_G1_MYSQL_RUNBOOK.md](PRODUCTION_G1_MYSQL_RUNBOOK.md).
+- It does **not** satisfy or relax: the staging deployment backup/restore
+  gates in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) (fresh verified
+  app/config/database backup bound to the release, restore proof, migration
+  rehearsal), any GO-5.4 MySQL start or restore activity, or any future gate
+  that names `BACKUP_VERIFIED=PASS`.
+- Any later execution GO for GO-5.4a must re-confirm this waiver is still the
+  Owner's position; it is not a standing approval.
 
 ## Decision vocabulary
 
@@ -59,5 +111,9 @@ NOT VERIFIED, never assumed.
   residual risks in item 7 explicitly accepted by the Owner for the gated
   action.
 - `BACKUP_VERIFIED=HOLD` — any item missing (default state).
+- `BACKUP_WAIVER_ACCEPTED` — the recorded Owner risk-acceptance for the
+  GO-5.4a preparation scope (see the exception section above); explicitly NOT
+  `BACKUP_VERIFIED=PASS` and never usable where a gate demands verified
+  restore evidence.
 - `RACKFOREST=OWNER_CONFIRMED_NOT_RESTORE_VERIFIED` — current standing state;
   changes only through this checklist.
