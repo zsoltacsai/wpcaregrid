@@ -1186,10 +1186,18 @@ def _normalized_grant(line):
                         for item in match.group(1).split(","))
     # Normalize SQL keywords and whitespace, but retain object identifier case:
     # MySQL may distinguish schema/table names by case on the target host.
-    object_name = " ".join(match.group(2).replace("`", "").replace("'", "")
-                            .replace('"', "").split())
-    recipient = " ".join(match.group(3).replace("`", "").replace("'", "")
-                         .replace('"', "").split())
+    # Preserve object spelling and quote structure exactly. In particular, do
+    # not turn an identifier containing quotes into an allowlisted plain name.
+    object_name = " ".join(match.group(2).split())
+    raw_recipient = " ".join(match.group(3).split())
+    recipient_match = re.fullmatch(
+        r"(?:`([A-Za-z0-9_.-]+)`|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+))@"
+        r"(?:`([A-Za-z0-9_.:%-]+)`|'([A-Za-z0-9_.:%-]+)'|([A-Za-z0-9_.:%-]+))",
+        raw_recipient)
+    if recipient_match is None:
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    recipient = ((recipient_match.group(1) or recipient_match.group(2) or recipient_match.group(3))
+                 + "@" + (recipient_match.group(4) or recipient_match.group(5) or recipient_match.group(6)))
     suffix = " with grant option" if match.group(4) else ""
     return f"grant {', '.join(privileges)} on {object_name} to {recipient}{suffix}"
 
@@ -1218,13 +1226,13 @@ def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
     except UnicodeError:
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
     grant_schema = _grant_pattern_identifier(schema)
-    expected = {_normalized_grant("GRANT USAGE ON *.* TO " + user + "@" + host),
-                _normalized_grant("GRANT TRIGGER ON " + grant_schema + ".* TO " + user + "@" + host)}
+    expected = {_normalized_grant("GRANT USAGE ON *.* TO `" + user + "`@`" + host + "`"),
+                _normalized_grant("GRANT TRIGGER ON `" + grant_schema + "`.* TO `" + user + "`@`" + host + "`")}
     # A schema-level grant uses a privilege-pattern identifier, where `_`
     # must be escaped. A table grant names a literal qualified object, so its
     # schema and table identifiers must remain unescaped inside the grant.
     expected.update(_normalized_grant("GRANT SELECT ON `" + schema + "`.`" + table + "`"
-                                      + " TO " + user + "@" + host)
+                                      + " TO `" + user + "`@`" + host + "`")
                     for table in select_tables)
     if observed != expected:
         refuse("DEFINER_GRANTS_NOT_MINIMAL")

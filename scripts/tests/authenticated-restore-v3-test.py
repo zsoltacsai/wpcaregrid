@@ -589,7 +589,7 @@ def test_inputs_changed_during_restore_never_leave_pass_evidence():
 
 def grants(schema, *, extra=(), privileges="SELECT, INSERT, UPDATE, DELETE"):
     escaped = schema.replace("_", "\\_")
-    return ["GRANT USAGE ON *.* TO `{a}`", f"GRANT {privileges} ON `{escaped}`.* TO `{{a}}`", *extra]
+    return ["GRANT USAGE ON *.* TO {a}", f"GRANT {privileges} ON `{escaped}`.* TO {{a}}", *extra]
 
 
 class Rehearsal:
@@ -658,7 +658,10 @@ class Rehearsal:
             user_part, host_part = sql.split("FOR ", 1)[1].split("@")
             account = "`" + user_part.strip("'") + "`@`" + host_part.strip("'") + "`"
             kind = "app" if "wpcg_app" in sql else "dba" if "wpcg_dba_executor" in sql else "definer"
-            return "\n".join(line.replace("{a}", account) for line in self.state[kind]).encode()
+            return "\n".join(line.replace("TO `{a}`", "TO " + account)
+                                .replace("TO {a}", "TO " + account)
+                                .replace("{a}", account)
+                                for line in self.state[kind]).encode()
         if "performance_schema.threads" in sql:
             return self.state["sessions"]
         if "information_schema.TABLES" in sql and "TABLE_TYPE='BASE TABLE'" in sql:
@@ -1240,6 +1243,17 @@ def test_definer_grant_validators_accept_the_same_exact_phase2b_grants():
         expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
                allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
                allowed_table_privileges={"migrations": {"select"}})
+
+    # Quote characters inside an identifier must not be deleted to make an
+    # unrelated object look like the allowlisted table.
+    for unlisted in ("migra'tions", "migra``tions", 'migra"tions'):
+        raw_lines[2] = f"GRANT SELECT ON `{schema}`.`{unlisted}` TO `restore_owner`@`localhost`"
+        with mock.patch.object(V2, "mysql_query", side_effect=query):
+            expect("DEFINER_GRANTS_NOT_MINIMAL", V2.verify_definer_lifecycle,
+                   object(), schema, account, ["migrations"])
+            expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
+                   allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
+                   allowed_table_privileges={"migrations": {"select"}})
 
 
 def test_definer_table_grants_are_exactly_allowlisted():

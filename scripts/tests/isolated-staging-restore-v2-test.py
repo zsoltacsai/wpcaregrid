@@ -562,7 +562,8 @@ def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
 def test_definer_grants_preserve_literal_underscore_escaping():
     escaped = "GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`"
     wildcard = "GRANT TRIGGER ON `wpcg_recovery_restore_20261104_a1b2c3d4`.* TO `restore_owner`@`localhost`"
-    expected = "GRANT TRIGGER ON " + RESTORE._grant_pattern_identifier(SCHEMA) + ".* TO restore_owner@localhost"
+    expected = ("GRANT TRIGGER ON `" + RESTORE._grant_pattern_identifier(SCHEMA)
+                + "`.* TO `restore_owner`@`localhost`")
     assert RESTORE._normalized_grant(escaped) == RESTORE._normalized_grant(expected)
     assert RESTORE._normalized_grant(escaped) != RESTORE._normalized_grant(wildcard)
 

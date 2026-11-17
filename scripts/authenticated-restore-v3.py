@@ -973,10 +973,10 @@ def _split_grant(line):
     if not match:
         refuse("ACCOUNT_GRANT_UNPARSEABLE")  # includes role grants and unknown shapes
     privileges = tuple(sorted(part.strip().casefold() for part in match.group(1).split(",")))
-    # SHOW GRANTS quotes identifiers. Remove quoting and normalize whitespace,
-    # but deliberately do not case-fold this value.
-    obj = " ".join(match.group(2).replace("`", "").replace("'", "")
-                   .replace('"', "").split())
+    # Preserve identifier quoting and spelling. Removing quote characters
+    # would let an unlisted identifier such as `migra'tions` collapse to the
+    # allowlisted table name `migrations`.
+    obj = " ".join(match.group(2).split())
     return privileges, obj, bool(match.group(4))
 
 
@@ -996,7 +996,7 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
         refuse("ACCOUNT_GRANT_UNPARSEABLE")
     if not lines or len(lines) > 128:
         refuse("ACCOUNT_GRANT_INVENTORY_INVALID")
-    scoped = V2._grant_pattern_identifier(schema)
+    scoped = "`" + V2._grant_pattern_identifier(schema) + "`"
     schema_privileges, globals_seen, normalized_lines = set(), False, []
     for line in lines:
         privileges, obj, grant_option = _split_grant(line)
@@ -1015,7 +1015,7 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
             schema_privileges.update(privileges)
         elif allowed_table_privileges is not None:
             table_name = next((name for name, table_privileges in allowed_table_privileges.items()
-                               if obj == schema + "." + name), None)
+                               if obj == "`" + schema + "`.`" + name + "`"), None)
             if table_name is None or not set(privileges) <= set(allowed_table_privileges[table_name]):
                 refuse("ACCOUNT_SCOPE_EXCESSIVE")
         else:
