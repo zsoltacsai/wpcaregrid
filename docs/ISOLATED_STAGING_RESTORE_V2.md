@@ -10,6 +10,10 @@ The historical `isolated-staging-restore.py` and its pinned `inspect` path are
 unchanged. A historical inspection receipt is not a v2 recovery receipt and is
 not release-bound evidence.
 
+Authenticated capture records, chained restore receipts and migration
+rehearsal receipts built on this contract are described in
+[AUTHENTICATED_RESTORE_GO14.md](AUTHENTICATED_RESTORE_GO14.md).
+
 ## Bounded input sizes
 
 The v2 tool currently permits at most **32 MiB of compressed backup bytes** and
