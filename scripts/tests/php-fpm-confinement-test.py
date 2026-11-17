@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (version 1.0.5).
+"""Source-level tests for the GO-13 PHP-FPM confinement artifacts (current package 1.0.6; 1.0.1-1.0.5 are pinned as frozen predecessors).
 
 WHAT THIS PROVES: the committed AppArmor profiles, systemd units and FPM config
 are internally consistent, fail closed under mutation, and -- evaluated by a
 small AppArmor path-rule model -- grant and deny the paths in
-deploy/php-fpm-confinement/1.0.4/acceptance/matrix.json in both directions
+deploy/php-fpm-confinement/1.0.6/acceptance/matrix.json in both directions
 between production and the existing staging pools, including symlink escapes.
 
 WHAT THIS DOES NOT PROVE: kernel enforcement. The model is not the kernel. The
