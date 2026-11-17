@@ -44,7 +44,7 @@ TRANSFER_USER = "deploy"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/production/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/production/2.1.3/wpcaregrid-deploy-production-priv")
-HELPER_ARTIFACT_SHA256 = "593b67e7da339f29abc8dcca9c353029f2ddf9cc13a48b10781c7903c22c4948"
+HELPER_ARTIFACT_SHA256 = "a97d3d04b2c674893a1763f9247e6e40637c305d164ded39b90a3e2981324590"
 HELPER_VERSION = "2.1.3"
 HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
 # Exact merged Workstream B package 1.0.5 binding, as compiled by the helper's
@@ -77,6 +77,17 @@ NPM_VERSION_RE = re.compile(r"10\.\d+\.\d+\Z")
 class ControllerHold(Exception):
     def __init__(self, code):
         self.code = code
+
+
+def _verify_built_assets_match_source(asset_files: dict[str, bytes], source_build_files: dict[str, bytes]) -> None:
+    """Bind generated frontend bytes to the exact committed public/build tree."""
+    if (not source_build_files or "public/build/manifest.json" not in source_build_files
+            or set(asset_files) != set(source_build_files)):
+        raise ControllerHold("frontend_build_not_bound_to_source_tree")
+    for name, raw in asset_files.items():
+        if not isinstance(raw, bytes) or hashlib.sha256(raw).digest() != hashlib.sha256(
+                source_build_files[name]).digest():
+            raise ControllerHold("frontend_build_not_bound_to_source_tree")
 
 
 def _run(argv, *, timeout, maximum=128_000, cwd=None, path="/usr/bin:/bin"):
@@ -278,6 +289,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
         # immutable release archive and are separately bound to package-lock.
         build_root = Path(tempfile.mkdtemp(prefix="wpcg-production-build-", dir="/tmp"))
         os.chmod(build_root, 0o700)
+        source_build_files: dict[str, bytes] = {}
         try:
             with tarfile.open(source_tar, mode="r:") as source:
                 for member in source.getmembers():
@@ -292,6 +304,8 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     with target.open("xb") as output:
                         shutil.copyfileobj(stream, output, length=1024 * 1024)
+                    if member.name.startswith("public/build/"):
+                        source_build_files[member.name] = target.read_bytes()
             node = shutil.which("node", path="/usr/local/bin:/usr/bin")
             npm = shutil.which("npm", path="/usr/local/bin:/usr/bin")
             if node is None or npm is None:
@@ -340,6 +354,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                 asset_files[name] = path.read_bytes()
             if "public/build/manifest.json" not in asset_files or not asset_files:
                 raise ControllerHold("frontend_build_manifest_missing")
+            _verify_built_assets_match_source(asset_files, source_build_files)
             package_lock = (build_root / "package-lock.json").read_bytes()
         except ControllerHold:
             raise
@@ -358,7 +373,8 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                     continue
                 if not member.isfile():
                     raise ControllerHold("artifact_member_type_invalid")
-                if member.name == ".env" or member.name.startswith(DEPLOYMENT_SOURCE_EXCLUDED):
+                if (member.name == ".env" or member.name.startswith(DEPLOYMENT_SOURCE_EXCLUDED)
+                        or member.name.startswith("public/build/")):
                     continue
                 if member.name in hashes or member.size < 0:
                     raise ControllerHold("artifact_member_invalid")

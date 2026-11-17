@@ -618,7 +618,7 @@ def resolve_environment(name: str, *, production_config: Mapping[str, object] | 
 # --------------------------------------------------------------------------
 
 _OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "production_jobs_fence", "files", "services",
-                               "www_data_scheduled_jobs", "helper", "same_uid_peers"})
+                               "www_data_scheduled_jobs", "helper", "same_uid_peers", "service_members"})
 _SCHEDULED_JOB_KEYS = frozenset({"complete", "crontab_present", "system_cron_entries", "at_jobs"})
 _HELPER_KEYS = frozenset({"pid", "starttime", "cgroup", "deploy_cli_profile_mode", "deploy_cli_cmdline_sha256",
                           "build_cli_profile_mode", "build_cli_cmdline_sha256"})
@@ -894,6 +894,49 @@ def _verify_peers(peers: object, services: Mapping, helper: Mapping) -> None:
             raise EnvironmentRefused("confinement_observation_invalid")
 
 
+def _verify_service_members(members: object, services: Mapping, peers: object) -> None:
+    """Verify descriptors and labels for every member of each bound service cgroup."""
+    if not isinstance(members, Mapping) or set(members) != _PEERS_KEYS \
+            or type(members["complete"]) is not bool or not isinstance(members["processes"], (list, tuple)) \
+            or not isinstance(members["incomplete_reasons"], (list, tuple)) \
+            or any(not isinstance(r, str) or _REASON.fullmatch(r) is None for r in members["incomplete_reasons"]):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if members["complete"] is not True or members["incomplete_reasons"]:
+        raise EnvironmentRefused("confinement_peer_inventory_incomplete")
+    by_pid: dict[int, Mapping] = {}
+    roles_by_unit = {binding.unit: role for role, binding in CONFINEMENT_SERVICES.items()}
+    found_by_unit: dict[str, set[int]] = {unit: set() for unit in roles_by_unit}
+    for process in members["processes"]:
+        if not _peer_valid(process) or process["pid"] in by_pid:
+            raise EnvironmentRefused("confinement_observation_invalid")
+        role = roles_by_unit.get(process["unit"])
+        if role is None:
+            raise EnvironmentRefused("confinement_peer_cgroup_unexpected")
+        expected_cgroup = f"/system.slice/{process['unit']}"
+        if process["cgroup"] != expected_cgroup and not process["cgroup"].startswith(expected_cgroup + "/"):
+            raise EnvironmentRefused("confinement_peer_cgroup_unexpected")
+        if process["label"] != _enforce(CONFINEMENT_SERVICES[role].apparmor_profile):
+            raise EnvironmentRefused("confinement_master_not_confined")
+        _forbidden_descriptor(process, production_side=role == "production", role=role)
+        by_pid[process["pid"]] = process
+        found_by_unit[process["unit"]].add(process["pid"])
+    for role, binding in CONFINEMENT_SERVICES.items():
+        main_pid = services[role]["main_pid"]
+        if services[role]["active_state"] == "active":
+            process = by_pid.get(main_pid)
+            if process is None or process["unit"] != binding.unit \
+                    or process["label"] != services[role]["main_label"]:
+                raise EnvironmentRefused("confinement_service_member_missing")
+        elif found_by_unit[binding.unit]:
+            raise EnvironmentRefused("confinement_service_member_unexpected")
+    for peer in peers["processes"]:
+        if peer["unit"] in roles_by_unit:
+            member = by_pid.get(peer["pid"])
+            if member is None or any(member[key] != peer[key] for key in (
+                    "starttime", "uids", "gids", "groups", "cgroup", "label", "exe")):
+                raise EnvironmentRefused("confinement_service_member_missing")
+
+
 def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object, services: object) -> None:
     """Production queue workers and scheduler must be provably unable to run."""
     scope = production_job_fence_scope(contract)
@@ -1023,3 +1066,4 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     _verify_no_www_data_scheduled_jobs(observation["www_data_scheduled_jobs"])
     helper = _verify_helper(observation["helper"])
     _verify_peers(observation["same_uid_peers"], observation["services"], helper)
+    _verify_service_members(observation["service_members"], observation["services"], observation["same_uid_peers"])

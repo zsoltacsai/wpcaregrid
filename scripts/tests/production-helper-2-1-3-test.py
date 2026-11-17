@@ -171,7 +171,7 @@ def peer(pid, *, unit, label, exe, comm="php-fpm", uid=33, gid=33, groups=(), fd
 def observation(pin=PIN):
     files = {path: {"sha256": digest, "uid": 0, "gid": 0, "mode": 0o644, "type": "regular", "nlink": 1,
                     "parents_trusted": True} for path, digest in pin.file_sha256.items()}
-    services, processes = {}, []
+    services, processes, service_members = {}, [], []
     for offset, role in enumerate(CONTRACT.REQUIRED_ROLES):
         b = CONTRACT.CONFINEMENT_SERVICES[role]
         master = 1000 + offset * 100
@@ -185,9 +185,15 @@ def observation(pin=PIN):
         if active:
             if role == "production":
                 # The pinned production FPM unit runs its master as www-data.
-                processes.append(peer(master, unit=b.unit, label=label, exe=exe, comm="master"))
-            processes += [peer(master + 1, unit=b.unit, label=label, exe=exe),
-                          peer(master + 2, unit=b.unit, label=label, exe=exe)]
+                item = peer(master, unit=b.unit, label=label, exe=exe, comm="master")
+                processes.append(item)
+            else:
+                item = peer(master, unit=b.unit, label=label, exe=exe, comm="master", uid=0, gid=0)
+            service_members.append(item)
+            for pid in (master + 1, master + 2):
+                item = peer(pid, unit=b.unit, label=label, exe=exe)
+                processes.append(item)
+                service_members.append(item)
     return {"schema": 3, "apparmor_enabled": True, "production_jobs_fence": fence(),
             "files": files, "services": services,
             "www_data_scheduled_jobs": {"complete": True, "crontab_present": False, "system_cron_entries": 0,
@@ -196,7 +202,8 @@ def observation(pin=PIN):
                        "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256(SOCKET),
                        "build_cli_profile_mode": "enforce",
                        "build_cli_cmdline_sha256": BACKEND.build_cli_cmdline_sha256()},
-            "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes}}
+            "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes},
+            "service_members": {"complete": True, "incomplete_reasons": [], "processes": service_members}}
 
 
 FENCE_UNITS = ("wpcaregrid-production-scheduler.timer", "wpcaregrid-production-scheduler.service")
@@ -215,6 +222,8 @@ def fence():
 
 def with_peer(data, item):
     data["same_uid_peers"]["processes"].append(item)
+    if item.get("unit") in {binding.unit for binding in CONTRACT.CONFINEMENT_SERVICES.values()}:
+        data["service_members"]["processes"].append(item)
     return data
 
 
@@ -268,6 +277,52 @@ class FrozenAndManifestTests(unittest.TestCase):
             self.assertNotIn('"/usr/bin/sudo", "-n", str(HELPER)', text)
             self.assertNotIn("NOPASSWD: NOSETENV", text)
             self.assertNotIn("/etc/sudoers.d/wpcaregrid-production-v2.1.3", text)
+
+    def test_vite_build_is_tracked_and_matches_git_blob_bytes(self):
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/tests/verify-committed-vite-build.py")],
+                                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout.decode("utf-8", "replace"))
+        self.assertRegex(result.stdout.decode("ascii"), r"VITE_BUILD=PASS;FILES=[1-9][0-9]*\n")
+
+    def test_packager_requires_built_assets_to_match_exact_git_source_tree(self):
+        committed = {"public/build/manifest.json": b'{"resources/js/app.js":{}}',
+                     "public/build/assets/app.js": b"trusted-build"}
+        CONTROLLER._verify_built_assets_match_source(dict(committed), dict(committed))
+        cases = (
+            (dict(committed, **{"public/build/assets/app.js": b"attacker-js"}),
+             "frontend_build_not_bound_to_source_tree"),
+            ({"public/build/manifest.json": committed["public/build/manifest.json"]},
+             "frontend_build_not_bound_to_source_tree"),
+            ({"public/build/assets/app.js": committed["public/build/assets/app.js"]},
+             "frontend_build_not_bound_to_source_tree"),
+        )
+        for generated, code in cases:
+            with self.subTest(code=code, generated=sorted(generated)):
+                with self.assertRaisesRegex(CONTROLLER.ControllerHold, code):
+                    CONTROLLER._verify_built_assets_match_source(generated, committed)
+
+    def test_primary_comparison_includes_generated_build_assets(self):
+        raw = b"trusted source asset"
+        blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+        temp = Path(tempfile.mkdtemp())
+        try:
+            asset = temp / "public/build/assets/app.js"
+            asset.parent.mkdir(parents=True)
+            asset.write_bytes(raw)
+            asset.chmod(0o644)
+            candidate = {"public/build/assets/app.js": hashlib.sha256(raw).hexdigest()}
+            with patch.object(BACKEND, "_local_git_tree", return_value={"public/build/assets/app.js": blob}), \
+                    patch.object(BACKEND, "_verify_frontend_build"), \
+                    patch.object(BACKEND, "_verify_primary_ci_and_reviews"):
+                profile = SimpleNamespace(test_only=True, expected_owner_uid=os.getuid())
+                BACKEND._verify_artifact_matches_primary(profile, "a" * 40, temp, candidate, {})
+                malicious = b"attacker javascript"
+                asset.write_bytes(malicious)
+                bad_candidate = {"public/build/assets/app.js": hashlib.sha256(malicious).hexdigest()}
+                with self.assertRaisesRegex(BACKEND.DeployRefused, "artifact_source_content_mismatch"):
+                    BACKEND._verify_artifact_matches_primary(profile, "a" * 40, temp, bad_candidate, {})
+        finally:
+            shutil.rmtree(temp, ignore_errors=True)
 
     def test_manifest_matches_exact_bytes_and_every_pin(self):
         manifest = json.loads(MANIFEST_PATH.read_text())
@@ -343,7 +398,7 @@ class FrozenAndManifestTests(unittest.TestCase):
             return text[start:text.index("\ndef ", start + 1)]
         for name in ("_verify_primary_ci_and_reviews", "_github_primary_tree", "_verify_agent_release_reviews_v3",
                      "_verify_review_report_artifacts", "_authorized_artifact_corrections", "_github_json",
-                     "_github_release_review_ledger", "_verify_artifact_matches_primary", "authorize_release",
+                     "_github_release_review_ledger", "authorize_release",
                      "_write_receipt", "_successful_receipt"):
             with self.subTest(name=name):
                 self.assertEqual(block(old, name), block(new, name))
@@ -492,6 +547,32 @@ class ContractTests(unittest.TestCase):
                     item for item in d["same_uid_peers"]["processes"] if item["unit"] == "nginx.service").update(
                         fds=[value])), "confinement_peer_foreign_descriptor")
 
+    def test_every_service_cgroup_member_including_root_masters_is_verified(self):
+        data = observation()
+        members = data["service_members"]["processes"]
+        self.assertEqual(len(members), 15)
+        self.assertTrue(any(item["unit"] == "php8.5-fpm.service" and item["uids"] == [0] * 4
+                            for item in members))
+        self._passes(data)
+        for mutate, code in (
+            (lambda d: next(item for item in d["service_members"]["processes"]
+                            if item["unit"] == "php8.5-fpm.service").update(label="unconfined"),
+             "confinement_master_not_confined"),
+            (lambda d: next(item for item in d["service_members"]["processes"]
+                            if item["unit"] == "php8.5-fpm.service").update(
+                                fds=["/var/www/wpcaregrid-production/shared/.env"]),
+             "confinement_peer_foreign_descriptor"),
+            (lambda d: d["service_members"].update(complete=False, incomplete_reasons=["peer_set_unstable"]),
+             "confinement_peer_inventory_incomplete"),
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(self._refusal(mutate), code)
+        def remove_stage_main(data):
+            pid = data["services"]["staging-next"]["main_pid"]
+            data["service_members"]["processes"][:] = [item for item in data["service_members"]["processes"]
+                                                        if item["pid"] != pid]
+        self.assertEqual(self._refusal(remove_stage_main), "confinement_service_member_missing")
+
     def test_missing_mismatched_and_unconfined_observations_refuse(self):
         first = CONTRACT.CONFINEMENT_FILES[0]
 
@@ -592,6 +673,11 @@ class ContractTests(unittest.TestCase):
         data = observation()
         with_peer(data, peer(7001, unit="supervisor.service", label="wpcaregrid-php-cli-staging (enforce)",
                              exe="/usr/bin/php8.4", comm="php"))
+        scheduler = data["services"]["jobs-scheduler"]
+        scheduler.update(active_state="active", main_pid=7004, main_label="wpcaregrid-php-cli-staging (enforce)")
+        data["service_members"]["processes"].append(peer(
+            7004, unit="wpcaregrid-staging-next-scheduler.service",
+            label="wpcaregrid-php-cli-staging (enforce)", exe="/usr/bin/php8.5", uid=0, gid=0))
         with_peer(data, peer(7002, unit="wpcaregrid-staging-next-scheduler.service",
                              label="wpcaregrid-php-cli-staging (enforce)", exe="/usr/bin/php8.5"))
         with_peer(data, peer(7003, unit="php8.5-fpm.service", label="wpcaregrid-php-fpm-staging-next (enforce)",
@@ -654,9 +740,15 @@ class ContractTests(unittest.TestCase):
                          "confinement_service_unattached")
         self.assertEqual(self._refusal(lambda d: legacy(d).update(loaded_profile_mode="complain")),
                          "confinement_profile_not_enforced")
-        self._passes(with_peer(observation(), peer(8101, unit="wpcaregrid-staging-legacy-scheduler.service",
-                                                   label="wpcaregrid-php-cli-staging (enforce)",
-                                                   exe="/usr/bin/php8.4")))
+        data = observation()
+        data["services"]["jobs-legacy-scheduler"].update(
+            active_state="active", main_pid=8100, main_label="wpcaregrid-php-cli-staging (enforce)")
+        data["service_members"]["processes"].append(peer(
+            8100, unit="wpcaregrid-staging-legacy-scheduler.service",
+            label="wpcaregrid-php-cli-staging (enforce)", exe="/usr/bin/python3.12", uid=0, gid=0))
+        self._passes(with_peer(data, peer(8101, unit="wpcaregrid-staging-legacy-scheduler.service",
+                                           label="wpcaregrid-php-cli-staging (enforce)",
+                                           exe="/usr/bin/php8.4")))
         self.assertEqual(self._refusal(lambda d: with_peer(d, peer(
             8102, unit="wpcaregrid-staging-legacy-scheduler.service", label="unconfined", exe="/usr/bin/php8.4"))),
             "confinement_same_uid_peer_unconfined")
@@ -793,6 +885,8 @@ class ContractTests(unittest.TestCase):
         data["services"]["jobs-supervisor"].update(active_state="inactive", main_pid=0, main_label="")
         data["same_uid_peers"]["processes"] = [p for p in data["same_uid_peers"]["processes"]
                                                if p["unit"] != "supervisor.service"]
+        data["service_members"]["processes"] = [p for p in data["service_members"]["processes"]
+                                                if p["unit"] != "supervisor.service"]
         data["production_jobs_fence"]["supervisor"].update(runtime_available=False, programs=[
             {"name": "wpcaregrid-production-default", "state": "SUPERVISOR_INACTIVE", "autostart": False}])
         self._passes(data)
@@ -1439,6 +1533,8 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.pin = synthetic_pin(hashes)
         self.proc = self.tmp / "proc"
         self.proc.mkdir()
+        self.cgroups = self.tmp / "cgroups"
+        self.cgroups.mkdir()
         self.units = {}
         for offset, role in enumerate(CONTRACT.REQUIRED_ROLES):
             binding = CONTRACT.CONFINEMENT_SERVICES[role]
@@ -1515,9 +1611,11 @@ class ConfinementCollectorTests(unittest.TestCase):
         os.symlink(exe, base / "exe")
         for index, target in enumerate(fds):
             os.symlink(target, base / "fd" / str(index))
+        self._refresh_cgroups()
         return base
 
     def collect(self):
+        self._refresh_cgroups()
         real_observe = BACKEND._observe_confinement_file
 
         def run_fixed(argv, **_kwargs):
@@ -1525,6 +1623,7 @@ class ConfinementCollectorTests(unittest.TestCase):
 
         with patch.object(CONTRACT, "CONFINEMENT_PIN", self.pin), \
                 patch.object(BACKEND, "CONFINEMENT_PROC_ROOT", self.proc), \
+                patch.object(BACKEND, "CONFINEMENT_CGROUP_ROOT", self.cgroups), \
                 patch.object(BACKEND, "CONFINEMENT_APPARMOR_PROFILES", self.profiles), \
                 patch.object(BACKEND, "CONFINEMENT_APPARMOR_ENABLED", self.enabled), \
                 patch.object(BACKEND, "CONFINEMENT_CRONTAB", self.tmp / "www-data-crontab"), \
@@ -1541,6 +1640,27 @@ class ConfinementCollectorTests(unittest.TestCase):
             env = resolved(self.pin)
             with patch.object(BACKEND, "BOUND_ENVIRONMENT", env):
                 return BACKEND._collect_php_fpm_confinement_observation(env)
+
+    def _refresh_cgroups(self):
+        service_units = {binding.unit for binding in CONTRACT.CONFINEMENT_SERVICES.values()}
+        members = {unit: [] for unit in service_units}
+        for entry in self.proc.iterdir():
+            if not entry.name.isdigit() or not entry.is_dir():
+                continue
+            try:
+                text = (entry / "cgroup").read_text()
+            except OSError:
+                continue
+            for line in text.splitlines():
+                if not line.startswith("0::"):
+                    continue
+                match = BACKEND._PEER_UNIT_RE.fullmatch(line[3:])
+                if match and match.group(1) in members:
+                    members[match.group(1)].append(int(entry.name))
+        for unit, pids in members.items():
+            root = self.cgroups / "system.slice" / unit
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "cgroup.procs").write_text("".join(f"{pid}\n" for pid in sorted(pids)))
 
     def verify(self, data):
         # Synthetic files are owned by the test user under /tmp; model root ownership.
@@ -1569,6 +1689,7 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.assertTrue(peers["complete"])
         # The production master runs as www-data; other unit masters are root.
         self.assertEqual(len(peers["processes"]), 2 * 5 + 1)
+        self.assertEqual(len(data["service_members"]["processes"]), 15)
         first = peers["processes"][0]
         self.assertEqual((first["uids"], first["gids"], first["unit"], first["exe"], first["fds"]),
                          ([33] * 4, [33] * 4, first["cgroup"].rsplit("/", 1)[1], first["exe"], ["/dev/null"]))
@@ -1670,6 +1791,44 @@ class ConfinementCollectorTests(unittest.TestCase):
                 self.assertEqual(self.refusal(data), "confinement_same_uid_peer_unconfined")
                 shutil.rmtree(self.proc / "9000")
 
+    def test_full_rescan_catches_a_process_that_becomes_uid33(self):
+        self.process(9050, uid=0, gid=0, unit="", label="unconfined", exe="/usr/bin/python3.12",
+                     comm="worker")
+        real = BACKEND._inventory_pid
+        state = {"changed": False}
+
+        def become_peer(pid, service_units=frozenset()):
+            record = real(pid, service_units)
+            if pid == 9050 and not state["changed"]:
+                state["changed"] = True
+                status = self.proc / "9050" / "status"
+                raw = status.read_text().replace("Uid:\t0\t0\t0\t0", "Uid:\t33\t33\t33\t33")
+                raw = raw.replace("Gid:\t0\t0\t0\t0", "Gid:\t33\t33\t33\t33")
+                status.write_text(raw)
+            return record
+
+        with patch.object(BACKEND, "_inventory_pid", side_effect=become_peer):
+            data = self.collect()
+        self.assertIn(9050, [item["pid"] for item in data["same_uid_peers"]["processes"]])
+        self.assertEqual(self.refusal(data), "confinement_same_uid_peer_unconfined")
+
+    def test_service_cgroup_includes_root_masters_and_extra_root_processes(self):
+        unit = "php8.5-fpm.service"
+        master = next(role for role in CONTRACT.REQUIRED_ROLES if CONTRACT.CONFINEMENT_SERVICES[role].unit == unit)
+        self.process(9060, uid=0, gid=0, unit=unit, label="unconfined", exe="/bin/sh", comm="sh")
+        data = self.collect()
+        self.assertIn(9060, [item["pid"] for item in data["service_members"]["processes"]])
+        self.assertEqual(self.refusal(data), "confinement_master_not_confined")
+        existing_master = next(item for item in data["service_members"]["processes"]
+                               if item["unit"] == unit and item["pid"] == data["services"][master]["main_pid"])
+        self.assertEqual(existing_master["uids"], [0] * 4)
+
+    def test_root_master_holding_foreign_secret_descriptor_is_refused(self):
+        master = self.proc / str(2010)
+        (master / "fd" / "77").symlink_to("/var/www/wpcaregrid-production/shared/.env")
+        data = self.collect()
+        self.assertEqual(self.refusal(data), "confinement_peer_foreign_descriptor")
+
     def test_unknown_service_with_its_own_profile_is_refused(self):
         self.process(9100, unit="wpcaregrid-unknown.service", label="custom (enforce)", exe="/usr/bin/php8.4")
         self.assertEqual(self.refusal(), "confinement_same_uid_peer_unknown")
@@ -1747,17 +1906,17 @@ class ConfinementCollectorTests(unittest.TestCase):
 
         with patch.object(BACKEND, "_read_proc_bytes", side_effect=fail_then_reuse):
             data = self.collect()
-        self.assertEqual(data["same_uid_peers"]["incomplete_reasons"], ["peer_pid_reused"])
+        self.assertIn("peer_pid_reused", data["same_uid_peers"]["incomplete_reasons"])
 
     def test_pids_appearing_during_the_scan_are_inventoried(self):
         real = BACKEND._inventory_pid
         state = {"spawned": False}
 
-        def spawn(pid):
+        def spawn(pid, service_units=frozenset()):
             if not state["spawned"]:
                 state["spawned"] = True
                 self.process(9600, unit="", label="unconfined", exe="/usr/bin/dash", comm="sh")
-            return real(pid)
+            return real(pid, service_units)
 
         with patch.object(BACKEND, "_inventory_pid", side_effect=spawn):
             data = self.collect()
@@ -1768,10 +1927,10 @@ class ConfinementCollectorTests(unittest.TestCase):
         real = BACKEND._inventory_pid
         counter = {"next": 20000}
 
-        def churn(pid):
+        def churn(pid, service_units=frozenset()):
             counter["next"] += 1
             self.process(counter["next"], uid=0, unit="", label="unconfined", exe="/usr/bin/true", comm="true")
-            return real(pid)
+            return real(pid, service_units)
 
         with patch.object(BACKEND, "_inventory_pid", side_effect=churn):
             data = self.collect()

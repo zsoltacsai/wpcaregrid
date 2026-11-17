@@ -1520,9 +1520,7 @@ def _verify_artifact_matches_primary(profile: StagingProfile, app_sha: str, extr
                                      manifest: Mapping[str, object]) -> None:
     tree = (_local_git_tree(profile, app_sha) if profile.test_only
             else _github_primary_tree(profile, app_sha))
-    tree = {name: digest for name, digest in tree.items() if not name.startswith("public/build/")}
-    source_files = {name: digest for name, digest in candidate_files.items()
-                    if not name.startswith("public/build/")}
+    source_files = dict(candidate_files)
     _require(set(tree) == set(source_files), "artifact_source_file_set_mismatch")
     for name, expected_blob_sha in tree.items():
         raw = _read_regular_nofollow(extracted / name, max_bytes=MAX_UNPACKED_BYTES,
@@ -3334,7 +3332,7 @@ class _PeerUnreadable(Exception):
     """A live PID could not be read or parsed; carries a fixed reason code."""
 
 
-_PEER_UNIT_RE = re.compile(r"/system\.slice/([A-Za-z0-9@._:-]+\.service)")
+_PEER_UNIT_RE = re.compile(r"/system\.slice/([A-Za-z0-9@._:-]+\.service)(?:/.*)?\Z")
 _STAT_RE = re.compile(rb"\A([0-9]+) \((.{0,64})\) ([A-Za-z]) (.*)\Z", re.S)
 
 
@@ -3420,27 +3418,30 @@ def _peer_label(pid: int) -> str:
     return raw.decode("utf-8").strip("\x00\n ")
 
 
-def _inventory_pid(pid: int) -> Mapping[str, object] | None:
-    """Read one PID. None: not a www-data process (or a zombie). Raises _PeerGone/_PeerUnreadable."""
+def _inventory_pid(pid: int, service_units: frozenset[str] = frozenset()) -> Mapping[str, object] | None:
+    """Read one PID. Include every shared-UID peer and each bound service-cgroup member."""
     starttime = None
     try:
         state, ppid, starttime = _proc_stat(pid)
         status = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "status", maximum=65536).decode("utf-8")
         uids, gids = _id_line(status, "Uid"), _id_line(status, "Gid")
         groups = _groups_line(status)
-        if 33 not in uids and 33 not in gids and 33 not in groups:
-            return None
         if state in {"Z", "X"}:
             return None  # exited; holds no files and runs no code
         base = CONFINEMENT_PROC_ROOT / str(pid)
-        comm = _read_proc_bytes(base / "comm", maximum=256).decode("utf-8", "replace").rstrip("\n")
-        cmdline = _read_proc_bytes(base / "cmdline", maximum=1_000_000)
-        exe = os.readlink(base / "exe")
         cgroup_text = _read_proc_bytes(base / "cgroup", maximum=65536).decode("utf-8")
         unified = [line[3:] for line in cgroup_text.splitlines() if line.startswith("0::")]
         if len(unified) != 1:
             raise _PeerUnreadable("peer_cgroup_unparsable")
         unit_match = _PEER_UNIT_RE.fullmatch(unified[0])
+        unit = unit_match.group(1) if unit_match else ""
+        shared_uid = 33 in uids or 33 in gids or 33 in groups
+        service_member = unit in service_units
+        if not shared_uid and not service_member:
+            return None
+        comm = _read_proc_bytes(base / "comm", maximum=256).decode("utf-8", "replace").rstrip("\n")
+        cmdline = _read_proc_bytes(base / "cmdline", maximum=1_000_000)
+        exe = os.readlink(base / "exe")
         label = _peer_label(pid)
         fds = []
         names = os.listdir(base / "fd")
@@ -3469,34 +3470,116 @@ def _inventory_pid(pid: int) -> Mapping[str, object] | None:
             "unit": unit_match.group(1) if unit_match else "", "label": label, "fds": sorted(fds)}
 
 
-def _inventory_same_uid_peers() -> Mapping[str, object]:
-    """Every live process with www-data as a UID, GID or supplementary group, independent of its name."""
-    processes: dict[int, Mapping[str, object]] = {}
-    examined: set[int] = set()
+def _service_cgroup_pids(services: Mapping) -> tuple[dict[str, set[int]], list[str]]:
+    """Read every process list under each bound service cgroup, including child cgroups."""
+    result: dict[str, set[int]] = {}
     reasons: list[str] = []
-    for _pass in range(3):
+    for role in _ENVIRONMENT_MODULE.REQUIRED_ROLES:
+        unit = _ENVIRONMENT_MODULE.CONFINEMENT_SERVICES[role].unit
+        base = CONFINEMENT_CGROUP_ROOT / "system.slice" / unit
+        active = services[role]["active_state"] == "active"
+        if not base.is_dir():
+            result[unit] = set()
+            if active:
+                reasons.append("service_cgroup_unavailable")
+            continue
+        members: set[int] = set()
         try:
-            listing = {int(entry) for entry in os.listdir(CONFINEMENT_PROC_ROOT) if entry.isdigit()}
+            paths = [base / "cgroup.procs"]
+            for current, dirs, _files in os.walk(base, followlinks=False):
+                dirs[:] = [name for name in dirs if not (Path(current) / name).is_symlink()]
+                child = Path(current) / "cgroup.procs"
+                if child not in paths:
+                    paths.append(child)
+            for path in paths:
+                try:
+                    info = os.lstat(path)
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    reasons.append("service_cgroup_file_invalid")
+                    continue
+                raw = _read_proc_bytes(path, maximum=1_000_000).decode("ascii")
+                for value in raw.split():
+                    if not value.isdigit() or int(value) <= 1:
+                        reasons.append("service_cgroup_pid_invalid")
+                    else:
+                        members.add(int(value))
+        except (OSError, UnicodeError, _PeerUnreadable):
+            reasons.append("service_cgroup_unreadable")
+        result[unit] = members
+    return result, reasons
+
+
+def _inventory_identity(processes: Mapping[int, Mapping[str, object]]) -> tuple:
+    return tuple((pid, record["starttime"], tuple(record["uids"]), tuple(record["gids"]),
+                  tuple(record["groups"]), record["cgroup"], record["unit"], record["label"], record["exe"])
+                 for pid, record in sorted(processes.items()))
+
+
+def _inventory_confinement_processes(services: Mapping) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    """Two consecutive full, stable scans of all UID/GID-33 peers and bound service cgroups."""
+    service_units = frozenset(_ENVIRONMENT_MODULE.CONFINEMENT_SERVICES[role].unit
+                              for role in _ENVIRONMENT_MODULE.REQUIRED_ROLES)
+    last_records: dict[int, Mapping[str, object]] = {}
+    last_cgroups: dict[str, set[int]] = {}
+    previous_identity = None
+    previous_cgroups = None
+    previous_pid_set = None
+    reasons: list[str] = []
+    sticky_reasons: set[str] = set()
+    stable = False
+    for _pass in range(3):
+        current: dict[int, Mapping[str, object]] = {}
+        pass_reasons: list[str] = []
+        try:
+            listing = sorted(int(entry) for entry in os.listdir(CONFINEMENT_PROC_ROOT) if entry.isdigit())
         except OSError:
             raise DeployRefused("confinement_process_table_unavailable") from None
-        pending = sorted(listing - examined)
-        if not pending:
-            break
-        for pid in pending:
-            examined.add(pid)
+        cgroups, cgroup_reasons = _service_cgroup_pids(services)
+        pass_reasons.extend(cgroup_reasons)
+        pid_set = set(listing) | set().union(*cgroups.values())
+        for pid in sorted(pid_set):
             try:
-                record = _inventory_pid(pid)
+                record = _inventory_pid(pid, service_units)
             except _PeerGone:
+                if any(pid in members for members in cgroups.values()):
+                    pass_reasons.append("service_cgroup_member_missing")
                 continue
             except _PeerUnreadable as error:
-                reasons.append(str(error))
+                pass_reasons.append(str(error))
+                if str(error) == "peer_pid_reused":
+                    sticky_reasons.add("peer_pid_reused")
                 continue
             if record is not None:
-                processes[pid] = record
-    else:
+                current[pid] = record
+        for unit, pids in cgroups.items():
+            for pid in pids:
+                record = current.get(pid)
+                if record is None or record["unit"] != unit:
+                    pass_reasons.append("service_cgroup_membership_mismatch")
+        for pid, record in current.items():
+            if record["unit"] in service_units and pid not in cgroups.get(record["unit"], set()):
+                pass_reasons.append("service_cgroup_membership_mismatch")
+        identity = _inventory_identity(current)
+        cgroup_identity = tuple((unit, tuple(sorted(pids))) for unit, pids in sorted(cgroups.items()))
+        if (not pass_reasons and identity == previous_identity and cgroup_identity == previous_cgroups
+                and pid_set == previous_pid_set):
+            last_records, last_cgroups, stable, reasons = current, cgroups, True, []
+            break
+        last_records, last_cgroups = current, cgroups
+        previous_identity, previous_cgroups, previous_pid_set = identity, cgroup_identity, pid_set
+        reasons = pass_reasons or ["peer_set_unstable"]
+    reasons = sorted(set(reasons) | sticky_reasons)
+    if not stable and not reasons:
         reasons.append("peer_set_unstable")
-    return {"complete": not reasons, "incomplete_reasons": sorted(set(reasons)),
-            "processes": [processes[pid] for pid in sorted(processes)]}
+    uid_peers = [record for record in last_records.values()
+                 if 33 in record["uids"] or 33 in record["gids"] or 33 in record["groups"]]
+    service_members = [record for record in last_records.values() if record["unit"] in service_units]
+    report = lambda processes: {"complete": stable and not reasons,
+                                "incomplete_reasons": sorted(set(reasons)),
+                                "processes": sorted(processes, key=lambda item: item["pid"])}
+    return report(uid_peers), report(service_members)
 
 
 def _cron_entries_for_www_data(text: str) -> int:
@@ -3768,11 +3851,12 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
             "loaded_profile_mode": loaded.get(binding.apparmor_profile, "unloaded"),
         }
     supervisor_active = services["jobs-supervisor"]["active_state"] != "inactive"
+    same_uid_peers, service_members = _inventory_confinement_processes(services)
     return {"schema": 3, "apparmor_enabled": enabled,
             "production_jobs_fence": _observe_production_jobs_fence(contract, supervisor_active),
             "files": files, "services": services,
             "www_data_scheduled_jobs": _observe_www_data_scheduled_jobs(), "helper": _observe_helper(loaded),
-            "same_uid_peers": _inventory_same_uid_peers()}
+            "same_uid_peers": same_uid_peers, "service_members": service_members}
 
 
 def _verify_php_fpm_confinement(profile: StagingProfile) -> None:
