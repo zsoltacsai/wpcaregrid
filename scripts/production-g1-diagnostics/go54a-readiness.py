@@ -51,7 +51,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -195,9 +195,9 @@ class RealHost:
             if len(data) >= max_bytes and os.read(fd, 1):
                 raise HostError("too_large", os.path.basename(path))
             st_fd_after = os.fstat(fd)
+            st_path_after = os.stat(path, follow_symlinks=False)
         finally:
             os.close(fd)
-        st_path_after = os.stat(path, follow_symlinks=False)
         return data, st_fd_before, st_fd_after, st_path_after
 
     def read_text(self, path, max_bytes):
@@ -226,7 +226,13 @@ class RealHost:
         descended, and every enumerated directory is re-verified after the
         whole walk, so a mutation in any window (before descent, during a
         level's enumeration, or after it) fails closed instead of being
-        silently omitted from the fingerprint."""
+        silently omitted from the fingerprint.
+
+        Residual bound (documented, AppSec R6-F4): the per-level entry cap is
+        enforced while processing a level's entries; a single directory's
+        name enumeration and sort happen before that cap, so a pathological
+        single directory can consume enumeration memory/time bounded by the
+        operating system before the walk fails closed."""
         root = os.lstat(path)
         datadir_root_check(root, path, mysql_ids)
         records, entries, total = [], 0, 0
@@ -270,7 +276,7 @@ class RealHost:
                     try:
                         opened = os.fstat(fd)
                         if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
-                            raise UnsafeState("datadir_changed_during_read", rel)
+                            raise HostError("datadir_changed_during_read", rel)
                         data = b""
                         while len(data) < max_file_bytes:
                             chunk = os.read(fd, min(65536, max_file_bytes - len(data)))
@@ -772,6 +778,7 @@ def main(argv=None, host=None, stream=None):
     host = host if host is not None else RealHost()
     emit("TOOL %s %s mode=read_only" % (TOOL, VERSION))
     results = []
+    initial_critical = {}
 
     status, detail = guard(lambda: check_console_root(host, emit))
     results.append(("console_root", status, detail))
@@ -781,15 +788,18 @@ def main(argv=None, host=None, stream=None):
 
     status, detail = guard(lambda: check_lock_state(host, emit))
     results.append(("lock_state", status, detail))
+    initial_critical["lock_state"] = (status, detail)
 
     status, detail = guard(lambda: check_parent_directories(host, emit))
     results.append(("parent_directories", status, detail))
 
     status, detail = guard(lambda: check_units_inactive(host, emit))
     results.append(("g1_units_inactive", status, detail))
+    initial_critical["g1_units_inactive"] = (status, detail)
 
     status, detail = guard(lambda: check_installed_baseline(host, emit))
     results.append(("installed_baseline", status, detail))
+    initial_critical["installed_baseline"] = (status, detail)
 
     status, detail = guard(lambda: check_apparmor_enforced(host, emit))
     results.append(("apparmor_enforced", status, detail))
@@ -818,6 +828,7 @@ def main(argv=None, host=None, stream=None):
 
     status, detail = guard(lambda: check_transaction_leftovers(host, emit))
     results.append(("transaction_leftovers", status, detail))
+    initial_critical["transaction_leftovers"] = (status, detail)
 
     status, detail = guard(lambda: check_package_intake(host, package_dir, emit))
     results.append(("package_intake", status, detail))
@@ -833,6 +844,31 @@ def main(argv=None, host=None, stream=None):
             results.append(("vendor_mysql_stability", "HOLD", "vendor_mysql_pid_changed_during_run"))
         else:
             results.append(("vendor_mysql_stability", "PASS", "mainpid_stable_during_run=" + vendor_pid))
+
+    # AppSec R6-F1 fix: a concurrent GO-5.4a transaction must never be able
+    # to hide between the first observations and the final verdict. The four
+    # critical transaction-relevant checks are re-run quietly (through a
+    # sink so the evidence transcript is not duplicated) and any deviation
+    # from the initial observation classifies the whole evidence set as
+    # stale (UNKNOWN): a PASS would otherwise describe a baseline that no
+    # longer exists.
+    def revalidate_critical_state():
+        def sink(_line):
+            return None
+
+        closing = {
+            "lock_state": guard(lambda: check_lock_state(host, sink)),
+            "g1_units_inactive": guard(lambda: check_units_inactive(host, sink)),
+            "installed_baseline": guard(lambda: check_installed_baseline(host, sink)),
+            "transaction_leftovers": guard(lambda: check_transaction_leftovers(host, sink)),
+        }
+        for name, observed in closing.items():
+            if observed != initial_critical.get(name):
+                return "UNKNOWN", "evidence_stale:" + name + ":" + observed[0] + ":" + observed[1]
+        return "PASS", "critical_state_stable_during_run"
+
+    status, detail = guard(revalidate_critical_state)
+    results.append(("state_revalidation", status, detail))
 
     for name, status, detail in results:
         emit("CHECK %s %s%s" % (name, status, (" " + sanitize(detail)) if detail else ""))

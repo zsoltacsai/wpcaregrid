@@ -62,6 +62,13 @@ class FakeHost:
         # directory replaced during traversal (directory inode changes).
         self.grow_dir_after_listing = grow_dir_after_listing or set()
         self.replace_dir_after_listing = replace_dir_after_listing or set()
+        # Round-6 simulations: a file swapped between the walk stat and the
+        # descriptor open, and a concurrent transaction that replaces an
+        # installed artifact after the initial baseline read (the closing
+        # re-verification must catch the stale evidence).
+        self.swap_before_open = set()
+        self.swap_after_reads = {}
+        self.read_counts = {}
 
     def _all_paths(self):
         return list(self.files) + list(self.dirs) + list(self.symlinks)
@@ -114,6 +121,10 @@ class FakeHost:
             raise rd.HostError("not_regular", posixpath.basename(path))
         if path not in self.files:
             raise FileNotFoundError(path)
+        self.read_counts[path] = self.read_counts.get(path, 0) + 1
+        if self.read_counts[path] > self.swap_after_reads.get(path, 1 << 30):
+            self.files[path]["content"] = self.files[path].get("content2",
+                                                              self.files[path].get("content", b""))
         content = self.files[path].get("content", b"")
         if len(content) > max_bytes:
             raise rd.HostError("too_large", posixpath.basename(path))
@@ -207,6 +218,10 @@ class FakeHost:
                     parent_expected[rel] = st
                 digest = "-"
                 if stat.S_ISREG(st.st_mode):
+                    if full in self.swap_before_open:
+                        # Models the production open-identity check: the file
+                        # was replaced between the walk stat and the open.
+                        raise rd.HostError("datadir_changed_during_read", rel)
                     if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
                         raise rd.HostError("datadir_exceeds_bounds", rel)
                     data = self.read_regular(full, max_file_bytes)
@@ -937,6 +952,35 @@ class ReadinessTestCase(unittest.TestCase):
         self.assertEqual(self.run_main(["--package", "/root/wpcg-go54a-x\nEVIL"]), 0)
         self.assertIn("package_verified:/root/wpcg-go54a-x?EVIL", self.output())
         self.assertNotIn("/root/wpcg-go54a-x\nEVIL", self.output())
+
+    # -- AppSec round-6 findings (R6-F1 stale evidence, R6-F2 UNKNOWN) ------
+
+    def test_state_revalidation_passes_in_healthy_run(self):
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("CHECK state_revalidation PASS critical_state_stable_during_run",
+                      self.output())
+
+    def test_concurrent_upgrade_during_run_yields_stale_evidence_unknown(self):
+        # R6-F1: a GO-5.4a transaction completing after the initial baseline
+        # read must invalidate the whole evidence set as stale.
+        files = dict(self.host.files)
+        files[rd.MANIFEST] = {"content": old_bytes(rd.MANIFEST),
+                               "content2": new_bytes(rd.MANIFEST),
+                               "mode": 0o644, "uid": 0, "gid": 0}
+        self.host = self.healthy_host(files=files)
+        self.host.swap_after_reads = {rd.MANIFEST: 1}
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("CHECK state_revalidation UNKNOWN evidence_stale:installed_baseline",
+                      self.output())
+        self.assertEqual(self.last_line(), "G1_GO54A_READINESS=UNKNOWN")
+
+    def test_datadir_swap_before_open_yields_unknown(self):
+        # R6-F2: a file replaced between the walk stat and the descriptor
+        # open classifies as UNKNOWN (uniform mutation classification).
+        self.host = self.healthy_host()
+        self.host.swap_before_open = {rd.DATADIRS[0] + "/ib_logfile0"}
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0", self.output())
 
 
 if __name__ == "__main__":

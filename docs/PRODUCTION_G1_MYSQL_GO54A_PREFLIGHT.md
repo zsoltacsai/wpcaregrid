@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `d1e62bc77e53e6e62f1bb4926bbe218a219374b04d10768fd91bbc1195a3dd14`)
+    (SHA-256 `56982ee0dadc6422b94138bfb70318eaaa7e1ec12d7868894a0681cff0fe606d`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `f8bb237328a2060346d1e14589a398ccda998b216d7b01254b40888cad4afd1d`)
+    `555bc0f805fc01fd4343309cd66807bf598bb78885ef49f2ab843e42cd2b0539`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -94,6 +94,16 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     descriptor); and the emission boundary sanitizes every result detail,
     staged-package name, companion directory and vendor profile line.
     The notify tool is unchanged in this round (v1.4.0).
+  - Reviewer corrections included in v1.6.0 (AppSec round 6, readiness tool):
+    the four critical transaction-relevant checks (lock state, both G1 units,
+    the installed baseline, transaction leftovers) are RE-RUN quietly at the
+    end and any deviation from the initial observation classifies the whole
+    evidence set as stale (UNKNOWN `evidence_stale`) — a concurrent GO-5.4a
+    transaction can no longer hide between the first observations and the
+    final verdict; the open-identity datadir mutation now classifies as
+    UNKNOWN uniformly; the log pathname stat happens while the descriptor is
+    still open; the per-level enumeration bound residual is documented.
+    The notify tool is unchanged in this round too (v1.4.0).
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.
