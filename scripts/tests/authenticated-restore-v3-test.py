@@ -192,6 +192,9 @@ DEFINER_LIFECYCLE = {"account_exists": True, "account_locked": True, "global_pri
 def synthetic_restore_mysql(manifest):
     identity = {"version": "8.4.11", "server_uuid": DEST_UUID, "log_bin": "1", "binlog_format": "ROW",
                 "trust_function_creators": "0"}
+    if manifest["backup"]["source_schema"] == "wpcg_prod_main":   # G1 kind: identity also reports the endpoint
+        identity["endpoint"] = {"port": 3309, "datadir": "/var/lib/mysql-wpcaregrid-production-restore",
+                                "socket": "/run/mysqld/wpcaregrid-production-restore.sock"}
     with (mock.patch.object(V2, "_mysql_identity", return_value=identity),
           mock.patch.object(V2, "mysql_query", return_value=b"0\n"),
           mock.patch.object(V2, "_create_database"),

@@ -35,15 +35,38 @@ MAX_SQL_TOKENS = 250_000
 TARGET_RE = re.compile(r"wpcg_recovery_restore_[0-9]{8}_[0-9a-f]{8}\Z")
 IDENT_RE = re.compile(r"[A-Za-z0-9_]+\Z")
 
-CREATE_DB_RE = re.compile(
-    rb"CREATE\s+DATABASE\s+"
-    rb"(?:/\*!\d{5,6}\s+IF\s+NOT\s+EXISTS\s*\*/\s*)?"
-    rb"`?wpcaregrid`?\s+"
-    rb"/\*!\d{5,6}\s+DEFAULT\s+CHARACTER\s+SET\s+([A-Za-z0-9_]+)\s+"
-    rb"COLLATE\s+([A-Za-z0-9_]+)\s*\*/\s*;\Z",
-    re.IGNORECASE,
-)
-USE_DB_RE = re.compile(rb"USE\s+`?wpcaregrid`?\s*;\Z", re.IGNORECASE)
+# Source schemas a dump may legitimately come from. The legacy single-host
+# staging/pre-deploy schema is `wpcaregrid`; the Production G1 instance schema is
+# `wpcg_prod_main`. This is an explicit allowlist, never a pattern: callers name
+# the one schema they expect and anything else is refused. The default for every
+# existing caller stays `wpcaregrid`.
+DEFAULT_SOURCE_SCHEMA = "wpcaregrid"
+SOURCE_SCHEMA_ALLOWLIST = frozenset({"wpcaregrid", "wpcg_prod_main"})
+
+
+def require_source_schema(source_schema, code="SOURCE_SCHEMA_NOT_ALLOWED"):
+    if not isinstance(source_schema, str) or source_schema not in SOURCE_SCHEMA_ALLOWLIST:
+        refuse(code)
+    return source_schema
+
+
+def _header_regexes(source_schema):
+    # The schema token is matched case-sensitively (the rest of the header stays
+    # case-insensitive, as before): schema names are case-sensitive identifiers.
+    schema = b"(?-i:" + re.escape(require_source_schema(source_schema)).encode("ascii") + b")"
+    create = re.compile(
+        rb"CREATE\s+DATABASE\s+"
+        rb"(?:/\*!\d{5,6}\s+IF\s+NOT\s+EXISTS\s*\*/\s*)?"
+        rb"`?" + schema + rb"`?\s+"
+        rb"/\*!\d{5,6}\s+DEFAULT\s+CHARACTER\s+SET\s+([A-Za-z0-9_]+)\s+"
+        rb"COLLATE\s+([A-Za-z0-9_]+)\s*\*/\s*;\Z",
+        re.IGNORECASE,
+    )
+    use = re.compile(rb"USE\s+`?" + schema + rb"`?\s*;\Z", re.IGNORECASE)
+    return create, use
+
+
+CREATE_DB_RE, USE_DB_RE = _header_regexes(DEFAULT_SOURCE_SCHEMA)
 
 
 def wrap_single_schema_dump(sql, source_schema, charset, collation):
@@ -187,6 +210,11 @@ def _word(token):
 
 def _id(token):
     return token.value.lower() if token and token.kind in {"WORD", "IDENT"} else ""
+
+
+def _exact_id(token):
+    """Identifier text exactly as written (no case folding)."""
+    return token.value if token and token.kind in {"WORD", "IDENT"} else ""
 
 
 def bounded_tokens(data):
@@ -338,9 +366,10 @@ def validate_lexical_sql_mode(tokens):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
 
 
-def audit_sql(sql, target_schema, approved_definer=None):
+def audit_sql(sql, target_schema, approved_definer=None, source_schema=DEFAULT_SOURCE_SCHEMA):
     if not TARGET_RE.fullmatch(target_schema):
         refuse("TARGET_SCHEMA_INVALID")
+    create_db_re, use_db_re = _header_regexes(source_schema)
     try:
         sql.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
@@ -381,7 +410,7 @@ def audit_sql(sql, target_schema, approved_definer=None):
         if a == "DROP" and b in {"DATABASE", "SCHEMA"}:
             forbidden.add("DATABASE_DROP")
         if a == "USE":
-            use_db.append((token.line, _id(tokens[i + 1]) if i + 1 < len(tokens) else ""))
+            use_db.append((token.line, _exact_id(tokens[i + 1]) if i + 1 < len(tokens) else ""))
         if a == "CREATE" and b == "TABLE":
             table_index = i + 2
             if table_index + 2 < len(tokens) and [_word(tokens[j]) for j in range(table_index, table_index + 3)] == ["IF", "NOT", "EXISTS"]:
@@ -512,7 +541,7 @@ def audit_sql(sql, target_schema, approved_definer=None):
     validate_lexical_sql_mode(tokens)
     if len(create_db) != 1 or len(use_db) != 1:
         refuse("DATABASE_SELECTOR_COUNT_MISMATCH")
-    if use_db[0][1] != "wpcaregrid":
+    if use_db[0][1] != source_schema:
         refuse("DATABASE_SELECTOR_SOURCE_MISMATCH")
     if schema_refs:
         refuse("CROSS_SCHEMA_REFERENCE")
@@ -527,12 +556,12 @@ def audit_sql(sql, target_schema, approved_definer=None):
         content = line[:-2] if line.endswith(b"\r\n") else line[:-1] if line.endswith(b"\n") else line
         if re.search(rb"^\s*CREATE\s+DATABASE\b", content, re.IGNORECASE):
             create_indexes.append(index)
-            match = CREATE_DB_RE.fullmatch(content.strip())
+            match = create_db_re.fullmatch(content.strip())
             if match:
                 create_match = match
         if re.search(rb"^\s*USE\b", content, re.IGNORECASE):
             use_indexes.append(index)
-            if USE_DB_RE.fullmatch(content.strip()):
+            if use_db_re.fullmatch(content.strip()):
                 use_line = index
     if len(create_indexes) != 1 or create_match is None:
         refuse("DATABASE_CREATE_FORMAT_UNEXPECTED")
@@ -811,8 +840,7 @@ def _manifest_object(manifest, *, now=None):
     if (type(backup["size_bytes"]) is not int
             or not 1 <= backup["size_bytes"] <= MAX_COMPRESSED_BACKUP_BYTES):
         refuse("RELEASE_MANIFEST_BACKUP_INVALID")
-    if backup["source_schema"] != "wpcaregrid":
-        refuse("RELEASE_MANIFEST_BACKUP_INVALID")
+    require_source_schema(backup["source_schema"], "RELEASE_MANIFEST_BACKUP_INVALID")
     if (manifest["database_charset"] != "utf8mb4"
             or not isinstance(manifest["database_collation"], str)
             or not re.fullmatch(r"utf8mb4_[a-z0-9_]{1,48}", manifest["database_collation"])):
@@ -823,7 +851,8 @@ def _manifest_object(manifest, *, now=None):
         refuse("SOURCE_IDENTITY_EVIDENCE_INVALID")
     for field in ("environment_id", "host_id", "database_id", "server_uuid"):
         _require_string(source[field], "SOURCE_IDENTITY_EVIDENCE_INVALID", maximum=256)
-    if source["database"] != "wpcaregrid":
+    require_source_schema(source["database"], "SOURCE_IDENTITY_EVIDENCE_INVALID")
+    if source["database"] != backup["source_schema"]:
         refuse("SOURCE_IDENTITY_EVIDENCE_INVALID")
     _require_hex(source["application_sha"], RELEASE_SHA_RE, "SOURCE_IDENTITY_EVIDENCE_INVALID")
     # A pre-deployment recovery backup is produced by the currently deployed
@@ -912,6 +941,85 @@ def _manifest_object(manifest, *, now=None):
     return manifest
 
 
+ISOLATION_KIND_CONTAINER = "disposable_mysql_container"
+# Production G1 restore instance: a separate systemd-managed mysqld
+# (`mysql@wpcaregrid-production-restore`) on the SAME VPS as the production
+# instance. It is validated against the constants in production_g1_mysql_contract
+# (unit, port, datadir, socket) rather than container/network properties.
+ISOLATION_KIND_G1_SYSTEMD = "g1_systemd_restore_instance"
+G1_PRODUCTION_INSTANCE = "wpcaregrid-production"
+G1_RESTORE_INSTANCE = "wpcaregrid-production-restore"
+_G1_CONTRACT = None
+
+
+def _g1_contract():
+    """Load the read-only G1 contract constants lazily (only the G1 kind needs them)."""
+    global _G1_CONTRACT
+    if _G1_CONTRACT is None:
+        import importlib.util
+        path = Path(__file__).resolve().with_name("production_g1_mysql_contract.py")
+        name = "production_g1_mysql_contract_for_restore"
+        try:
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            production = module.INSTANCES[G1_PRODUCTION_INSTANCE]
+            restore = module.INSTANCES[G1_RESTORE_INSTANCE]
+            for instance in (production, restore):
+                if (type(instance.port) is not int or not 1 <= instance.port <= 65535
+                        or any(type(getattr(instance, field)) is not str or not getattr(instance, field)
+                               for field in ("unit", "datadir", "socket", "schema"))):
+                    refuse("G1_CONTRACT_UNAVAILABLE")
+            # The two instances share one VPS: separation rests on distinct ports,
+            # datadirs, sockets, units and schemas (plus distinct server UUIDs,
+            # checked against the signed manifest). Fail closed if the contract
+            # ever stops providing that.
+            if (production.port == restore.port
+                    or _norm_dir(production.datadir) == _norm_dir(restore.datadir)
+                    or production.socket == restore.socket or production.unit == restore.unit
+                    or production.schema == restore.schema
+                    or require_source_schema(production.schema, "G1_CONTRACT_UNAVAILABLE") != production.schema):
+                refuse("G1_CONTRACT_UNAVAILABLE")
+        except Exception:
+            sys.modules.pop(name, None)
+            refuse("G1_CONTRACT_UNAVAILABLE")
+        _G1_CONTRACT = (production, restore)
+    return _G1_CONTRACT
+
+
+def _norm_dir(path):
+    return path.rstrip("/") or "/"
+
+
+def g1_endpoint(instance):
+    """The (port, datadir, socket) triple a G1 instance must report about itself."""
+    return {"port": instance.port, "datadir": _norm_dir(instance.datadir), "socket": instance.socket}
+
+
+def parse_observed_endpoint(port, datadir, socket_path):
+    """Normalise `@@GLOBAL.port, @@GLOBAL.datadir, @@GLOBAL.socket` as read from a server."""
+    if (not isinstance(port, str) or not re.fullmatch(r"[0-9]{1,5}", port)
+            or not isinstance(datadir, str) or not datadir.startswith("/")
+            or not isinstance(socket_path, str) or not socket_path.startswith("/")):
+        refuse("MYSQL_ENDPOINT_INVALID")
+    return {"port": int(port), "datadir": _norm_dir(datadir), "socket": socket_path}
+
+
+def _validate_g1_isolation(isolation, mysql):
+    production, restore = _g1_contract()
+    if (set(isolation) != {"approved", "kind", "unit", "port", "datadir", "socket"}
+            or isolation["approved"] is not True
+            or isolation["unit"] != restore.unit
+            or type(isolation["port"]) is not int or isolation["port"] != restore.port
+            or isolation["datadir"] != restore.datadir
+            or isolation["socket"] != restore.socket
+            or mysql["host"] != "127.0.0.1"
+            or mysql["port"] != restore.port
+            or mysql["port"] == production.port):
+        refuse("DESTINATION_POLICY_NOT_ISOLATED")
+
+
 def _policy_object(policy):
     required = {"schema_version", "policy_id", "destination_identity", "mysql", "isolation"}
     if not isinstance(policy, dict) or set(policy) != required or policy.get("schema_version") != 1:
@@ -935,9 +1043,12 @@ def _policy_object(policy):
             or mysql["client"] != "/usr/bin/mysql" or mysql["dump_client"] != "/usr/bin/mysqldump"):
         refuse("DESTINATION_POLICY_INVALID")
     isolation = policy["isolation"]
+    if isinstance(isolation, dict) and isolation.get("kind") == ISOLATION_KIND_G1_SYSTEMD:
+        _validate_g1_isolation(isolation, mysql)
+        return policy
     if (not isinstance(isolation, dict) or set(isolation) != {"approved", "kind", "network_id", "public_ports"}
             or isolation["approved"] is not True
-            or isolation["kind"] != "disposable_mysql_container"
+            or isolation["kind"] != ISOLATION_KIND_CONTAINER
             or isolation["public_ports"] is not False
             or not isinstance(isolation["network_id"], str)
             or not re.fullmatch(r"wpcg_restore_net_[a-f0-9]{10}", isolation["network_id"])):
@@ -955,7 +1066,21 @@ def verify_manifest_and_policy(manifest_path, policy_path, *, owner_uid=0):
     source = manifest["source_identity"]
     dest = policy["destination_identity"]
     mysql = policy["mysql"]
-    if (source["environment_id"] == dest["environment_id"] or source["host_id"] == dest["host_id"]
+    if policy["isolation"]["kind"] == ISOLATION_KIND_G1_SYSTEMD:
+        # Same-VPS G1 instances share host_id/environment_id, and this kind
+        # REQUIRES them to be equal (a different host would not be the same VPS).
+        # Separation is enforced by distinct server UUIDs,
+        # distinct pinned ports/datadirs (policy validated against the G1
+        # contract) and a source pinned to the G1 production schema.
+        production, _restore = _g1_contract()
+        if (source["server_uuid"] == mysql["server_uuid"]
+                or source["host_id"] != dest["host_id"]
+                or source["environment_id"] != dest["environment_id"]
+                or manifest["mysql"]["server_uuid"] != mysql["server_uuid"]
+                or source["database"] != production.schema
+                or manifest["backup"]["source_schema"] != production.schema):
+            refuse("DESTINATION_NOT_ISOLATED")
+    elif (source["environment_id"] == dest["environment_id"] or source["host_id"] == dest["host_id"]
             or source["server_uuid"] == mysql["server_uuid"]
             or manifest["mysql"]["server_uuid"] != mysql["server_uuid"]):
         refuse("DESTINATION_NOT_ISOLATED")
@@ -1053,18 +1178,33 @@ def _safe_dump_hash(policy, schema, table_names, *, maximum=20 * 1024 * 1024 * 1
     return digest.hexdigest(), total
 
 
+def _is_g1_policy(policy):
+    isolation = policy.get("isolation") if isinstance(policy, dict) else None
+    return isinstance(isolation, dict) and isolation.get("kind") == ISOLATION_KIND_G1_SYSTEMD
+
+
 def _mysql_identity(policy):
+    g1 = _is_g1_policy(policy)
     raw = mysql_query(policy,
         "SELECT VERSION(),@@server_uuid,@@GLOBAL.log_bin,@@GLOBAL.binlog_format,"
-        "@@GLOBAL.log_bin_trust_function_creators")
+        "@@GLOBAL.log_bin_trust_function_creators"
+        + (",@@GLOBAL.port,@@GLOBAL.datadir,@@GLOBAL.socket" if g1 else ""))
     try:
         fields = raw.decode("ascii", "strict").rstrip("\n").split("\t")
     except UnicodeError:
         refuse("MYSQL_IDENTITY_INVALID")
-    if len(fields) != 5:
+    if len(fields) != (8 if g1 else 5):
         refuse("MYSQL_IDENTITY_INVALID")
-    return {"version": fields[0], "server_uuid": fields[1], "log_bin": fields[2],
-            "binlog_format": fields[3], "trust_function_creators": fields[4]}
+    identity = {"version": fields[0], "server_uuid": fields[1], "log_bin": fields[2],
+                "binlog_format": fields[3], "trust_function_creators": fields[4]}
+    if g1:
+        # The pinned destination must report, from the server itself, that it is
+        # the restore instance (not merely be configured/connected as one).
+        endpoint = parse_observed_endpoint(fields[5], fields[6], fields[7])
+        if endpoint != g1_endpoint(_g1_contract()[1]):
+            refuse("DESTINATION_ENDPOINT_MISMATCH")
+        identity["endpoint"] = endpoint
+    return identity
 
 
 SCHEMA_QUERIES = (
@@ -1384,7 +1524,8 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
     read_protected_json_metadata(policy["mysql"]["defaults_file"], owner_uid=owner_uid, mode=0o600)
     compressed = read_backup_for_manifest(backup, owner_uid=owner_uid)
     sql = decode_verified_archive(compressed, backup["sha256"])
-    plan = audit_sql(sql, manifest["target_schema"], manifest["approved_definer"])
+    plan = audit_sql(sql, manifest["target_schema"], manifest["approved_definer"],
+                     source_schema=backup["source_schema"])
     if (plan["expected_tables"] != manifest["expected"]["table_names"]
             or plan["charset"] != manifest["database_charset"]
             or plan["collation"] != manifest["database_collation"]):
@@ -1454,6 +1595,10 @@ def _restore_impl(manifest_path, policy_path, config_path, receipt_path, *, owne
             },
             "cleanup": {"status": "retained_for_migration_rehearsal", "journal": str(journal_path)},
         }
+        if _is_g1_policy(policy):
+            if not isinstance(identity.get("endpoint"), dict):
+                refuse("DESTINATION_ENDPOINT_UNOBSERVED")
+            receipt["destination_endpoint"] = identity["endpoint"]
         journal["state"] = "RESTORE_VERIFIED"
         receipt_payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii") + b"\n"
         journal["receipt_sha256"] = hashlib.sha256(receipt_payload).hexdigest()
