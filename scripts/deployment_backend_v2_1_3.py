@@ -41,6 +41,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import tarfile
@@ -635,7 +636,7 @@ def _extract_archive(archive_bytes: bytes, destination: Path, *, app_sha: str, b
                                   "helper_sha256", "helper_contract", "frontend_build"}
         _require(set(manifest) == expected_manifest_keys, "release_manifest_schema_invalid")
         _require(type(manifest["schema"]) is int and manifest["schema"] == 1
-                 and manifest["profile"] == profile.name and manifest["application_sha"] == app_sha
+                 and manifest["profile"] == PROFILE and manifest["application_sha"] == app_sha
                 and manifest["base_application_sha"] == base_sha
                 and manifest["php_minimum"] in {"8.4", "8.5"}
                 and tuple(map(int, manifest["php_minimum"].split("."))) <= tuple(map(int, PHP_VERSION.split(".")))
@@ -2092,11 +2093,33 @@ def _run_fixed(argv: list[str], *, cwd: Path | None = None, timeout: float = 15.
                      and "\x00" not in value for key, value in extra_env.items()), "runtime_probe_environment_invalid")
         environment.update(extra_env)
     try:
-        result = subprocess.run(argv, cwd=cwd, env=environment,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, timeout=timeout, check=False)
-    except subprocess.TimeoutExpired:
-        raise DeployRefused("runtime_probe_timeout") from None
+        # A timed-out runuser/aa-exec command may have grandchildren. Put the
+        # whole command tree in its own session so timeout cleanup cannot leave
+        # PHP descendants holding cache or storage descriptors.
+        process = subprocess.Popen(argv, cwd=cwd, env=environment,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            # A child that escaped the process group must not keep communicate()
+            # blocked on inherited pipes. The subsequent peer inventory refuses
+            # any such process that remains alive under a bound profile.
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+            raise DeployRefused("runtime_probe_timeout") from None
+        result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     except OSError:
         raise DeployRefused("runtime_probe_unavailable") from None
     _require(len(result.stdout) <= maximum and len(result.stderr) <= maximum, "runtime_probe_output_invalid")
@@ -2466,10 +2489,10 @@ def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
             output = _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
                                 extra_env=extra_env, home=home, classify_failure=classify_failure)
         except DeployRefused:
-            _verify_php_fpm_confinement(profile)  # a confinement refusal takes precedence
+            _verify_php_fpm_confinement(profile, allow_transients=False)  # a confinement refusal takes precedence
             raise
-        # Re-check the whole same-UID inventory after every application-PHP operation.
-        _verify_php_fpm_confinement(profile)
+        # No PHP/CLI descendant may survive any exact application command.
+        _verify_php_fpm_confinement(profile, allow_transients=False)
         return output
     _require(os.geteuid() == profile.php_fpm_uid, "runtime_probe_identity_mismatch")
     return _run_fixed(argv, cwd=cwd, timeout=timeout, maximum=maximum,
@@ -3407,6 +3430,46 @@ def _groups_line(status: str) -> list[int]:
     raise _PeerUnreadable("peer_status_unparsable")
 
 
+def _status_int(status: str, key: str, reason: str) -> int:
+    for line in status.splitlines():
+        if line.startswith(f"{key}:"):
+            value = line.split(":", 1)[1].strip()
+            if value.isdigit():
+                return int(value)
+            break
+    raise _PeerUnreadable(reason)
+
+
+def _zombie_leader_has_live_threads(pid: int, status: str) -> bool:
+    """A zombie thread-group leader may still have live worker threads and descriptors."""
+    base = CONFINEMENT_PROC_ROOT / str(pid)
+    task_root = base / "task"
+    try:
+        tids = sorted(int(name) for name in os.listdir(task_root) if name.isdigit())
+    except OSError:
+        raise _PeerUnreadable("peer_thread_group_unreadable") from None
+    if not tids or _status_int(status, "Threads", "peer_status_unparsable") != len(tids):
+        raise _PeerUnreadable("peer_thread_set_unstable")
+    for tid in tids:
+        try:
+            raw = _read_proc_bytes(task_root / str(tid) / "stat", maximum=4096)
+        except (OSError, _PeerUnreadable):
+            raise _PeerUnreadable("peer_thread_group_unreadable") from None
+        match = _STAT_RE.fullmatch(raw.rstrip(b"\n"))
+        if match is None or int(match.group(1)) != tid:
+            raise _PeerUnreadable("peer_thread_group_unreadable")
+        if match.group(3) not in {b"Z", b"X"}:
+            return True
+    try:
+        final_tids = sorted(int(name) for name in os.listdir(task_root) if name.isdigit())
+        final_status = _read_proc_bytes(base / "status", maximum=65536).decode("utf-8")
+    except (OSError, UnicodeError):
+        raise _PeerUnreadable("peer_thread_group_unreadable") from None
+    if final_tids != tids or _status_int(final_status, "Threads", "peer_status_unparsable") != len(tids):
+        raise _PeerUnreadable("peer_thread_set_unstable")
+    return False
+
+
 def _peer_label(pid: int) -> str:
     base = CONFINEMENT_PROC_ROOT / str(pid) / "attr"
     try:
@@ -3426,8 +3489,6 @@ def _inventory_pid(pid: int, service_units: frozenset[str] = frozenset()) -> Map
         status = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "status", maximum=65536).decode("utf-8")
         uids, gids = _id_line(status, "Uid"), _id_line(status, "Gid")
         groups = _groups_line(status)
-        if state in {"Z", "X"}:
-            return None  # exited; holds no files and runs no code
         base = CONFINEMENT_PROC_ROOT / str(pid)
         cgroup_text = _read_proc_bytes(base / "cgroup", maximum=65536).decode("utf-8")
         unified = [line[3:] for line in cgroup_text.splitlines() if line.startswith("0::")]
@@ -3439,6 +3500,10 @@ def _inventory_pid(pid: int, service_units: frozenset[str] = frozenset()) -> Map
         service_member = unit in service_units
         if not shared_uid and not service_member:
             return None
+        if state in {"Z", "X"}:
+            if _zombie_leader_has_live_threads(pid, status):
+                raise _PeerUnreadable("peer_zombie_leader_has_live_threads")
+            return None  # all threads are dead; no code can run or hold descriptors
         comm = _read_proc_bytes(base / "comm", maximum=256).decode("utf-8", "replace").rstrip("\n")
         cmdline = _read_proc_bytes(base / "cmdline", maximum=1_000_000)
         exe = os.readlink(base / "exe")
@@ -3859,7 +3924,7 @@ def _collect_php_fpm_confinement_observation(contract) -> Mapping[str, object]:
             "same_uid_peers": same_uid_peers, "service_members": service_members}
 
 
-def _verify_php_fpm_confinement(profile: StagingProfile) -> None:
+def _verify_php_fpm_confinement(profile: StagingProfile, *, allow_transients: bool = True) -> None:
     """Shared www-data is admitted only while the exact confinement is observed."""
     if profile.test_only:
         return
@@ -3868,7 +3933,8 @@ def _verify_php_fpm_confinement(profile: StagingProfile) -> None:
              and getattr(contract, "php_fpm_confinement", None) is not None, "php_fpm_confinement_unbound")
     try:
         observation = _collect_php_fpm_confinement_observation(contract)
-        _ENVIRONMENT_MODULE.verify_confinement_observation(contract, observation)
+        _ENVIRONMENT_MODULE.verify_confinement_observation(
+            contract, observation, allow_transients=allow_transients)
     except EnvironmentRefused as error:
         raise DeployRefused(str(error)) from None
 

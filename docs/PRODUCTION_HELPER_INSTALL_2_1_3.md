@@ -14,7 +14,7 @@ pins their bytes.
 
 | Area | 2.1.2 | 2.1.3 |
 | --- | --- | --- |
-| Privileged caller | `deploy-production` through a NOPASSWD sudoers file | Owner-controlled **root console**, direct invocation. No production sudoers rule exists. The entrypoint, controller and installer refuse any `SUDO_*`, `PKEXEC_UID` or `DOAS_USER` variable, any non-root real/effective UID/GID, and a non-isolated interpreter. |
+| Privileged caller | `deploy-production` through a NOPASSWD sudoers file | Owner-controlled **root console**, direct invocation. No production sudoers rule exists. The entrypoint, controller and installer require real/effective root and an isolated interpreter; delegation variables (`SUDO_*`, `PKEXEC_UID`, `DOAS_USER`) are rejected when present, but are only an additional signal because a root caller can clear its environment. The root console remains a trusted Owner boundary. |
 | Transfer identity | `deploy-production` | the existing `deploy` account, **untrusted and transfer-only**. No new user, group or FPM UID. |
 | Environment contract | `deployment_environment_contract.py` (schema 1, dedicated FPM UID) | `deployment_environment_contract_2_1_3.py` (policy schema 2, `www-data` 33/33 only with the exact PHP-FPM confinement binding and a passing schema-3 observation) |
 | Release admission | V3 records, exact-head artifacts, latest protected-primary SHA, CI | **unchanged** (byte-identical functions) |
@@ -252,13 +252,13 @@ sibling PHP that runs `sendmail`, `proc_open` or `exec`, then complain-mode soak
 | Artifact | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
-| `scripts/deployment_backend_v2_1_3.py` | `3ea9206491c5d2baa47c8241e7a420b2979f3ba0c32f75b3053e58c00649a901` |
+| `scripts/deployment_backend_v2_1_3.py` | `1f4071a7f9acca93a76211e20294a0efa06b00f288a1970407a5c3c8176846b2` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `55f52aa77eab7dbc592de6333e4698129735b5fa919a753140528b595692090a` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `a093d9c8f7de3f5d0cef0bdd9cee248ff0a85054a88d3e50d114796accdc897d` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `a97d3d04b2c674893a1763f9247e6e40637c305d164ded39b90a3e2981324590` |
-| `scripts/production_deploy_controller_2_1_3.py` | `e729108ca4d74189492c916b9992f181589890e7c2c39c3204e22fad2f4a63f0` |
-| `scripts/install_production_helper_2_1_3.py` | `d4bfa54ff2314d443115d28de7414b66f52ff68ea767f82cb4c972f4adba9626` |
+| helper artifact digest | `0d31fce7bc68fd78a36186f59d59d1185ce22ae12abd0eefb6a03f741b42aa93` |
+| `scripts/production_deploy_controller_2_1_3.py` | `be653c5c668736b7db7493ac27eca3eb2af60224e7735d5005693c98cc0c767f` |
+| `scripts/install_production_helper_2_1_3.py` | `fab85b5711bacee71931128c23c09073ec76fce017989cd1fdfd72c534fc6156` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.

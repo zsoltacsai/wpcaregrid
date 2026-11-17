@@ -44,7 +44,7 @@ TRANSFER_USER = "deploy"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/production/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/production/2.1.3/wpcaregrid-deploy-production-priv")
-HELPER_ARTIFACT_SHA256 = "a97d3d04b2c674893a1763f9247e6e40637c305d164ded39b90a3e2981324590"
+HELPER_ARTIFACT_SHA256 = "0d31fce7bc68fd78a36186f59d59d1185ce22ae12abd0eefb6a03f741b42aa93"
 HELPER_VERSION = "2.1.3"
 HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
 # Exact merged Workstream B package 1.0.5 binding, as compiled by the helper's
@@ -88,6 +88,12 @@ def _verify_built_assets_match_source(asset_files: dict[str, bytes], source_buil
         if not isinstance(raw, bytes) or hashlib.sha256(raw).digest() != hashlib.sha256(
                 source_build_files[name]).digest():
             raise ControllerHold("frontend_build_not_bound_to_source_tree")
+
+
+def _source_member_in_release(name: str) -> bool:
+    """One exclusion policy for both the file manifest and final archive."""
+    return (name != ".env" and not name.startswith(DEPLOYMENT_SOURCE_EXCLUDED)
+            and not name.startswith("public/build/"))
 
 
 def _run(argv, *, timeout, maximum=128_000, cwd=None, path="/usr/bin:/bin"):
@@ -373,8 +379,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                     continue
                 if not member.isfile():
                     raise ControllerHold("artifact_member_type_invalid")
-                if (member.name == ".env" or member.name.startswith(DEPLOYMENT_SOURCE_EXCLUDED)
-                        or member.name.startswith("public/build/")):
+                if not _source_member_in_release(member.name):
                     continue
                 if member.name in hashes or member.size < 0:
                     raise ControllerHold("artifact_member_invalid")
@@ -421,7 +426,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
         }
         with tarfile.open(source_tar, mode="r:") as source, tarfile.open(temporary, mode="w:") as target:
             for member in source.getmembers():
-                if not member.isfile():
+                if not member.isfile() or not _source_member_in_release(member.name):
                     continue
                 stream = source.extractfile(member)
                 if stream is None:

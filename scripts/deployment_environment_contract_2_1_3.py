@@ -860,7 +860,7 @@ def _classify_peer(peer: Mapping, helper: Mapping) -> str:
     return role
 
 
-def _verify_peers(peers: object, services: Mapping, helper: Mapping) -> None:
+def _verify_peers(peers: object, services: Mapping, helper: Mapping, *, allow_transients: bool) -> None:
     if not isinstance(peers, Mapping) or set(peers) != _PEERS_KEYS or type(peers["complete"]) is not bool \
             or not isinstance(peers["processes"], (list, tuple)) \
             or not isinstance(peers["incomplete_reasons"], (list, tuple)) \
@@ -879,6 +879,8 @@ def _verify_peers(peers: object, services: Mapping, helper: Mapping) -> None:
                 and WWW_DATA_GID not in peer["groups"]:
             raise EnvironmentRefused("confinement_observation_invalid")  # collector must list only www-data peers
         classified = _classify_peer(peer, helper)
+        if not allow_transients and classified in TRANSIENT_ROLES:
+            raise EnvironmentRefused("confinement_cli_process_survived")
         roles_seen.add(classified)
         roles_by_pid[peer["pid"]] = classified
     for role in SERVING_ROLES:
@@ -994,7 +996,8 @@ def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object,
             raise EnvironmentRefused("confinement_production_fence_marker_invalid")
 
 
-def verify_confinement_observation(contract: EnvironmentContract, observation: object) -> None:
+def verify_confinement_observation(contract: EnvironmentContract, observation: object, *,
+                                   allow_transients: bool = True) -> None:
     """Refuse unless a root-collected schema-3 observation matches the binding exactly.
 
     ``observation``::
@@ -1065,5 +1068,6 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     _verify_services(observation["services"])
     _verify_no_www_data_scheduled_jobs(observation["www_data_scheduled_jobs"])
     helper = _verify_helper(observation["helper"])
-    _verify_peers(observation["same_uid_peers"], observation["services"], helper)
+    _verify_peers(observation["same_uid_peers"], observation["services"], helper,
+                  allow_transients=allow_transients)
     _verify_service_members(observation["service_members"], observation["services"], observation["same_uid_peers"])

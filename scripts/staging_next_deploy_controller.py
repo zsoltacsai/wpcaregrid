@@ -43,6 +43,12 @@ class ControllerHold(Exception):
         self.code = code
 
 
+def _source_member_in_release(name: str) -> bool:
+    """Exclude private/ephemeral paths consistently from hashes and tar bytes."""
+    return (name != ".env" and not name.startswith(DEPLOYMENT_SOURCE_EXCLUDED)
+            and not name.startswith("public/build/"))
+
+
 def _run(argv, *, timeout, maximum=128_000, cwd=None, path="/usr/bin:/bin"):
     try:
         result = subprocess.run(argv, cwd=cwd, env={"PATH": path, "HOME": "/var/lib/wpcaregrid-deploy/staging-next",
@@ -272,7 +278,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
                     continue
                 if not member.isfile():
                     raise ControllerHold("artifact_member_type_invalid")
-                if member.name == ".env" or member.name.startswith(DEPLOYMENT_SOURCE_EXCLUDED):
+                if not _source_member_in_release(member.name):
                     continue
                 if member.name in hashes or member.size < 0:
                     raise ControllerHold("artifact_member_invalid")
@@ -319,7 +325,7 @@ def _package_release(application_sha: str, base_sha: str, *, test_only: bool = F
         }
         with tarfile.open(source_tar, mode="r:") as source, tarfile.open(temporary, mode="w:") as target:
             for member in source.getmembers():
-                if not member.isfile():
+                if not member.isfile() or not _source_member_in_release(member.name):
                     continue
                 stream = source.extractfile(member)
                 if stream is None:
