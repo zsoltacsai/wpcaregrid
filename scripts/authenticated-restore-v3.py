@@ -29,6 +29,10 @@ recorded isolated assertions only and never authorizes a migration or release.
 """
 
 import argparse
+import gzip
+import subprocess
+import select
+import time
 import datetime
 import hashlib
 import hmac
@@ -65,7 +69,8 @@ MAX_CAPTURE_AGE = datetime.timedelta(hours=72)
 MAX_RECORD_LIFETIME = datetime.timedelta(days=7)
 MAX_RESTORE_RECEIPT_AGE = datetime.timedelta(hours=24)
 MAX_MIGRATION_RECEIPT_AGE = datetime.timedelta(hours=24)
-ARCHIVE_MTIME_TOLERANCE = datetime.timedelta(seconds=2)
+CANDIDATE_GIT_STORE = Path("/var/lib/wpcaregrid/candidate.git")
+REHEARSAL_HOLD_ROOT = Path("/var/lib/wpcaregrid/rehearsal-holds")
 MAX_MIGRATION_FILES = 512
 MAX_MIGRATION_FILE_BYTES = 256 * 1024
 MIGRATION_FILE_RE = re.compile(r"[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}_[a-z0-9_]+\.php\Z")
@@ -88,11 +93,58 @@ PHASE2B_TRIGGERS = (
     "transition_v2_requests_immutable_insert",
     "transition_v2_requests_immutable_update",
 )
+
+# Exact SHA2(ACTION_STATEMENT,256) fingerprints of the reviewed pinned MySQL SQL.
+PHASE2B_TRIGGER_DEFINITIONS = {
+    "transition_history_events_immutable_delete": {
+        "action_sha256": "09e48cf4bc95c947611e33d058d374186c1f7b9dd5d659c8f9cba4b4547b648c",
+        "event": "DELETE",
+        "orientation": "ROW",
+        "table": "transition_history_events",
+        "timing": "BEFORE"
+    },
+    "transition_history_events_immutable_insert": {
+        "action_sha256": "373848dbeaca3dd3854c8bc2831a2f1beff3e8a19551a70bd5210bdc0eff99a0",
+        "event": "INSERT",
+        "orientation": "ROW",
+        "table": "transition_history_events",
+        "timing": "BEFORE"
+    },
+    "transition_history_events_immutable_update": {
+        "action_sha256": "09e48cf4bc95c947611e33d058d374186c1f7b9dd5d659c8f9cba4b4547b648c",
+        "event": "UPDATE",
+        "orientation": "ROW",
+        "table": "transition_history_events",
+        "timing": "BEFORE"
+    },
+    "transition_v2_requests_immutable_delete": {
+        "action_sha256": "041029af6c0f290168710f3e3a61bf1b06aa2c3ce021fef22cecdeacb65a7b6a",
+        "event": "DELETE",
+        "orientation": "ROW",
+        "table": "transition_v2_requests",
+        "timing": "BEFORE"
+    },
+    "transition_v2_requests_immutable_insert": {
+        "action_sha256": "734aecfd63c6669102b8a84037406bb23eaf8787194f5f2186a3c8d2bd0548cf",
+        "event": "INSERT",
+        "orientation": "ROW",
+        "table": "transition_v2_requests",
+        "timing": "BEFORE"
+    },
+    "transition_v2_requests_immutable_update": {
+        "action_sha256": "041029af6c0f290168710f3e3a61bf1b06aa2c3ce021fef22cecdeacb65a7b6a",
+        "event": "UPDATE",
+        "orientation": "ROW",
+        "table": "transition_v2_requests",
+        "timing": "BEFORE"
+    }
+}
+
 PHASE2B_DEFINER_SELECT_TABLES = (
     "deployment_transition_fences", "transition_history_events", "transition_v2_requests",
 )
 PHASE2B_CONTRACT = {"pins": PHASE2B_MIGRATION_PINS, "triggers": PHASE2B_TRIGGERS,
-                    "select_tables": PHASE2B_DEFINER_SELECT_TABLES}
+                    "select_tables": PHASE2B_DEFINER_SELECT_TABLES, "definitions": PHASE2B_TRIGGER_DEFINITIONS}
 
 RECORD_ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 IDENT_RE = re.compile(r"[A-Za-z0-9_]{1,64}\Z")
@@ -375,6 +427,7 @@ SOURCE_POLICY_SPEC = {
     "recovery_point_kind": _one_of(RECOVERY_POST_BOOTSTRAP, RECOVERY_PRE_BOOTSTRAP),
     "application": {"state": _one_of("deployed", "pre_bootstrap"),
                     "sha": lambda value: value is None or _hex(40)(value)},
+    "deployment_receipt": _text(4096), "active_release": _text(4096),
 }
 
 
@@ -448,76 +501,169 @@ CAPTURE_RECORD_SPEC = {
     "source": {"environment_id": _text(), "host_id": _text(), "schema": _rx(IDENT_RE),
                "backup_account": _rx(V2.DEFINER_RE), "server_uuid_sha256": _hex(64),
                "mysql_version": _rx(V2.MYSQL_VERSION_RE)},
-    "capture": {"started_at": _time, "finished_at": _time, "identity_observation_sha256": _hex(64)},
+    "capture": {"started_at": _time, "finished_at": _time, "identity_observation_sha256": _hex(64),
+                "deployment_receipt_sha256": _hex(64), "dump_exit_status": 0},
     "archive": {"id": _rx(V2.BACKUP_ID_RE), "size_bytes": _int(1, MAX_ARCHIVE_BYTES), "sha256": _hex(64)},
     "config_reference": CONFIG_REFERENCE_SPEC,
 }
 
 
-def capture_begin(source_policy_path, begin_path, key_path, *, owner_uid, now=None, observe=None):
-    """Record the authenticated source identity before the dump is taken."""
-    now = _now(now)
+def capture_begin(*args, **kwargs):
+    refuse("EXTERNAL_CAPTURE_DISABLED")
+
+
+def capture_finish(*args, **kwargs):
+    refuse("EXTERNAL_CAPTURE_DISABLED")
+
+
+def _validate_defaults(policy, owner_uid):
+    raw, _ = _read_protected_bytes(policy["mysql"]["defaults_file"], owner_uid=owner_uid,
+                                    maximum=64 * 1024, code="MYSQL_DEFAULTS")
+    # Included files would escape the metadata validation boundary.
+    if any(line.lstrip().startswith(b"!") for line in raw.splitlines()):
+        refuse("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN")
+    return _sha(raw)
+
+
+def observe_deployment(policy, *, owner_uid):
+    """Observe a protected successful-deployment receipt and the active release
+    symlink. The SHA remains a deployment-system attestation, not a DB value."""
+    receipt, digest = V2.read_protected_json(policy["deployment_receipt"], owner_uid=owner_uid,
+                                             maximum=MAX_RECORD_BYTES)
+    _check(receipt, {"schema_version": 1, "result": "PASS", "application_sha": _hex(40),
+                     "environment_id": _text(), "host_id": _text(), "release_path": _text(4096)},
+           "DEPLOYMENT_RECEIPT_INVALID")
+    active = Path(policy["active_release"])
+    release = Path(receipt["release_path"])
+    if not active.is_absolute() or not release.is_absolute():
+        refuse("ACTIVE_RELEASE_INVALID")
+    V2._check_protected_path_parents(active, owner_uid=owner_uid)
+    V2._check_protected_path_parents(release / "identity", owner_uid=owner_uid)
+    try:
+        info = active.lstat()
+        if (not stat.S_ISLNK(info.st_mode) or info.st_uid != owner_uid
+                or active.resolve(strict=True) != release or release.name != receipt["application_sha"]):
+            refuse("ACTIVE_RELEASE_MISMATCH")
+    except OSError:
+        refuse("ACTIVE_RELEASE_INVALID")
+    if (policy["application"] != {"state": "deployed", "sha": receipt["application_sha"]}
+            or receipt["environment_id"] != policy["environment_id"] or receipt["host_id"] != policy["host_id"]):
+        refuse("DEPLOYMENT_RECEIPT_BINDING_MISMATCH")
+    identity, _ = V2.read_protected_json(release / ".wpcg-release.json", owner_uid=owner_uid,
+                                          maximum=MAX_RECORD_BYTES)
+    if identity != {"application_sha": receipt["application_sha"], "deployment_receipt_sha256": digest}:
+        refuse("ACTIVE_RELEASE_IDENTITY_MISMATCH")
+    return digest
+
+
+def _bounded_process(argv, consume, *, maximum, timeout=300):
+    process = None
+    total = diagnostic = 0
+    try:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, env={**V2._mysql_child_env(),
+                                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                                   "GIT_NO_REPLACE_OBJECTS": "1", "HOME": "/nonexistent"}, close_fds=True)
+        deadline = time.monotonic() + timeout
+        streams = {process.stdout.fileno(): True, process.stderr.fileno(): False}
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                refuse("CAPTURE_PROCESS_TIMEOUT")
+            ready, _, _ = select.select(list(streams), [], [], min(0.5, remaining))
+            for fd in ready:
+                block = os.read(fd, 65536)
+                if not block:
+                    del streams[fd]
+                elif streams[fd]:
+                    total += len(block)
+                    if total > maximum:
+                        refuse("CAPTURE_PROCESS_SIZE_LIMIT")
+                    consume(block)
+                else:
+                    diagnostic += len(block)
+                    if diagnostic > 16384:
+                        refuse("CAPTURE_PROCESS_DIAGNOSTIC_LIMIT")
+        if process.wait(timeout=max(.1, deadline - time.monotonic())) != 0:
+            refuse("CAPTURE_PROCESS_FAILED")
+    except (OSError, subprocess.TimeoutExpired):
+        refuse("CAPTURE_PROCESS_FAILED")
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdout.close()
+            process.stderr.close()
+    if total == 0:
+        refuse("CAPTURE_PROCESS_EMPTY")
+
+
+def capture(source_policy_path, archive_path, archive_id, config_reference_path, record_path,
+            key_path, *, owner_uid, now=None, observe=None):
+    started = _now(now)
     key = load_signing_key(key_path, owner_uid=owner_uid)
-    policy, policy_sha = V2.read_protected_json(source_policy_path, owner_uid=owner_uid, maximum=32 * 1024)
+    policy, policy_sha = V2.read_protected_json(source_policy_path, owner_uid=owner_uid, maximum=32768)
     source_policy_object(policy)
-    _require_absent(begin_path)
-    observation = (observe or observe_source_identity)(policy)
-    _check(observation, OBSERVATION_SPEC, "SOURCE_IDENTITY_MISMATCH")
-    check_source_observation(policy, observation)
-    body = {"schema_version": 1, "kind": "wpcg_capture_begin", "record_id": secrets.token_hex(16),
-            "started_at": _iso(now), "expires_at": _iso(now + MAX_CAPTURE_DURATION),
-            "source_policy_sha256": policy_sha, "observation": observation}
-    return _write_signed(begin_path, body, key, PURPOSE_CAPTURE_BEGIN, owner_uid=owner_uid)
-
-
-def _read_archive(path, *, owner_uid):
-    raw, info = _read_protected_bytes(path, owner_uid=owner_uid, maximum=MAX_ARCHIVE_BYTES, code="ARCHIVE")
-    if not raw:
-        refuse("ARCHIVE_EMPTY")
-    digest = _sha(raw)
-    V2.decode_verified_archive(raw, digest)  # gzip integrity, bounded expansion, no trailing data
-    return len(raw), digest, datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc)
-
-
-def capture_finish(source_policy_path, begin_path, archive_path, archive_id, config_reference_path,
-                   record_path, key_path, *, owner_uid, now=None, observe=None):
-    """Re-observe the source, bind the archive and issue the authenticated record."""
-    now = _now(now)
-    key = load_signing_key(key_path, owner_uid=owner_uid)
-    policy, policy_sha = V2.read_protected_json(source_policy_path, owner_uid=owner_uid, maximum=32 * 1024)
-    source_policy_object(policy)
-    begin, _begin_sha = _load_signed(begin_path, key, PURPOSE_CAPTURE_BEGIN, CAPTURE_BEGIN_SPEC,
-                                     owner_uid=owner_uid, code="CAPTURE_BEGIN_INVALID")
-    started, window_end = _utc(begin["started_at"]), _utc(begin["expires_at"])
-    if begin["source_policy_sha256"] != policy_sha:
-        refuse("CAPTURE_POLICY_CHANGED")
-    if now > window_end or now < started:
-        refuse("CAPTURE_WINDOW_EXPIRED")
-    if not isinstance(archive_id, str) or not V2.BACKUP_ID_RE.fullmatch(archive_id):
+    if policy["application"]["state"] != "deployed":
+        refuse("PRE_BOOTSTRAP_CAPTURE_UNSUPPORTED")
+    defaults_sha = _validate_defaults(policy, owner_uid)
+    deployment_sha = observe_deployment(policy, owner_uid=owner_uid)
+    _require_absent(archive_path, record_path)
+    if not V2.BACKUP_ID_RE.fullmatch(archive_id):
         refuse("ARCHIVE_ID_INVALID")
-    reference, _ref_sha = V2.read_protected_json(config_reference_path, owner_uid=owner_uid, maximum=MAX_RECORD_BYTES)
+    reference, _ = V2.read_protected_json(config_reference_path, owner_uid=owner_uid, maximum=MAX_RECORD_BYTES)
     validate_config_recovery_reference(reference)
-    _require_absent(record_path)
-    size, archive_sha, mtime = _read_archive(archive_path, owner_uid=owner_uid)
-    if mtime < started - ARCHIVE_MTIME_TOLERANCE or mtime > now + ARCHIVE_MTIME_TOLERANCE:
-        refuse("ARCHIVE_OUTSIDE_CAPTURE_WINDOW")
     observation = (observe or observe_source_identity)(policy)
     _check(observation, OBSERVATION_SPEC, "SOURCE_IDENTITY_MISMATCH")
     check_source_observation(policy, observation)
-    if observation != begin["observation"]:
+    archive = Path(archive_path)
+    V2._check_protected_path_parents(archive, owner_uid=owner_uid)
+    argv = ["/usr/bin/mysqldump", "--defaults-file=" + policy["mysql"]["defaults_file"],
+            "--protocol=tcp", "--host=" + policy["mysql"]["host"], "--port=" + str(policy["mysql"]["port"]),
+            "--single-transaction", "--skip-lock-tables", "--quick", "--no-tablespaces",
+            "--set-gtid-purged=OFF", "--hex-blob", "--default-character-set=utf8mb4",
+            "--triggers", "--skip-routines", "--skip-events", "--", policy["schema"]]
+    fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        os.fchown(output.fileno(), owner_uid, -1)
+        os.fchmod(output.fileno(), 0o600)
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed:
+            def consume(block):
+                compressed.write(block)
+                if output.tell() > MAX_ARCHIVE_BYTES:
+                    refuse("ARCHIVE_SIZE_LIMIT")
+            _bounded_process(argv, consume, maximum=V2.MAX_UNCOMPRESSED_SQL_BYTES)
+        output.flush()
+        os.fsync(output.fileno())
+    _fsync_directory(archive.parent)
+    raw, _ = _read_protected_bytes(archive, owner_uid=owner_uid, maximum=MAX_ARCHIVE_BYTES, code="ARCHIVE")
+    V2.decode_verified_archive(raw, _sha(raw))
+    after = (observe or observe_source_identity)(policy)
+    check_source_observation(policy, after)
+    if observation != after:
         refuse("SOURCE_IDENTITY_CHANGED_DURING_CAPTURE")
+    if (_validate_defaults(policy, owner_uid) != defaults_sha
+            or observe_deployment(policy, owner_uid=owner_uid) != deployment_sha):
+        refuse("SOURCE_DEPLOYMENT_CHANGED_DURING_CAPTURE")
+    _, current_policy_sha = V2.read_protected_json(source_policy_path, owner_uid=owner_uid, maximum=32768)
+    if current_policy_sha != policy_sha:
+        refuse("CAPTURE_POLICY_CHANGED")
+    finished = _now(None)
+    if finished < started or finished - started > MAX_CAPTURE_DURATION:
+        refuse("CAPTURE_INTERVAL_INVALID")
     body = {
-        "schema_version": 1, "kind": "wpcg_capture_record", "record_id": begin["record_id"],
-        "issued_at": _iso(now), "expires_at": _iso(now + MAX_RECORD_LIFETIME),
+        "schema_version": 1, "kind": "wpcg_capture_record", "record_id": secrets.token_hex(16),
+        "issued_at": _iso(finished), "expires_at": _iso(finished + MAX_RECORD_LIFETIME),
         "source_policy_sha256": policy_sha, "recovery_point_kind": policy["recovery_point_kind"],
         "application": policy["application"],
         "source": {"environment_id": policy["environment_id"], "host_id": policy["host_id"],
                    "schema": policy["schema"], "backup_account": observation["current_user"],
-                   "server_uuid_sha256": observation["server_uuid_sha256"],
-                   "mysql_version": observation["mysql_version"]},
-        "capture": {"started_at": begin["started_at"], "finished_at": _iso(now),
-                    "identity_observation_sha256": _sha(_canonical(observation))},
-        "archive": {"id": archive_id, "size_bytes": size, "sha256": archive_sha},
+                   "server_uuid_sha256": observation["server_uuid_sha256"], "mysql_version": observation["mysql_version"]},
+        "capture": {"started_at": _iso(started), "finished_at": _iso(finished),
+                    "identity_observation_sha256": _sha(_canonical(observation)),
+                    "deployment_receipt_sha256": deployment_sha, "dump_exit_status": 0},
+        "archive": {"id": archive_id, "size_bytes": len(raw), "sha256": _sha(raw)},
         "config_reference": reference,
     }
     _check(body, CAPTURE_RECORD_SPEC, "CAPTURE_RECORD_INVALID")
@@ -689,6 +835,7 @@ def restore_authenticated(manifest_path, policy_path, config_path, receipt_path,
     capture, capture_sha = verify_capture_record(capture_path, key, owner_uid=owner_uid, now=now)
     manifest, manifest_sha, policy, policy_sha = V2.verify_manifest_and_policy(
         manifest_path, policy_path, owner_uid=owner_uid)
+    _validate_defaults(policy, owner_uid)
     verify_config_reference_against_config(capture["config_reference"], config_path, owner_uid=owner_uid)
     bound = bind_capture_to_manifest(capture, manifest, policy)
     authenticated_path = _auth_path(receipt_path)
@@ -707,6 +854,7 @@ def restore_authenticated(manifest_path, policy_path, config_path, receipt_path,
         # schema through the v2 owner-bound cleanup, or leave an explicit HOLD.
         authenticated_path_obj = Path(authenticated_path)
         try:
+            _validate_defaults(policy, owner_uid)
             V2._cleanup_restore_impl(manifest_path, policy_path, receipt_path, owner_uid=owner_uid)
             authenticated_path_obj.unlink(missing_ok=True)
         except BaseException:
@@ -738,6 +886,7 @@ def cleanup_authenticated(manifest_path, policy_path, receipt_path, key_path, *,
         refuse("CLEANUP_RECEIPT_BINDING_INVALID")
     cleanup_path = _auth_path(receipt_path, ".authenticated-cleanup.json")
     _require_absent(cleanup_path)
+    _validate_defaults(policy, owner_uid)
     V2._cleanup_restore_impl(manifest_path, policy_path, receipt_path, owner_uid=owner_uid)
     body = {"schema_version": 1, "kind": "wpcg_authenticated_restore_cleanup", "result": "PASS",
             "completed_at": _iso(_now(None)), "restore_receipt_sha256": receipt_sha,
@@ -751,6 +900,9 @@ def cleanup_authenticated(manifest_path, policy_path, receipt_path, key_path, *,
 # --------------------------------------------------------------------------
 # Least-privilege account observation.
 # --------------------------------------------------------------------------
+
+APP_SCHEMA_PRIVILEGES = frozenset({"select", "insert", "update", "delete"})
+DEFINER_SCHEMA_PRIVILEGES = frozenset({"select", "trigger"})
 
 FORBIDDEN_PRIVILEGES = frozenset({
     "super", "file", "grant option", "create user", "reload", "shutdown", "process", "all", "all privileges",
@@ -768,7 +920,7 @@ def _split_grant(line):
     return privileges, match.group(2), bool(match.group(4))
 
 
-def account_privilege_report(policy, schema, account, *, allow_schema_privileges):
+def account_privilege_report(policy, schema, account, *, allow_schema_privileges, allowed_privileges=APP_SCHEMA_PRIVILEGES):
     """Observe an account's grants. Global privileges must be exactly USAGE; any
     schema-level grant must stay inside ``schema`` and avoid forbidden privileges."""
     if not V2.DEFINER_RE.fullmatch(account) or not V2.TARGET_RE.fullmatch(schema):
@@ -793,6 +945,8 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
             if privileges != ("usage",):
                 refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
         elif obj.split(".", 1)[0] == scoped and "." in obj:
+            if not set(privileges) <= allowed_privileges:
+                refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
             schema_privileges.update(privileges)
         else:
             refuse("ACCOUNT_SCOPE_EXCESSIVE")
@@ -875,37 +1029,45 @@ MIGRATION_FAILURE_SPEC = {
 }
 
 
-def candidate_migration_inventory(directory, *, owner_uid):
-    """Hash every migration file of the exact candidate. Bounded, non-recursive,
-    regular files only, no symlinks; stops on any anomaly."""
-    directory = Path(directory)
-    if not directory.is_absolute() or directory != Path(os.path.normpath(str(directory))):
-        refuse("CANDIDATE_MIGRATIONS_PATH_INVALID")
-    try:
-        entries = sorted(os.listdir(directory))
-    except OSError:
-        refuse("CANDIDATE_MIGRATIONS_UNAVAILABLE")
+def candidate_migration_inventory(application_sha, *, owner_uid):
+    """Read exact blobs from a fixed, protected bare object store; never a worktree."""
+    if not _hex(40)(application_sha):
+        refuse("CANDIDATE_SHA_INVALID")
+    store = CANDIDATE_GIT_STORE
+    V2._check_protected_path_parents(store / "objects", owner_uid=owner_uid)
+    for root, dirs, files in os.walk(store, followlinks=False):
+        for name in dirs + files:
+            path = Path(root) / name
+            info = path.lstat()
+            if (info.st_uid != owner_uid or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode)
+                    or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode))):
+                refuse("CANDIDATE_STORE_UNSAFE")
+    if any((store / name).exists() for name in ("objects/info/alternates", "info/grafts", "shallow")):
+        refuse("CANDIDATE_STORE_UNSAFE")
+    def git(*args, maximum):
+        chunks = []
+        _bounded_process(["/usr/bin/git", "--git-dir=" + str(store), *args], chunks.append, maximum=maximum)
+        return b"".join(chunks)
+    if git("rev-parse", "--is-bare-repository", maximum=64) != b"true\n":
+        refuse("CANDIDATE_STORE_UNSAFE")
+    if git("cat-file", "-t", application_sha, maximum=64) != b"commit\n":
+        refuse("CANDIDATE_SHA_INVALID")
+    tree = git("ls-tree", "-z", application_sha + ":database/migrations", maximum=MAX_MIGRATION_FILES * 256)
+    entries = tree.rstrip(b"\0").split(b"\0")
     if not entries or len(entries) > MAX_MIGRATION_FILES:
         refuse("CANDIDATE_MIGRATIONS_COUNT_INVALID")
     inventory = []
     for entry in entries:
-        if not MIGRATION_FILE_RE.fullmatch(entry):
-            refuse("CANDIDATE_MIGRATION_NAME_INVALID")
         try:
-            descriptor = os.open(directory / entry, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
-        except OSError:
-            refuse("CANDIDATE_MIGRATION_UNAVAILABLE")
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MIGRATION_FILE_BYTES:
-                refuse("CANDIDATE_MIGRATION_SIZE_OR_TYPE_INVALID")
-            data = os.read(descriptor, MAX_MIGRATION_FILE_BYTES + 1)
-            if len(data) > MAX_MIGRATION_FILE_BYTES:
-                refuse("CANDIDATE_MIGRATION_SIZE_OR_TYPE_INVALID")
-        finally:
-            os.close(descriptor)
-        inventory.append({"name": entry[:-4], "sha256": _sha(data)})
-    return inventory
+            metadata, name = entry.decode("ascii").split("\t")
+            mode, kind, oid = metadata.split(" ")
+        except (ValueError, UnicodeError):
+            refuse("CANDIDATE_TREE_INVALID")
+        if mode != "100644" or kind != "blob" or not MIGRATION_FILE_RE.fullmatch(name):
+            refuse("CANDIDATE_TREE_INVALID")
+        data = git("cat-file", "blob", oid, maximum=MAX_MIGRATION_FILE_BYTES)
+        inventory.append({"name": name[:-4], "sha256": _sha(data)})
+    return sorted(inventory, key=lambda item: item["name"])
 
 
 def _inventory_sha(inventory):
@@ -944,31 +1106,46 @@ def _check_ledger_against_candidate(before, after, candidate_names, pins, invent
     return pair_present
 
 
-def _check_phase2b_triggers(triggers, definer, pair_present, trigger_names):
+def _check_phase2b_triggers(triggers, definer, pair_present, trigger_names, definitions=None):
     names = [trigger["name"] for trigger in triggers]
     complete = sorted(names) == sorted(trigger_names) and all(t["definer"] == definer for t in triggers)
+    definitions = PHASE2B_TRIGGER_DEFINITIONS if definitions is None else definitions
+    complete = complete and all(t == {"name": t["name"], "definer": definer, **definitions.get(t["name"], {})}
+                                for t in triggers)
     if pair_present and not complete:
         refuse("PHASE2B_TRIGGER_INVENTORY_INCOMPLETE")
     return complete
 
 
-def _migration_failure_path(out_path):
-    return _auth_path(out_path, ".failed.json")
+def _fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _migration_failure_path(clone):
+    identity = {"server": clone["destination"]["server_uuid_sha256"],
+                "schema": clone["destination"]["target_schema"]}
+    return REHEARSAL_HOLD_ROOT / (_sha(_canonical(identity)) + ".json")
 
 
 def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_manifest_path, policy_path,
-                             rehearsal_inputs_path, migrations_dir, out_path, key_path, *, owner_uid, now=None,
+                             rehearsal_inputs_path, out_path, key_path, *, owner_uid, now=None,
                              contract=None):
     now = _now(now)
     contract = PHASE2B_CONTRACT if contract is None else contract
     key = load_signing_key(key_path, owner_uid=owner_uid)
-    failure_path = _migration_failure_path(out_path)
     _require_absent(out_path)
-    if Path(failure_path).exists():
-        refuse("FAILED_REHEARSAL_HOLD_PRESENT")  # a prior failure must be reviewed; never blind-retry
     baseline, baseline_sha = _load_chained_restore_receipt(baseline_receipt_path, key, owner_uid=owner_uid, now=now)
     clone, clone_sha = _load_chained_restore_receipt(clone_receipt_path, key, owner_uid=owner_uid, now=now,
                                                      capture_sha256=baseline["capture_record_sha256"])
+    failure_path = _migration_failure_path(clone)
+    if failure_path.exists() or failure_path.is_symlink():
+        refuse("FAILED_REHEARSAL_HOLD_PRESENT")
+    _write_signed(failure_path, {"result": "IN_PROGRESS", "clone_receipt_sha256": clone_sha},
+                  key, PURPOSE_MIGRATION_FAILURE, owner_uid=owner_uid)
     manifest_raw, manifest_sha = V2.read_protected_json(clone_manifest_path, owner_uid=owner_uid, maximum=256 * 1024)
     policy_raw, policy_sha = V2.read_protected_json(policy_path, owner_uid=owner_uid, maximum=32 * 1024)
     # Receipt times are second-truncated; evaluate the manifest as of restore completion (+1s).
@@ -997,7 +1174,7 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     if not (_utc(clone["completed_at"]) <= window["granted_at"] <= window["revoked_at"]
             <= window["sessions_terminated_at"] <= now):
         refuse("DBA_WINDOW_ORDER_INVALID")
-    inventory = candidate_migration_inventory(migrations_dir, owner_uid=owner_uid)
+    inventory = candidate_migration_inventory(inputs["candidate"]["application_sha"], owner_uid=owner_uid)
     candidate_names = [item["name"] for item in inventory]
     before = baseline["observed"]["migrations"]
     selected = inputs["definer_select_tables"]
@@ -1005,6 +1182,7 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
         refuse("DEFINER_SELECT_TABLES_INVALID")
     clone_schema, baseline_schema = clone["destination"]["target_schema"], baseline["destination"]["target_schema"]
 
+    _validate_defaults(policy, owner_uid)
     try:
         identity = V2._mysql_identity(policy)
         if (_sha(identity["server_uuid"].encode("ascii", "replace")) != clone["destination"]["server_uuid_sha256"]
@@ -1037,13 +1215,14 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
             refuse("MIGRATION_LEDGER_INVALID")  # listed order must hash to the observed ledger
         _check_checkpoints(before, pending, inputs["checkpoints"], schema_state["schema_sha256"])
         triggers = schema_state["triggers"]
-        trigger_complete = _check_phase2b_triggers(triggers, accounts["definer"], pair_present, contract["triggers"])
+        trigger_complete = _check_phase2b_triggers(triggers, accounts["definer"], pair_present, contract["triggers"], contract.get("definitions"))
         if pair_present and tuple(selected) != tuple(contract["select_tables"]):
             refuse("PHASE2B_DEFINER_SELECT_TABLES_UNEXPECTED")
         if any(trigger["definer"] != accounts["definer"] for trigger in triggers):
             refuse("TRIGGER_DEFINER_UNEXPECTED")
         definer_lifecycle = V2.verify_definer_lifecycle(policy, clone_schema, accounts["definer"], selected)
-        definer_report = account_privilege_report(policy, clone_schema, accounts["definer"], allow_schema_privileges=True)
+        definer_report = account_privilege_report(policy, clone_schema, accounts["definer"], allow_schema_privileges=True,
+                                                   allowed_privileges=DEFINER_SCHEMA_PRIVILEGES)
         app_report = account_privilege_report(policy, clone_schema, accounts["app"], allow_schema_privileges=True)
         if not app_report["schema_privileges"]:
             refuse("APP_ACCOUNT_GRANTS_MISSING")
@@ -1058,9 +1237,8 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
             refuse("ELEVATED_SESSIONS_STILL_OPEN")
         if V2._mysql_identity(policy) != identity:
             refuse("DESTINATION_MYSQL_SETTINGS_CHANGED_DURING_REHEARSAL")
-    except RestoreRefused as error:
-        _record_failure(failure_path, str(error), clone_sha, policy_sha, clone_schema, key, owner_uid)
-        raise
+    except BaseException:
+        raise  # Durable IN_PROGRESS marker deliberately survives every failure.
     body = {
         "schema_version": 1, "kind": "wpcg_migration_rehearsal_receipt", "receipt_id": secrets.token_hex(16),
         "result": "PASS", "issued_at": _iso(now), "expires_at": _iso(now + MAX_MIGRATION_RECEIPT_AGE),
@@ -1096,6 +1274,10 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
     _check(body, MIGRATION_RECEIPT_SPEC, "MIGRATION_RECEIPT_INVALID")
     verify_migration_consistency(body, contract=contract)
     _write_signed(out_path, body, key, PURPOSE_MIGRATION_RECEIPT, owner_uid=owner_uid)
+    verify_migration_receipt(out_path, key, owner_uid=owner_uid, now=now, contract=contract,
+                             expect_clone_receipt_sha256=clone_sha)
+    failure_path.unlink()
+    _fsync_directory(failure_path.parent)
     return body
 
 
@@ -1110,19 +1292,6 @@ def _observe_tables(policy, schema):
     if not tables or len(tables) > 256 or any(not V2.TABLE_RE.fullmatch(name) for name in tables):
         refuse("TABLE_INVENTORY_INVALID")
     return tables
-
-
-def _record_failure(path, code, clone_sha, policy_sha, clone_schema, key, owner_uid):
-    """Persist a signed HOLD marker so a failed rehearsal cannot be blindly retried."""
-    body = {"schema_version": 1, "kind": "wpcg_migration_rehearsal_failure", "result": "HOLD",
-            "code": code[:96] if _text(96)(code) else "UNKNOWN", "failed_at": _iso(_now(None)),
-            "clone_receipt_sha256": clone_sha, "destination_policy_sha256": policy_sha,
-            "clone_schema": clone_schema}
-    try:
-        _check(body, MIGRATION_FAILURE_SPEC, "MIGRATION_FAILURE_RECORD_INVALID")
-        _write_signed(path, body, key, PURPOSE_MIGRATION_FAILURE, owner_uid=owner_uid)
-    except RestoreRefused:
-        pass  # the original refusal still propagates; the HOLD file is best-effort evidence
 
 
 def verify_migration_consistency(body, *, contract=None):
@@ -1148,11 +1317,18 @@ def verify_migration_consistency(body, *, contract=None):
             or body["observed"]["definer"]["account"] != attested["definer"]
             or body["observed"]["dba_executor"]["account"] != attested["dba_executor"]):
         refuse("ACCOUNT_IDENTITY_SEPARATION_INVALID")
+    for role, allowed in (("app_account", APP_SCHEMA_PRIVILEGES), ("definer", DEFINER_SCHEMA_PRIVILEGES),
+                          ("dba_executor", DEFINER_SCHEMA_PRIVILEGES if attested["dba_executor"] == attested["definer"] else frozenset())):
+        privileges = body["observed"][role]["schema_privileges"]
+        if privileges != sorted(set(privileges)) or not set(privileges) <= allowed:
+            refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
+    if not body["observed"]["app_account"]["schema_privileges"]:
+        refuse("APP_ACCOUNT_GRANTS_MISSING")
     if body["observed"]["definer"]["schema_privileges"] != sorted(set(body["observed"]["definer"]["schema_privileges"])):
         refuse("MIGRATION_RECEIPT_ACCOUNT_INVALID")
     if any(trigger["definer"] != attested["definer"] for trigger in body["triggers"]):
         refuse("TRIGGER_DEFINER_UNEXPECTED")
-    complete = _check_phase2b_triggers(body["triggers"], attested["definer"], pair_present, trigger_names)
+    complete = _check_phase2b_triggers(body["triggers"], attested["definer"], pair_present, trigger_names, contract.get("definitions"))
     if pair_present and tuple(body["observed"]["definer"]["select_tables"]) != tuple(contract["select_tables"]):
         refuse("PHASE2B_DEFINER_SELECT_TABLES_UNEXPECTED")
     if (body["phase2b"] != {"pair_in_candidate": pair_present, "trigger_inventory_complete": complete,
@@ -1189,11 +1365,11 @@ def verify_migration_receipt(path, key, *, owner_uid, now=None, contract=None, e
 def main(argv=None):
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("action", choices=(
-        "validate-config-reference", "capture-begin", "capture-finish", "verify-capture", "restore", "cleanup",
+        "validate-config-reference", "capture", "verify-capture", "restore", "cleanup",
         "verify-restore-receipt", "migration-receipt", "verify-migration-receipt"))
-    for name in ("source-policy", "begin", "archive", "archive-id", "config-reference", "capture-record",
+    for name in ("source-policy", "archive", "archive-id", "config-reference", "capture-record",
                  "signing-key", "release-manifest", "destination-policy", "config-path", "receipt",
-                 "baseline-receipt", "clone-receipt", "clone-manifest", "rehearsal-inputs", "migrations-dir",
+                 "baseline-receipt", "clone-receipt", "clone-manifest", "rehearsal-inputs",
                  "output", "migration-receipt"):
         parser.add_argument("--" + name)
     args = parser.parse_args(argv)
@@ -1214,14 +1390,9 @@ def main(argv=None):
             if args.config_path:
                 verify_config_reference_against_config(reference, args.config_path, owner_uid=0)
             result = {"config_recovery_reference": "VALID", "reference_id": reference["reference_id"]}
-        elif args.action == "capture-begin":
-            policy, begin, key = need("source-policy", "begin", "signing-key")
-            result = {"capture_begin_sha256": capture_begin(policy, begin, key, owner_uid=0)}
-        elif args.action == "capture-finish":
-            policy, begin, archive, archive_id, reference, record, key = need(
-                "source-policy", "begin", "archive", "archive-id", "config-reference", "capture-record", "signing-key")
-            result = {"capture_record_sha256": capture_finish(policy, begin, archive, archive_id, reference,
-                                                              record, key, owner_uid=0)}
+        elif args.action == "capture":
+            result = {"capture_record_sha256": capture(*need("source-policy", "archive", "archive-id",
+                      "config-reference", "capture-record", "signing-key"), owner_uid=0)}
         elif args.action == "verify-capture":
             record, key = need("capture-record", "signing-key")
             body, file_sha = verify_capture_record(record, load_signing_key(key, owner_uid=0), owner_uid=0)
@@ -1239,7 +1410,7 @@ def main(argv=None):
         elif args.action == "migration-receipt":
             result = create_migration_receipt(*need(
                 "baseline-receipt", "clone-receipt", "clone-manifest", "destination-policy", "rehearsal-inputs",
-                "migrations-dir", "output", "signing-key"), owner_uid=0)
+                "output", "signing-key"), owner_uid=0)
         else:
             receipt, key = need("migration-receipt", "signing-key")
             body, file_sha = verify_migration_receipt(receipt, load_signing_key(key, owner_uid=0), owner_uid=0)

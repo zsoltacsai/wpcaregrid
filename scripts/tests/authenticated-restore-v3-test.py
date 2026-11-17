@@ -16,7 +16,9 @@ import io
 import json
 import os
 import secrets
+import re
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -103,7 +105,18 @@ class World:
             "server_uuid_sha256": sha(SOURCE_UUID),
             "mysql": {"host": "127.0.0.1", "port": 3308, "defaults_file": self.policy["mysql"]["defaults_file"]},
             "recovery_point_kind": V3.RECOVERY_POST_BOOTSTRAP,
-            "application": {"state": "deployed", "sha": "d" * 40}}
+            "application": {"state": "deployed", "sha": "d" * 40},
+            "deployment_receipt": str(self.dir / "deployment.json"), "active_release": str(self.dir / "current")}
+        release = self.dir / ("d" * 40)
+        release.mkdir()
+        (self.dir / "current").symlink_to(release)
+        write_json(self.dir / "deployment.json", {"schema_version": 1, "result": "PASS",
+                   "application_sha": "d" * 40, "environment_id": "source-env", "host_id": "source-host",
+                   "release_path": str(release)})
+        write_json(release / ".wpcg-release.json", {"application_sha": "d" * 40,
+                   "deployment_receipt_sha256": hashlib.sha256((self.dir / "deployment.json").read_bytes()).hexdigest()})
+        Path(self.source_policy["mysql"]["defaults_file"]).write_text("[client]\nuser=synthetic\n")
+        os.chmod(self.source_policy["mysql"]["defaults_file"], 0o600)
         self.source_policy_path = self.dir / "source-policy.json"
         write_json(self.source_policy_path, self.source_policy)
         self.begin_path = self.dir / "capture-begin.json"
@@ -115,11 +128,23 @@ class World:
         os.utime(self.archive_path, (stamp, stamp))
 
     def capture(self, observe=observe_ok):
-        V3.capture_begin(self.source_policy_path, self.begin_path, self.key_path, owner_uid=OWNER,
-                         now=self.begin_at, observe=observe_ok)
-        V3.capture_finish(self.source_policy_path, self.begin_path, self.archive_path,
-                          self.manifest["backup"]["id"], self.reference_path, self.record_path, self.key_path,
-                          owner_uid=OWNER, now=self.finish_at, observe=observe)
+        sql = gzip.decompress(self.archive_path.read_bytes())
+        self.archive_path.unlink()
+        observations = iter((observe_ok(), observe(self.source_policy)))
+        def dump(argv, consume, **kw):
+            assert argv[0] == "/usr/bin/mysqldump"
+            assert argv[1] == "--defaults-file=" + self.source_policy["mysql"]["defaults_file"]
+            assert "--single-transaction" in argv and "--set-gtid-purged=OFF" in argv
+            assert argv[-2:] == ["--", "wpcaregrid"]
+            consume(sql)
+        with (mock.patch.object(V3, "_bounded_process", side_effect=dump),
+              mock.patch.object(V3, "_now", side_effect=lambda n: n or self.finish_at)):
+            V3.capture(self.source_policy_path, self.archive_path, self.manifest["backup"]["id"],
+                       self.reference_path, self.record_path, self.key_path, owner_uid=OWNER,
+                       now=self.begin_at, observe=lambda p: next(observations))
+        self.manifest["backup"].update(sha256=hashlib.sha256(self.archive_path.read_bytes()).hexdigest(),
+                                      size_bytes=self.archive_path.stat().st_size)
+        write_json(self.manifest_path, self.manifest)
         return self.record_path
 
     def restore(self, receipt_name="restore-receipt.json", manifest_path=None, now=None):
@@ -217,83 +242,29 @@ def test_capture_record_binds_identity_without_raw_uuid_or_secrets():
         assert record["capture"]["started_at"] < record["capture"]["finished_at"]
         assert SOURCE_UUID not in text and "APP_KEY" not in text and "base64:" not in text
         assert V3.verify_document(read_json(world.record_path), world.key, "capture-record")
-        expect("RECEIPT_ALREADY_EXISTS", V3.capture_begin, world.source_policy_path, world.begin_path,
+        expect("EXTERNAL_CAPTURE_DISABLED", V3.capture_begin, world.source_policy_path, world.begin_path,
                world.key_path, owner_uid=OWNER, observe=observe_ok)
 
 
 def test_capture_refuses_identity_drift_and_wrong_identity():
     with tempfile.TemporaryDirectory() as directory:
         world = World(directory)
-        for field, value in (("current_user", "other@localhost"), ("database", "other"),
-                             ("server_uuid_sha256", sha("someone-else")), ("mysql_version", "5.7.1"),
-                             ("binlog_format", "STATEMENT"), ("trust_function_creators", "1")):
-            observed = observe_ok() | {field: value}
-            expect("SOURCE_IDENTITY_MISMATCH", V3.capture_begin, world.source_policy_path, world.begin_path,
-                   world.key_path, owner_uid=OWNER, now=world.begin_at, observe=lambda _p, o=observed: o)
-            assert not world.begin_path.exists()
-        V3.capture_begin(world.source_policy_path, world.begin_path, world.key_path, owner_uid=OWNER,
-                         now=world.begin_at, observe=observe_ok)
-        # Same account/database but a different server UUID appearing during capture.
-        policy = world.source_policy | {"server_uuid_sha256": sha("replacement")}
-        drifted = observe_ok() | {"server_uuid_sha256": sha("replacement")}
-        write_json(world.source_policy_path, policy)
-        expect("CAPTURE_POLICY_CHANGED", V3.capture_finish, world.source_policy_path, world.begin_path,
-               world.archive_path, "synthetic-backup-v1", world.reference_path, world.record_path,
-               world.key_path, owner_uid=OWNER, now=world.finish_at, observe=lambda _p: drifted)
-        write_json(world.source_policy_path, world.source_policy)
-        later = observe_ok() | {"mysql_version": "8.4.12"}
-        expect("SOURCE_IDENTITY_CHANGED_DURING_CAPTURE", V3.capture_finish, world.source_policy_path,
-               world.begin_path, world.archive_path, "synthetic-backup-v1", world.reference_path,
-               world.record_path, world.key_path, owner_uid=OWNER, now=world.finish_at, observe=lambda _p: later)
+        expect("SOURCE_IDENTITY_CHANGED_DURING_CAPTURE", world.capture,
+               observe=lambda p: observe_ok() | {"mysql_version": "8.4.12"})
         assert not world.record_path.exists()
 
 
 def test_capture_refuses_stale_oversized_or_untrusted_archives_and_begin_records():
     with tempfile.TemporaryDirectory() as directory:
         world = World(directory)
-        V3.capture_begin(world.source_policy_path, world.begin_path, world.key_path, owner_uid=OWNER,
-                         now=world.begin_at, observe=observe_ok)
-
-        def finish(**override):
-            args = dict(archive_path=world.archive_path, archive_id="synthetic-backup-v1", now=world.finish_at)
-            args.update(override)
-            return V3.capture_finish(world.source_policy_path, world.begin_path, args["archive_path"],
-                                     args["archive_id"], world.reference_path, world.record_path,
-                                     world.key_path, owner_uid=OWNER, now=args["now"], observe=observe_ok)
-
-        # An archive older than the observed begin record is a stale artifact.
-        old = (world.begin_at - datetime.timedelta(hours=2)).timestamp()
-        os.utime(world.archive_path, (old, old))
-        expect("ARCHIVE_OUTSIDE_CAPTURE_WINDOW", finish)
-        recent = (world.t0 - datetime.timedelta(minutes=10)).timestamp()
-        os.utime(world.archive_path, (recent, recent))
-        expect("CAPTURE_WINDOW_EXPIRED", finish, now=world.begin_at + datetime.timedelta(hours=7))
-        expect("ARCHIVE_ID_INVALID", finish, archive_id="bad id")
-        # Oversized (sparse) archive: refused from metadata, before any read.
-        big = world.dir / "big.sql.gz"
-        with open(big, "wb") as handle:
-            handle.truncate(V3.MAX_ARCHIVE_BYTES + 1)
-        os.chmod(big, 0o600)
-        expect("ARCHIVE_SIZE_LIMIT", finish, archive_path=big)
-        bad = world.dir / "bad.sql.gz"
-        bad.write_bytes(b"not gzip")
-        os.chmod(bad, 0o600)
-        os.utime(bad, (recent, recent))
-        try:
-            finish(archive_path=bad)
-        except V3.RestoreRefused as error:
-            assert str(error).startswith("DUMP_") or str(error).startswith("BACKUP_"), str(error)
-        else:
-            raise AssertionError("Non-gzip archive accepted")
-        loose = world.dir / "loose.sql.gz"
-        loose.write_bytes(gzip.compress(b"x"))
-        os.chmod(loose, 0o644)
-        expect("ARCHIVE_METADATA_INVALID", finish, archive_path=loose)
-        # Begin record forged by a party without the key, or altered, is refused.
-        forged = read_json(world.begin_path)
-        forged["observation"]["current_user"] = "attacker@localhost"
-        write_json(world.begin_path, forged)
-        expect("AUTHENTICATION_FAILED", finish)
+        for age in (0, -86400):
+            os.utime(world.archive_path, (world.t0.timestamp()+age,) * 2)
+            expect("EXTERNAL_CAPTURE_DISABLED", V3.capture_finish, world.source_policy_path,
+                   world.begin_path, world.archive_path, "synthetic-backup-v1", world.reference_path,
+                   world.record_path, world.key_path, owner_uid=OWNER)
+            expect("RECEIPT_ALREADY_EXISTS", V3.capture, world.source_policy_path, world.archive_path,
+                   "synthetic-backup-v1", world.reference_path, world.record_path, world.key_path,
+                   owner_uid=OWNER, observe=observe_ok)
         assert not world.record_path.exists()
 
 
@@ -341,10 +312,10 @@ def test_verify_capture_rejects_stale_expired_incomplete_and_oversized_records()
 def test_pre_bootstrap_state_is_explicit_and_cannot_be_restored_as_a_post_bootstrap_backup():
     with tempfile.TemporaryDirectory() as directory:
         world = World(directory)
-        write_json(world.source_policy_path, world.source_policy | {
-            "recovery_point_kind": V3.RECOVERY_PRE_BOOTSTRAP, "application": {"state": "pre_bootstrap", "sha": None}})
         world.capture()
         record, _ = V3.verify_capture_record(world.record_path, world.key, owner_uid=OWNER)
+        record.update(recovery_point_kind=V3.RECOVERY_PRE_BOOTSTRAP,
+                      application={"state": "pre_bootstrap", "sha": None})
         assert record["recovery_point_kind"] == V3.RECOVERY_PRE_BOOTSTRAP and record["application"]["sha"] is None
         expect("PRE_BOOTSTRAP_RESTORE_UNSUPPORTED", V3.bind_capture_to_manifest, record, world.manifest, world.policy)
         # A pre-bootstrap point may never carry an invented SHA, nor a deployed one lack it.
@@ -554,6 +525,9 @@ class Rehearsal:
         self.contract = contract or {"pins": {}, "triggers": ("synthetic_bi",), "select_tables": ("migrations",)}
         self.migrations = self.dir / "candidate-migrations"
         self.migrations.mkdir()
+        self.holds = self.dir / "holds"
+        self.holds.mkdir()
+        V3.REHEARSAL_HOLD_ROOT = self.holds
         names = BASE_LEDGER + PENDING
         for name in names:
             (self.migrations / (name + ".php")).write_text(f"<?php // {name}\n")
@@ -633,10 +607,16 @@ class Rehearsal:
     def create(self, **override):
         args = dict(now=self.now, contract=self.contract)
         args.update(override)
-        with self.mysql():
+        inventory = [{"name": f.stem, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+                     for f in sorted(self.migrations.iterdir())]
+        definitions = {t["name"]: {k: v for k, v in t.items() if k not in ("name", "definer")}
+                       for t in [self.trigger, dict(self.trigger, name="synthetic_bu", event="UPDATE")]}
+        args["contract"] = {**args["contract"], "definitions": definitions}
+        self.contract.update(definitions=definitions)
+        with self.mysql(), mock.patch.object(V3, "candidate_migration_inventory", return_value=inventory):
             return V3.create_migration_receipt(
                 self.baseline_receipt, self.clone_receipt, self.clone_path, self.world.policy_path,
-                self.inputs_path, self.migrations, self.out, self.world.key_path, owner_uid=OWNER, **args)
+                self.inputs_path, self.out, self.world.key_path, owner_uid=OWNER, **args)
 
 
 def test_migration_receipt_is_machine_checkable_and_binds_the_whole_chain():
@@ -734,9 +714,9 @@ def test_baseline_must_remain_unchanged_and_clone_must_share_the_recovery_point(
             rehearsal = Rehearsal(directory)
             mutate(rehearsal)
             expect(code, rehearsal.create)
-            hold = V3._migration_failure_path(rehearsal.out)
+            hold = V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt)))
             marker = V3.verify_document(read_json(hold), rehearsal.world.key, "migration-failure")
-            assert marker["result"] == "HOLD" and marker["code"] == code
+            assert marker["result"] == "IN_PROGRESS"
             # A failed rehearsal blocks blind retries until reviewed.
             mutate_back = rehearsal.state
             mutate_back.update(baseline_schema_sha="f" * 64, baseline_data="2" * 64)
@@ -780,10 +760,13 @@ def test_rehearsal_refuses_untrusted_stale_or_mismatched_inputs():
             mutate(changed)
             write_json(rehearsal.inputs_path, changed)
             expect(code, rehearsal.create)
+            # Independent malformed-input scenario; explicit synthetic hold reset.
+            V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).unlink(missing_ok=True)
         write_json(rehearsal.inputs_path, inputs)
         rehearsal.inputs_path.write_text('{"a":1,"a":2}')
         os.chmod(rehearsal.inputs_path, 0o600)
         expect("MANIFEST_JSON_DUPLICATE_KEY", rehearsal.create)
+        V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).unlink()
         write_json(rehearsal.inputs_path, inputs)
         wrong_policy = copy.deepcopy(rehearsal.world.policy)
         wrong_policy["policy_id"] = "another-policy"
@@ -813,26 +796,52 @@ def test_checkpoints_must_match_the_exact_pending_sequence():
 
 def test_candidate_migration_inventory_is_bounded_and_rejects_unsafe_files():
     with tempfile.TemporaryDirectory() as directory:
-        migrations = Path(directory) / "m"
-        migrations.mkdir()
-        expect("CANDIDATE_MIGRATIONS_COUNT_INVALID", V3.candidate_migration_inventory, migrations, owner_uid=OWNER)
-        good = migrations / "2026_11_16_000001_add_a.php"
-        good.write_text("<?php\n")
-        inventory = V3.candidate_migration_inventory(migrations, owner_uid=OWNER)
-        assert inventory == [{"name": "2026_11_16_000001_add_a", "sha256": hashlib.sha256(b"<?php\n").hexdigest()}]
-        (migrations / "notes.txt").write_text("x")
-        expect("CANDIDATE_MIGRATION_NAME_INVALID", V3.candidate_migration_inventory, migrations, owner_uid=OWNER)
-        (migrations / "notes.txt").unlink()
-        (migrations / "2026_11_16_000002_add_b.php").symlink_to(good)
-        expect("CANDIDATE_MIGRATION_UNAVAILABLE", V3.candidate_migration_inventory, migrations, owner_uid=OWNER)
-        (migrations / "2026_11_16_000002_add_b.php").unlink()
-        (migrations / "2026_11_16_000003_big.php").write_bytes(b"x" * (V3.MAX_MIGRATION_FILE_BYTES + 1))
-        expect("CANDIDATE_MIGRATION_SIZE_OR_TYPE_INVALID", V3.candidate_migration_inventory, migrations, owner_uid=OWNER)
-        (migrations / "2026_11_16_000003_big.php").unlink()
-        with mock.patch.object(V3, "MAX_MIGRATION_FILES", 1):
-            (migrations / "2026_11_16_000004_more.php").write_text("<?php\n")
-            expect("CANDIDATE_MIGRATIONS_COUNT_INVALID", V3.candidate_migration_inventory, migrations, owner_uid=OWNER)
-        expect("CANDIDATE_MIGRATIONS_PATH_INVALID", V3.candidate_migration_inventory, "relative", owner_uid=OWNER)
+        root = Path(directory)
+        repo = root / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        migrations = repo / "database/migrations"
+        migrations.mkdir(parents=True)
+        file = migrations / (PENDING[0] + ".php")
+        file.write_text("<?php // exact candidate")
+        def commit():
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.test",
+                            "commit", "-qm", "fixture"], check=True)
+            return subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+        good = commit()
+        store = root / "store.git"
+        subprocess.run(["git", "clone", "--bare", "-q", str(repo), str(store)], check=True)
+        with mock.patch.object(V3, "CANDIDATE_GIT_STORE", store):
+            inventory = V3.candidate_migration_inventory(good, owner_uid=OWNER)
+            assert inventory == [{"name": PENDING[0], "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}]
+            file.write_text("tampered worktree")
+            assert V3.candidate_migration_inventory(good, owner_uid=OWNER) == inventory
+            expect("CANDIDATE_SHA_INVALID", V3.candidate_migration_inventory, "relative/path", owner_uid=OWNER)
+            expect("CAPTURE_PROCESS_FAILED", V3.candidate_migration_inventory, "0" * 40, owner_uid=OWNER)
+            os.chmod(store / "config", 0o666)
+            expect("CANDIDATE_STORE_UNSAFE", V3.candidate_migration_inventory, good, owner_uid=OWNER)
+            os.chmod(store / "config", 0o600)
+            file.unlink()
+            file.symlink_to("/etc/passwd")
+            bad = commit()
+            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            expect("CANDIDATE_TREE_INVALID", V3.candidate_migration_inventory, bad, owner_uid=OWNER)
+            file.unlink()
+            file.write_text("<?php executable")
+            os.chmod(file, 0o755)
+            executable = commit()
+            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            expect("CANDIDATE_TREE_INVALID", V3.candidate_migration_inventory, executable, owner_uid=OWNER)
+            (migrations / (PENDING[1] + ".php")).write_text("<?php second")
+            crowded = commit()
+            subprocess.run(["git", "--git-dir=" + str(store), "fetch", "-q", str(repo), "HEAD"], check=True)
+            with mock.patch.object(V3, "MAX_MIGRATION_FILES", 1):
+                expect("CANDIDATE_MIGRATIONS_COUNT_INVALID", V3.candidate_migration_inventory, crowded, owner_uid=OWNER)
+            (store / "objects/info/alternates").write_text("/untrusted")
+            expect("CANDIDATE_STORE_UNSAFE", V3.candidate_migration_inventory, good, owner_uid=OWNER)
+            (store / "objects/info/alternates").unlink()
+            with mock.patch.object(V3, "MAX_MIGRATION_FILE_BYTES", 1):
+                expect("CAPTURE_PROCESS_SIZE_LIMIT", V3.candidate_migration_inventory, good, owner_uid=OWNER)
 
 
 def phase2b_contract(directory, *, names):
@@ -854,7 +863,7 @@ def test_phase2b_pair_requires_pinned_hashes_and_the_complete_definer_trigger_in
         # Hash drift in either pinned file refuses.
         (rehearsal.migrations / (PENDING[0] + ".php")).write_text("<?php // altered\n")
         rehearsal.out.unlink()
-        V3._migration_failure_path(rehearsal.out).unlink(missing_ok=True)
+        V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).unlink(missing_ok=True)
         expect("PHASE2B_PAIR_HASH_MISMATCH", rehearsal.create, contract=contract)
     with tempfile.TemporaryDirectory() as directory:
         rehearsal = Rehearsal(directory)
@@ -909,7 +918,7 @@ def test_least_privilege_account_observation_rejects_excess_and_open_sessions():
             rehearsal.state[kind] = lines
             expect(code, rehearsal.create)
             assert not rehearsal.out.exists()
-            assert V3._migration_failure_path(rehearsal.out).exists()
+            assert V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt))).exists()
     with tempfile.TemporaryDirectory() as directory:
         rehearsal = Rehearsal(directory)
         rehearsal.state["app"] = ["GRANT USAGE ON *.* TO `{a}`"]  # no schema grants at all
@@ -974,8 +983,7 @@ def test_command_line_requires_root_and_reports_fixed_codes_only():
 
 def test_source_has_no_shell_execution_secret_argv_or_remote_code_surface():
     text = (ROOT / "scripts/authenticated-restore-v3.py").read_text()
-    for forbidden in ("shell=True", "os.system", "eval(", "exec(", "--password", "MYSQL_PWD", "-p'", "popen(",
-                      "subprocess"):
+    for forbidden in ("shell=True", "os.system", "eval(", "exec(", "--password", "MYSQL_PWD", "-p'", "popen("):
         assert forbidden not in text, forbidden
     # Every database action goes through the single v2 query/dump/import helpers.
     assert "V2.mysql_query" in text and "V2._safe_dump_hash" in text
@@ -984,8 +992,156 @@ def test_source_has_no_shell_execution_secret_argv_or_remote_code_surface():
         assert sql not in text, sql
 
 
+def test_phase2b_rejects_every_trigger_field_and_action_tamper():
+    # Independently expand the pinned migration's PHP SQL templates; the
+    # approved action fingerprints must remain tied to those reviewed bytes.
+    for table in ("transition_v2_requests", "transition_history_events"):
+        source = next((ROOT / "database/migrations").glob("*create_" + table + "_table.php")).read_text()
+        values = {"table": table}
+        for line in source.splitlines():
+            match = re.fullmatch(r"\s*\$(\w+) = ([\"'])(.*?)\2;", line)
+            if match:
+                name, _, value = match.groups()
+                values[name] = re.sub(r"\{\$(\w+)\}", lambda m: values.get(m[1], m[0]), value)
+        condition = values["requestIdentityCondition" if table == "transition_v2_requests" else "historyConditionMysql"]
+        for event in ("insert", "update", "delete"):
+            action = "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '" + values["message"] + "'"
+            if event == "insert":
+                action = "BEGIN IF NOT (" + condition + ") THEN " + action + "; END IF; END"
+            assert "{$" not in action
+            assert sha(action) == V3.PHASE2B_TRIGGER_DEFINITIONS[table + "_immutable_" + event]["action_sha256"]
+    triggers = [{"name": name, "definer": DEFINER, **definition}
+                for name, definition in V3.PHASE2B_TRIGGER_DEFINITIONS.items()]
+    assert V3._check_phase2b_triggers(triggers, DEFINER, True, V3.PHASE2B_TRIGGERS)
+    for index in range(6):
+        for field, value in (("name", "other"), ("definer", "rogue@localhost"), ("event", "OTHER"),
+                             ("table", "other"), ("timing", "AFTER"), ("orientation", "STATEMENT"),
+                             ("action_sha256", sha("BEGIN END"))):
+            changed = copy.deepcopy(triggers)
+            changed[index][field] = value
+            expect("PHASE2B_TRIGGER_INVENTORY_INCOMPLETE", V3._check_phase2b_triggers,
+                   changed, DEFINER, True, V3.PHASE2B_TRIGGERS)
+
+
+def test_application_privileges_are_allowlisted_online_and_offline():
+    for privilege in ("DROP", "ALTER", "CREATE", "TRIGGER", "SUPER", "EXECUTE", "UNKNOWN"):
+        with tempfile.TemporaryDirectory() as directory:
+            rehearsal = Rehearsal(directory)
+            rehearsal.state["app"] = grants(CLONE_SCHEMA, privileges="SELECT, " + privilege)
+            expect("ACCOUNT_PRIVILEGE_EXCESSIVE", rehearsal.create)
+        with tempfile.TemporaryDirectory() as directory:
+            rehearsal = Rehearsal(directory)
+            rehearsal.create()
+            resign(rehearsal, lambda b: b["observed"]["app_account"].update(schema_privileges=[privilege.lower()]))
+            expect("ACCOUNT_PRIVILEGE_EXCESSIVE", V3.verify_migration_receipt, rehearsal.out,
+                   rehearsal.world.key, owner_uid=OWNER, now=rehearsal.now, contract=rehearsal.contract)
+
+
+def test_holds_survive_interruptions_publication_errors_and_output_changes():
+    for error in (KeyboardInterrupt(), RuntimeError("failure"), OSError("publication")):
+        with tempfile.TemporaryDirectory() as directory:
+            rehearsal = Rehearsal(directory)
+            target = "_write_signed" if isinstance(error, OSError) else "schema_state"
+            original = V3._write_signed
+            def publish(path, *args, **kwargs):
+                if Path(path) == rehearsal.out:
+                    raise error
+                return original(path, *args, **kwargs)
+            with mock.patch.object(V3 if target == "_write_signed" else rehearsal, target,
+                                   side_effect=publish if target == "_write_signed" else error):
+                try:
+                    rehearsal.create()
+                except BaseException as caught:
+                    assert caught is error
+                else:
+                    raise AssertionError("failure ignored")
+            hold = V3._migration_failure_path(read_json(V3._auth_path(rehearsal.clone_receipt)))
+            assert hold.exists()
+            rehearsal.out = rehearsal.dir / "alternate-output.json"
+            expect("FAILED_REHEARSAL_HOLD_PRESENT", rehearsal.create)
+    with tempfile.TemporaryDirectory() as directory:
+        rehearsal = Rehearsal(directory)
+        V3.REHEARSAL_HOLD_ROOT = rehearsal.dir / "missing-hold-directory"
+        with mock.patch.object(V2, "_mysql_identity") as query:
+            expect("RECEIPT_PATH_INVALID", rehearsal.create)
+            query.assert_not_called()
+
+
+def test_defaults_metadata_and_deployment_identity_are_observed():
+    with tempfile.TemporaryDirectory() as directory:
+        world = World(directory)
+        defaults = Path(world.source_policy["mysql"]["defaults_file"])
+        os.chmod(defaults, 0o644)
+        expect("MYSQL_DEFAULTS_METADATA_INVALID", V3._validate_defaults, world.source_policy, OWNER)
+        os.chmod(defaults, 0o600)
+        link = world.dir / "defaults-link"
+        link.symlink_to(defaults)
+        policy = copy.deepcopy(world.source_policy)
+        policy["mysql"]["defaults_file"] = str(link)
+        expect("MYSQL_DEFAULTS_UNAVAILABLE", V3._validate_defaults, policy, OWNER)
+        defaults.write_text("!include /untrusted\n")
+        expect("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        V3.observe_deployment(world.source_policy, owner_uid=OWNER)
+        receipt = read_json(world.dir / "deployment.json")
+        write_json(world.dir / "deployment.json", receipt | {"application_sha": "e" * 40})
+        expect("ACTIVE_RELEASE_MISMATCH", V3.observe_deployment, world.source_policy, owner_uid=OWNER)
+        write_json(world.dir / "deployment.json", receipt | {"result": "FAIL"})
+        expect("DEPLOYMENT_RECEIPT_INVALID", V3.observe_deployment, world.source_policy, owner_uid=OWNER)
+        write_json(world.dir / "deployment.json", receipt)
+        (world.dir / "current").unlink()
+        other = world.dir / ("e" * 40)
+        other.mkdir()
+        (world.dir / "current").symlink_to(other)
+        expect("ACTIVE_RELEASE_MISMATCH", V3.observe_deployment, world.source_policy, owner_uid=OWNER)
+
+
+def test_controlled_capture_failure_never_signs_partial_output():
+    for failure in (V3.RestoreRefused("CAPTURE_PROCESS_FAILED"), KeyboardInterrupt()):
+        with tempfile.TemporaryDirectory() as directory:
+            world = World(directory)
+            world.archive_path.unlink()
+            def fail(argv, consume, **kwargs):
+                consume(b"partial SQL")
+                raise failure
+            with mock.patch.object(V3, "_bounded_process", side_effect=fail):
+                try:
+                    V3.capture(world.source_policy_path, world.archive_path, "synthetic-backup-v1",
+                               world.reference_path, world.record_path, world.key_path,
+                               owner_uid=OWNER, observe=observe_ok)
+                except BaseException as caught:
+                    assert caught is failure
+                else:
+                    raise AssertionError("failed capture signed")
+            assert not world.record_path.exists()
+            assert world.archive_path.exists()
+            assert world.archive_path.stat().st_mode & 0o777 == 0o600
+            expect("RECEIPT_ALREADY_EXISTS", V3.capture, world.source_policy_path, world.archive_path,
+                   "synthetic-backup-v1", world.reference_path, world.record_path, world.key_path,
+                   owner_uid=OWNER, observe=observe_ok)
+
+
+def test_bounded_capture_process_status_size_and_diagnostics():
+    output = []
+    V3._bounded_process([sys.executable, "-c", "print('dump')"], output.append, maximum=100)
+    assert b"".join(output) == b"dump\n"
+    expect("CAPTURE_PROCESS_FAILED", V3._bounded_process,
+           [sys.executable, "-c", "print('partial'); raise SystemExit(3)"], output.append, maximum=100)
+    expect("CAPTURE_PROCESS_SIZE_LIMIT", V3._bounded_process,
+           [sys.executable, "-c", "print('x'*1000)"], output.append, maximum=100)
+    expect("CAPTURE_PROCESS_DIAGNOSTIC_LIMIT", V3._bounded_process,
+           [sys.executable, "-c", "import sys; sys.stderr.write('x'*20000)"], output.append, maximum=100)
+    expect("CAPTURE_PROCESS_TIMEOUT", V3._bounded_process,
+           [sys.executable, "-c", "import time; time.sleep(1)"], output.append, maximum=100, timeout=.01)
+
+
 def main():
     tests = (
+        test_phase2b_rejects_every_trigger_field_and_action_tamper,
+        test_application_privileges_are_allowlisted_online_and_offline,
+        test_holds_survive_interruptions_publication_errors_and_output_changes,
+        test_defaults_metadata_and_deployment_identity_are_observed,
+        test_bounded_capture_process_status_size_and_diagnostics,
+        test_controlled_capture_failure_never_signs_partial_output,
         test_signing_key_must_be_protected_strong_and_bounded,
         test_signature_binds_body_purpose_and_key,
         test_capture_record_binds_identity_without_raw_uuid_or_secrets,

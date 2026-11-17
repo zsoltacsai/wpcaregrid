@@ -33,27 +33,48 @@ facts honestly. Every receipt carries `limitations` saying so.
 ## 1. Authenticated capture record
 
 Source policy (root-protected JSON, schema 1) names the source environment/host,
-schema, the exact expected backup account `user@host`, the expected server-UUID
-SHA-256, a loopback MySQL endpoint and option file, and the **observed deployed
-application SHA** — or the explicit state `pre_bootstrap` with no SHA (a SHA is
-never invented; the two states are cross-checked).
+schema, expected backup account, server UUID hash, loopback MySQL endpoint and
+protected defaults file. `capture` runs a fixed `/usr/bin/mysqldump` command
+(single transaction, quick, no tablespaces, GTID purging OFF, triggers included,
+routines/events excluded), streams bounded SQL into gzip, requires successful
+process exit, and creates the archive exclusively (`0600`, root-owned). SQL and
+compressed output are limited to 32 MiB, stderr to 16 KiB, runtime to 300 seconds.
+Partial archives remain unsigned and cannot be reused. Older capture records
+without controlled-process/deployment evidence are rejected and require a fresh
+controlled capture. External `capture-begin`
+and `capture-finish` are disabled; archive mtime is never evidence of capture.
+The account, database, UUID, version and binlog settings must match before/after.
 
-```text
-capture-begin   authenticate the connection (CURRENT_USER(), DATABASE(), @@server_uuid,
-                version, log_bin/ROW/trust OFF) against the policy; write a signed begin record
-   ... the existing reviewed backup path produces the private 0600 archive ...
-capture-finish  re-observe; stop if anything differs from the begin record; check the archive
-                (protected, ≤ 32 MiB, gzip-valid, ≤ 32 MiB expanded, mtime inside the capture
-                window); validate the config recovery reference; write the signed capture record
+The policy also requires absolute `deployment_receipt` and `active_release`
+paths. The successful deployment channel must publish a protected `0600` receipt:
+
+```json
+{"schema_version":1,"result":"PASS","application_sha":"<40 hex>",
+ "environment_id":"source-env","host_id":"source-host",
+ "release_path":"/protected/releases/<40 hex>"}
 ```
 
-The record binds: application state/SHA, source schema, backup account, server
-UUID **hash only**, MySQL version, capture start/end, observation digest, archive
-ID/size/SHA-256 and the config recovery reference. It is valid for at most 7 days
-and is refused as stale when the capture finished more than 72 hours ago. A
-`pre_bootstrap_empty` recovery point can be recorded but is refused by restore
-(`PRE_BOOTSTRAP_RESTORE_UNSUPPORTED`): the v2 manifest requires tables and a
-nonempty ledger and cannot certify it.
+The active symlink and all release-directory ancestors must be root-controlled;
+it must resolve to that receipt's release path, named by the SHA. Inside the
+release, protected `.wpcg-release.json` must contain exactly `application_sha`
+and `deployment_receipt_sha256` (the hash of the receipt's actual file bytes).
+The receipt environment/host/SHA must match policy. Receipt hash and current
+active identity are checked before and after the dump. The record retains the
+receipt hash and successful dump exit status. Defaults files must be root-owned,
+single-link regular `0600` files with protected ancestors; symlinks and include
+directives are refused before client use. Policy/defaults drift also stops signing.
+
+This observes the deployment receipt and active release identity. **The source
+application SHA is attested by the trusted successful-deployment publisher**;
+it is not a DB observation, a full application-tree hash, or something proven by
+a root policy field alone. Provisioning these deployment artifacts requires a
+separately approved deployment-channel integration; this patch deploys nothing.
+Controlled capture currently requires a deployed application. Explicit legacy
+pre-bootstrap records remain non-restorable; capture refuses that state.
+
+The record binds application state/SHA, source schema, backup account, server
+UUID hash, MySQL version, capture interval, archive ID/size/hash and config
+recovery reference. Maximum lifetime is seven days; capture age is at most 72 h.
 
 ## 2. Config recovery reference
 
@@ -95,43 +116,58 @@ where possible:
 - both restore receipts are authenticated, fresh (≤ 24 h), chained to their v2
   files and share backup hash, capture, source and destination instance;
 - the baseline still has its recorded schema, ledger and data fingerprints;
-- the candidate migration directory (≤ 512 regular files, ≤ 256 KiB each, no
-  symlinks) is fully applied: the final ledger equals the candidate inventory,
+- the authenticated candidate `application_sha` is read from the fixed root-owned
+  bare Git store `/var/lib/wpcaregrid/candidate.git`, never a caller worktree or
+  migration directory. Its exact `database/migrations` tree (≤ 512 entries,
+  ≤ 256 KiB per blob, only mode `100644`, valid migration names) is fully applied: the final ledger equals the candidate inventory,
   nothing unknown, nothing regressed, pending set = final − baseline ledger;
 - checkpoints (supplied by the migration controller) are the exact pending
   sequence with canonical sorted-ledger hashes and a final schema hash that
   matches the observed clone;
 - if the pinned Phase 2B pair is in the candidate, both file hashes match the
-  runbook pins, exactly the six guard triggers exist with the approved definer,
+  runbook pins, exactly the six guard triggers match name, event, target table,
+  BEFORE timing, ROW orientation, approved definer and exact reviewed MySQL
+  ACTION_STATEMENT SHA-256,
   and the definer's SELECT tables are exactly the three reviewed transition
   tables; the definer is locked with exact `TRIGGER` + `SELECT` grants (v2 check);
-- the app account has global `USAGE` only, schema-confined grants, no `SUPER`,
-  `FILE`, `GRANT OPTION`, account administration or roles; the DBA executor has no
+- the app account has global `USAGE` only, schema-confined grants restricted to the explicit `SELECT`, `INSERT`, `UPDATE`,
+  `DELETE` allowlist. DDL, TRIGGER, SUPER, unknown privileges, grant option and
+  roles are refused online and offline; the DBA executor has no
   global privilege other than `USAGE`; no foreground session remains for the
   definer/executor; app, definer and executor identities are separated;
 - MySQL settings are unchanged (binlog ON, ROW, trust OFF).
 
 DBA grant/revoke/termination times and the guarded allowed/rejected write results
 come from the protected rehearsal input and are recorded under `attested`, not
-`observed`. Any refusal after observation begins writes a signed
-`<receipt>.failed.json` HOLD marker; a later attempt refuses
-(`FAILED_REHEARSAL_HOLD_PRESENT`) until it is reviewed. `verify-migration-receipt`
-re-derives all internal consistency offline, so a correctly signed but
-inconsistent receipt is still refused.
+`observed`. Before any rehearsal DB observation a durable authenticated
+`IN_PROGRESS` marker is created under the fixed pre-provisioned root-owned
+`/var/lib/wpcaregrid/rehearsal-holds/` directory. Its filename hashes the clone
+server UUID hash and schema, independent of output path or receipt reissuance.
+Failure to persist it stops before database work. Exceptions, process interruption,
+validation failures and receipt publication failures retain it. Retries refuse
+`FAILED_REHEARSAL_HOLD_PRESENT`; only publication and offline validation of a
+durable PASS receipt clears it (directory fsynced). Operators must review and
+resolve failed holds outside this tool; no CLI bypass is provided.
+`verify-migration-receipt` re-derives consistency and privilege/trigger constraints.
+
+The bare Git store and all contents must be root-owned without group/other write
+access, symlinks or special files. Alternates, grafts and shallow stores are
+refused; replace objects and inherited Git configuration are disabled. Populate
+it through the approved artifact/deployment channel. The commit must exist as a
+commit object; no branch/ref resolution or caller path is accepted.
 
 ## Commands (root, never run here)
 
 ```text
 authenticated-restore-v3.py validate-config-reference --config-reference F [--config-path ENV]
-authenticated-restore-v3.py capture-begin  --source-policy P --begin B --signing-key K
-authenticated-restore-v3.py capture-finish --source-policy P --begin B --archive A --archive-id ID \
+authenticated-restore-v3.py capture --source-policy P --archive A --archive-id ID \
         --config-reference F --capture-record R --signing-key K
 authenticated-restore-v3.py verify-capture --capture-record R --signing-key K
 authenticated-restore-v3.py restore  --release-manifest M --destination-policy D --config-path ENV \
         --receipt RECEIPT --capture-record R --signing-key K
 authenticated-restore-v3.py verify-restore-receipt --receipt RECEIPT --signing-key K
 authenticated-restore-v3.py migration-receipt --baseline-receipt RB --clone-receipt RC \
-        --clone-manifest MC --destination-policy D --rehearsal-inputs I --migrations-dir DIR \
+        --clone-manifest MC --destination-policy D --rehearsal-inputs I \
         --output OUT --signing-key K
 authenticated-restore-v3.py verify-migration-receipt --migration-receipt OUT --signing-key K
 authenticated-restore-v3.py cleanup  --release-manifest M --destination-policy D --receipt RECEIPT --signing-key K
@@ -140,7 +176,6 @@ authenticated-restore-v3.py cleanup  --release-manifest M --destination-policy D
 ## Not proven here
 
 Real MySQL import, real grants and `SHOW GRANTS` output on the pinned 8.4 release,
-backup-account least-privilege grants for `mysqldump --routines --events
---triggers`, key custody/rotation, the production destination mechanism, RPO/RTO,
+backup-account least-privilege grants for the fixed capture command, key custody/rotation, the production destination mechanism, RPO/RTO,
 a clean-bootstrap (no ledger) rehearsal, and production pause/resume integration
 remain open items from the GO-13 Workstream C review.
