@@ -7,6 +7,7 @@ states. They are development evidence only: passing them does NOT approve the
 tool for host use (independent Integration QA and AppSec are required).
 """
 
+import errno
 import importlib.util
 import io
 import posixpath
@@ -91,11 +92,15 @@ class FakeHost:
         return self._children(path)
 
     def read_regular(self, path, max_bytes):
-        if path in self.symlinks or path not in self.files:
+        if path in self.symlinks:
+            raise OSError(errno.ELOOP, "symlink", path)
+        if path in self.dirs:
+            raise rd.HostError("not_regular", posixpath.basename(path))
+        if path not in self.files:
             raise FileNotFoundError(path)
         content = self.files[path].get("content", b"")
         if len(content) > max_bytes:
-            raise rd.HostError("too_large", path)
+            raise rd.HostError("too_large", posixpath.basename(path))
         return content
 
     def read_text(self, path, max_bytes):
@@ -110,6 +115,48 @@ class FakeHost:
                 if full in self.dirs:
                     yield from recurse(full, rel)
         yield from recurse(path, "")
+
+    def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
+        """Mirrors RealHost.datadir_fingerprint semantics over the in-memory
+        tree using the production module's shared validation helpers, so the
+        fake and the real walk cannot drift apart. Directory entries of one
+        level are processed (sorted dirs, then sorted files) before the walk
+        descends, matching os.fwalk topdown ordering."""
+        root = self.lstat(path)
+        rd.datadir_root_check(root, path, mysql_ids)
+        records, entries, total = [], 0, 0
+
+        def process(directory, rel_base):
+            nonlocal entries, total
+            children = self._children(directory)
+            dir_names = sorted(name for name in children
+                               if (directory.rstrip("/") + "/" + name) in self.dirs)
+            file_names = sorted(name for name in children if name not in dir_names)
+            subdirs = []
+            for name in dir_names + file_names:
+                full = directory.rstrip("/") + "/" + name
+                rel = (rel_base + "/" + name) if rel_base else name
+                st = self.lstat(full)
+                entries += 1
+                if entries > max_entries:
+                    raise rd.HostError("datadir_entry_count_exceeded", path)
+                rd.validate_datadir_entry(rel, st, mysql_ids)
+                digest = "-"
+                if stat.S_ISREG(st.st_mode):
+                    if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
+                        raise rd.HostError("datadir_exceeds_bounds", rel)
+                    total += st.st_size
+                    digest = rd.sha256(self.read_regular(full, max_file_bytes))
+                records.append(rd.datadir_record(rel, st, digest))
+                if full in self.dirs:
+                    subdirs.append((full, rel))
+            for full, rel in subdirs:
+                process(full, rel)
+
+        process(path, "")
+        material = repr((stat.S_IMODE(root.st_mode), root.st_uid, root.st_gid,
+                         root.st_mtime_ns, records)).encode()
+        return rd.sha256(material), entries, total
 
     def run(self, args, timeout=60):
         if args[:2] == ["/usr/bin/systemctl", "show"]:
@@ -158,6 +205,8 @@ class ReadinessTestCase(unittest.TestCase):
         files, dirs, commands = {}, {}, {}
         dirs["/run"] = {"mode": 0o755, "uid": 0, "gid": 0}
         dirs[rd.ROOT_DIR] = {"mode": 0o700, "uid": 0, "gid": 0}
+        dirs[rd.LIBEXEC] = {"mode": 0o755, "uid": 0, "gid": 0}
+        dirs[rd.APPARMOR] = {"mode": 0o755, "uid": 0, "gid": 0}
         for path in rd.ORDER:
             files[path] = {"content": old_bytes(path), "mode": rd.MODES[path], "uid": 0, "gid": 0}
         filler = "\n".join("some-profile-%03d (enforce)" % i for i in range(400))
@@ -447,7 +496,8 @@ class ReadinessTestCase(unittest.TestCase):
         files["/root/wpcg-go54a-abc1234/extra"] = {"content": b"x", "mode": 0o600, "uid": 0, "gid": 0}
         self.host = self.healthy_host(files=files, dirs=dirs)
         self.assertEqual(self.run_main(["--package", "/root/wpcg-go54a-abc1234"]), 3)
-        self.assertIn("HOLD package_invalid:invalid:package_contents", self.output())
+        self.assertIn("HOLD staged_package_invalid:wpcg-go54a-abc1234:invalid:package_contents",
+                      self.output())
 
     def test_explicit_package_hash_mismatch_holds(self):
         files, dirs = self.valid_package()
@@ -455,7 +505,8 @@ class ReadinessTestCase(unittest.TestCase):
             "content": b"tampered", "mode": 0o600, "uid": 0, "gid": 0}
         self.host = self.healthy_host(files=files, dirs=dirs)
         self.assertEqual(self.run_main(["--package", "/root/wpcg-go54a-abc1234"]), 3)
-        self.assertIn("HOLD package_invalid:invalid:package_hash_mismatch:production-g1-mysql.py",
+        self.assertIn("HOLD staged_package_invalid:wpcg-go54a-abc1234:"
+                      "invalid:package_hash_mismatch:production-g1-mysql.py",
                       self.output())
 
     def test_incoming_unverified_directory_holds(self):
@@ -555,6 +606,137 @@ class ReadinessTestCase(unittest.TestCase):
     def test_invalid_argument_fails_closed(self):
         self.assertEqual(self.run_main(["--bogus"]), 3)
         self.assertEqual(self.last_line(), "G1_GO54A_READINESS=HOLD;CODE=argument_invalid:--bogus")
+
+    # -- independent-reviewer findings (QA B1-B3, AppSec F5, hardening) ------
+
+    def test_constant_parity_with_the_transaction_tool(self):
+        # Compare against the REAL transaction pins, not the synthetic fixture
+        # hashes that setUp installs for the other cases.
+        rd.OLD.clear()
+        rd.OLD.update(self.saved_old)
+        rd.NEW.clear()
+        rd.NEW.update(self.saved_new)
+        ops = Path(__file__).parents[1] / "production-g1-ops"
+        spec = importlib.util.spec_from_file_location("go54a_transaction_reference",
+                                                     ops / "go54a-upgrade-apparmor.py")
+        reference = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reference)
+        for name in ("HELPER", "CONTRACT", "MANIFEST", "PROFILE_P", "PROFILE_R", "ORDER",
+                     "OLD", "NEW", "PACKAGE", "MODES", "LOCK", "JOURNAL", "UNITS",
+                     "DATADIRS", "LOGS", "PROFILE_NAMES"):
+            self.assertEqual(getattr(rd, name), getattr(reference, name), name)
+        self.assertEqual(rd.MANIFEST, "/usr/local/libexec/production_g1_mysql_manifest.json")
+        self.assertEqual(rd.EXPECTED_UPGRADER_SHA,
+                         rd.sha256((ops / "go54a-upgrade-apparmor.py").read_bytes()))
+        self.assertEqual(rd.EXPECTED_FETCH_SHA,
+                         rd.sha256((ops / "go54a-fetch-package.sh").read_bytes()))
+        self.assertEqual(rd.EXPECTED_OPS_SUMS_SHA, rd.sha256((ops / "SHA256SUMS").read_bytes()))
+
+    def test_companions_verified_when_run_from_own_directory_with_own_sums(self):
+        # QA B2 regression: the diagnostics directory legitimately contains its
+        # own SHA256SUMS; running from it must verify the sibling ops toolkit,
+        # never mistake the own sums for a partial companion set.
+        base = "/repo/scripts/production-g1-diagnostics"
+        sibling = "/repo/scripts/production-g1-ops"
+        files = {base + "/SHA256SUMS": {"content": b"diagnostics sums\n", "mode": 0o644, "uid": 0, "gid": 0}}
+        for name, content, mode in ((rd.UPGRADER_NAME, b"upgrader", 0o755),
+                                     (rd.FETCH_NAME, b"fetch", 0o755),
+                                     (rd.OPS_SUMS_NAME, b"sums", 0o644)):
+            files[sibling + "/" + name] = {"content": content, "mode": mode, "uid": 0, "gid": 0}
+        saved = (rd.EXPECTED_UPGRADER_SHA, rd.EXPECTED_FETCH_SHA, rd.EXPECTED_OPS_SUMS_SHA)
+        rd.EXPECTED_UPGRADER_SHA = rd.sha256(b"upgrader")
+        rd.EXPECTED_FETCH_SHA = rd.sha256(b"fetch")
+        rd.EXPECTED_OPS_SUMS_SHA = rd.sha256(b"sums")
+        self.addCleanup(lambda: (setattr(rd, "EXPECTED_UPGRADER_SHA", saved[0]),
+                                 setattr(rd, "EXPECTED_FETCH_SHA", saved[1]),
+                                 setattr(rd, "EXPECTED_OPS_SUMS_SHA", saved[2])))
+        self.host = self.healthy_host(files={**self.host.files, **files}, script_dir=base)
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("NOTE toolkit_companions_verified:" + sibling, self.output())
+        self.assertNotIn("toolkit_companions_incomplete", self.output())
+
+    def test_flat_staging_with_diagnostics_sums_holds(self):
+        # A flat layout that mixes the diagnostics' own SHA256SUMS with the ops
+        # executables cannot satisfy the ops pins and must HOLD explicitly.
+        base = "/stage/diagnostics"
+        files = {
+            base + "/SHA256SUMS": {"content": b"diagnostics sums\n", "mode": 0o644, "uid": 0, "gid": 0},
+            base + "/" + rd.UPGRADER_NAME: {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0},
+            base + "/" + rd.FETCH_NAME: {"content": b"fetch", "mode": 0o755, "uid": 0, "gid": 0},
+        }
+        saved = (rd.EXPECTED_UPGRADER_SHA, rd.EXPECTED_FETCH_SHA, rd.EXPECTED_OPS_SUMS_SHA)
+        rd.EXPECTED_UPGRADER_SHA = rd.sha256(b"upgrader")
+        rd.EXPECTED_FETCH_SHA = rd.sha256(b"fetch")
+        rd.EXPECTED_OPS_SUMS_SHA = rd.sha256(b"ops sums")
+        self.addCleanup(lambda: (setattr(rd, "EXPECTED_UPGRADER_SHA", saved[0]),
+                                 setattr(rd, "EXPECTED_FETCH_SHA", saved[1]),
+                                 setattr(rd, "EXPECTED_OPS_SUMS_SHA", saved[2])))
+        self.host = self.healthy_host(files={**self.host.files, **files}, script_dir=base)
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD toolkit_companion_mismatch:diagnostics/" + rd.OPS_SUMS_NAME,
+                      self.output())
+
+    def test_explicit_package_empty_argument_fails_closed(self):
+        self.assertEqual(self.run_main(["--package", ""]), 3)
+        self.assertEqual(self.last_line(), "G1_GO54A_READINESS=HOLD;CODE=package_argument_invalid:empty")
+
+    def test_duplicate_package_argument_fails_closed(self):
+        self.assertEqual(self.run_main(["--package", "/a", "--package", "/b"]), 3)
+        self.assertEqual(self.last_line(), "G1_GO54A_READINESS=HOLD;CODE=duplicate_package_argument")
+
+    def test_explicit_package_missing_directory_holds(self):
+        self.assertEqual(self.run_main(["--package", "/nonexistent-package"]), 3)
+        self.assertIn("HOLD package_invalid:invalid:package_directory_missing", self.output())
+
+    def test_explicit_package_still_scans_root_for_incoming(self):
+        # AppSec F5 regression: an explicit valid package must not hide an
+        # unverified incoming staging directory.
+        files_a, dirs_a = self.valid_package()
+        files_b, dirs_b = self.valid_package(name="/root/wpcg-go54a-def5678.incoming-UNVERIFIED")
+        self.host = self.healthy_host(files={**files_a, **files_b}, dirs={**dirs_a, **dirs_b})
+        self.assertEqual(self.run_main(["--package", "/root/wpcg-go54a-abc1234"]), 3)
+        self.assertIn("HOLD incoming_package_unverified_present:wpcg-go54a-def5678.incoming-UNVERIFIED",
+                      self.output())
+
+    def test_parent_directory_unsafe_holds(self):
+        dirs = dict(self.host.dirs)
+        dirs[rd.APPARMOR] = {"mode": 0o775, "uid": 0, "gid": 0}
+        self.host = self.healthy_host(dirs=dirs)
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD parent_directory_mode_unsafe:" + rd.APPARMOR, self.output())
+
+    def test_parent_directory_missing_holds(self):
+        dirs = dict(self.host.dirs)
+        del dirs[rd.LIBEXEC]
+        self.host = self.healthy_host(dirs=dirs)
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD parent_directory_missing:" + rd.LIBEXEC, self.output())
+
+    def test_failed_unit_holds(self):
+        commands = dict(self.host.commands)
+        commands[(rd.UNITS[0], "ActiveState")] = "failed"
+        commands[(rd.UNITS[0], "SubState")] = "failed"
+        self.host = self.healthy_host(commands=commands)
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD g1_unit_not_inactive:" + rd.UNITS[0], self.output())
+
+    def test_datadir_entry_count_bound_yields_unknown(self):
+        saved = rd.MAX_DATADIR_ENTRIES
+        rd.MAX_DATADIR_ENTRIES = 1
+        self.addCleanup(setattr, rd, "MAX_DATADIR_ENTRIES", saved)
+        files = dict(self.host.files)
+        files[rd.DATADIRS[0] + "/second"] = {"content": b"x", "mode": 0o640, "uid": 105, "gid": 105}
+        self.host = self.healthy_host(files=files)
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_entry_count_exceeded", self.output())
+
+    def test_datadir_file_size_bound_yields_unknown(self):
+        saved = rd.MAX_FILE_BYTES
+        rd.MAX_FILE_BYTES = 2
+        self.addCleanup(setattr, rd, "MAX_FILE_BYTES", saved)
+        self.host = self.healthy_host()
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_exceeds_bounds", self.output())
 
 
 if __name__ == "__main__":

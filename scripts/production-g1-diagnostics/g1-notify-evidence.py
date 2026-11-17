@@ -17,13 +17,19 @@ evidence without changing anything:
     vendor mysql.service.
 
 Fail-closed: an unreadable journal is UNKNOWN, never "no denial"; an empty
-journal is reported explicitly. Output and runtime are bounded. No service is
-started, stopped or reloaded, no profile is loaded or compiled, and nothing is
-written. Local synthetic test passes do NOT make this tool approved; independent
-Integration QA and AppSec PASS records are required before its output is used
-in a release decision.
+journal is reported explicitly; a DENIED line that does not carry the complete
+expected audit shape is counted as unrecognized and never becomes target
+evidence. The tool is designed for the approved root console and requires
+root: a non-root run reports UNKNOWN, never a verdict. Output and runtime are
+bounded. No service is started, stopped or reloaded, no profile is loaded or
+compiled, and nothing is written. Local synthetic test passes do NOT make
+this tool approved; independent Integration QA and AppSec PASS records are
+required before its output is used in a release decision.
 
-Usage: python3 -I -B g1-notify-evidence.py [--since TS] [--lines N] [--profile PATH]
+Usage: python3 -I -B g1-notify-evidence.py [--since TS] [--lines N] [--profile NAME]
+
+--profile NAME accepts a profile BASENAME under /etc/apparmor.d/ only (no
+paths, no traversal); arbitrary caller-supplied paths are rejected.
 """
 
 import re
@@ -31,13 +37,16 @@ import stat
 import sys
 
 TOOL = "g1-notify-evidence"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 TARGET = "/run/systemd/notify"
+PROFILE_DIR = "/etc/apparmor.d/"
+PROFILE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
 PROFILE_P = "/etc/apparmor.d/wpcaregrid-mysql-production"
 PROFILE_R = "/etc/apparmor.d/wpcaregrid-mysql-production-restore"
 G1_PROFILES = (PROFILE_P, PROFILE_R)
 G1_PROFILE_PREFIXES = ("wpcaregrid-mysql-production", "wpcaregrid-mysql-production-restore")
+TARGET_FIELDS = ("name", "addr", "peer", "peer_addr")
 UNITS = ("mysql@wpcaregrid-production.service", "mysql@wpcaregrid-production-restore.service")
 VENDOR_UNIT = "mysql.service"
 UNIT_PROPERTIES = ("Type", "NotifyAccess", "PrivateTmp", "PrivateDevices", "ProtectSystem",
@@ -62,6 +71,11 @@ class HostError(Exception):
 
 
 class RealHost:
+    def euid(self):
+        import os
+
+        return os.geteuid()
+
     def run(self, args, timeout=COMMAND_TIMEOUT):
         import subprocess
 
@@ -139,19 +153,45 @@ def collect_journal(host, lines_cap, since):
     return {"rc": rc, "raw": raw}
 
 
+def recognized_denied_record(fields):
+    """AppSec F4 fix: only a complete, sane audit shape counts as evidence.
+
+    A DENIED line must carry an explicit DENIED verdict, a non-empty operation,
+    a syntactically sane profile token and at least one mask field. Anything
+    else is counted as unrecognized and can never become target evidence."""
+    if fields.get("apparmor") != "DENIED":
+        return False
+    operation = fields.get("operation", "")
+    profile = fields.get("profile", "")
+    if not operation or not profile:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", profile):
+        return False
+    if not (fields.get("requested_mask") or fields.get("mask") or fields.get("denied_mask")):
+        return False
+    return True
+
+
 def journal_rows(text):
-    """Split journal text into parsed AppArmor records. Returns (denied, notify_targets)."""
-    denied, targets = [], []
+    """Split journal text into (recognized_denied, notify_targets, unrecognized).
+
+    Targets require a recognized record, a G1 profile, and the notify path in
+    one of the path/address fields only — never in a free-text field."""
+    denied, targets, unrecognized = [], [], []
     for line in text.splitlines():
         if 'apparmor="DENIED"' not in line:
             continue
         fields = parse_record(line)
         fields["ts"] = timestamp_of(line)
+        if not recognized_denied_record(fields):
+            unrecognized.append(line)
+            continue
         denied.append(fields)
-        values = " ".join(str(value) for value in fields.values())
-        if "systemd/notify" in values:
+        if not str(fields.get("profile", "")).startswith(G1_PROFILE_PREFIXES):
+            continue
+        if any(TARGET in str(fields.get(field, "")) for field in TARGET_FIELDS):
             targets.append(fields)
-    return denied, targets
+    return denied, targets, unrecognized
 
 
 def emit_row(emit, fields):
@@ -222,7 +262,11 @@ def main(argv=None, host=None, stream=None):
             if index >= len(argv) or len(extra_profiles) >= 8:
                 emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=profile_argument_invalid")
                 return 4
-            extra_profiles.append(argv[index])
+            name = argv[index]
+            if not re.fullmatch(PROFILE_NAME_RE, name):
+                emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=profile_argument_invalid")
+                return 4
+            extra_profiles.append(PROFILE_DIR + name)
         else:
             emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=argument_invalid:" + argument)
             return 4
@@ -231,6 +275,12 @@ def main(argv=None, host=None, stream=None):
     host = host if host is not None else RealHost()
     emit("TOOL %s %s mode=read_only target=%s" % (TOOL, VERSION, TARGET))
     emit("JOURNAL lines_cap=%d since=%s" % (lines_cap, since or "none"))
+
+    if host.euid() != 0:
+        emit("CHECK console_root UNKNOWN not_root_console")
+        emit("G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=not_root_console")
+        return 4
+    emit("CHECK console_root PASS root_console")
 
     outcome = guard(lambda: collect_journal(host, lines_cap, since))
     if isinstance(outcome, tuple):
@@ -245,23 +295,28 @@ def main(argv=None, host=None, stream=None):
     text = raw.decode("utf-8", errors="replace").strip()
     if not text or text == "-- No entries --":
         emit("CHECK journal %s journal_empty_or_no_entries" % ("ABSENT" if text else "EMPTY"))
-        emit("COUNTS denied_total=0 g1_denied_total=0 notify_target=0")
+        emit("COUNTS denied_total=0 g1_denied_total=0 notify_target=0 unrecognized=0")
         verdict, status, code, count = "ABSENT", "HOLD", "journal_empty", 0
     else:
-        denied, targets = journal_rows(text)
+        denied, targets, unrecognized = journal_rows(text)
         g1_denied = [fields for fields in denied
                      if str(fields.get("profile", "")).startswith(G1_PROFILE_PREFIXES)]
         emit("CHECK journal PASS lines_read=%d" % len(text.splitlines()))
-        emit("COUNTS denied_total=%d g1_denied_total=%d notify_target=%d"
-             % (len(denied), len(g1_denied), len(targets)))
+        emit("COUNTS denied_total=%d g1_denied_total=%d notify_target=%d unrecognized=%d"
+             % (len(denied), len(g1_denied), len(targets), len(unrecognized)))
         if targets:
             emit("ROW_HEADER " + " | ".join(COLUMNS))
         for fields in targets[:MAX_PRINT_ROWS]:
             emit_row(emit, fields)
         if len(targets) > MAX_PRINT_ROWS:
             emit("NOTE rows_truncated printed=%d total=%d" % (MAX_PRINT_ROWS, len(targets)))
+        if unrecognized:
+            emit("NOTE unrecognized_denied_records=%d not_counted_as_evidence" % len(unrecognized))
         if targets:
             verdict, status, code, count = "PRESENT", "PASS", "none", len(targets)
+        elif unrecognized:
+            verdict, status, code, count = ("UNKNOWN", "UNKNOWN",
+                                            "unrecognized_denied_records", 0)
         else:
             verdict, status, code, count = ("ABSENT", "HOLD",
                                             "no_matching_records_in_bounded_window", 0)
@@ -269,7 +324,7 @@ def main(argv=None, host=None, stream=None):
     profile_statics(host, G1_PROFILES + tuple(extra_profiles), emit)
     emit_unit_properties(host, UNITS + (VENDOR_UNIT,), emit)
     emit("G1_NOTIFY_EVIDENCE=%s;COUNT=%d;STATUS=%s;CODE=%s" % (verdict, count, status, code))
-    return 0
+    return 0 if verdict != "UNKNOWN" else 4
 
 
 if __name__ == "__main__":

@@ -22,18 +22,32 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
 - Payloads pinned by `scripts/SHA256SUMS` (digest
   `0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85`) equal the
   NEW `/usr/local/libexec` targets in the hotfix document.
-- New read-only diagnostics (this change, review pending) live in their own toolkit
-  directory `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
+- New read-only diagnostics (correction round v1.1.0 after the independent
+  reviews; review pending) live in their own toolkit directory
+  `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
   `production-g1-inventory` precedent). The frozen, GO-0-anchored
   `scripts/production-g1-ops/` transaction toolkit and its `SHA256SUMS`
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `ad5a9ab3a0982773a506f5aaa389ad0073c1d99c010ead5ba672224eda6c0e56`)
+    (SHA-256 `a55d7ce6530465a12a8bacccd525ce155da34da98749803c6f6f53a09385280b`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
-    (SHA-256 `7b3807923e83282962219827c4b1647bac03b9e29e4ab0ffedf2f4758188806c`)
+    (SHA-256 `91c43b9b58e046372691e55f6644bcf624193f9d9216f48f6265b869c63f91aa`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `73efd7d41e520dafdee43fbb90b56a1662651d6783cb1d709757df3b24c72775`)
+    `a4c8f69bd18e22ef403e2d6b7caef8a3902bd663c60b792e6a8527af86e63d44`)
+  - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
+    matches the transaction tool exactly; parent-directory safety checks for
+    `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
+    (every entry stat'ed and every file opened through the walk's directory
+    FD with identity comparison, closing the path-reopen TOCTOU); the `/root`
+    staging scan runs in both modes (an explicit `--package` no longer hides
+    an unverified incoming directory); duplicate/empty `--package` arguments
+    fail closed; companion verification supports the sibling layout without
+    confusing this directory's own `SHA256SUMS` with a partial ops companion
+    set; the notify collector requires the approved root console (non-root is
+    UNKNOWN, never a verdict), counts malformed DENIED lines as visible
+    unrecognized instead of target evidence, and accepts `--profile NAME`
+    basenames under `/etc/apparmor.d/` only.
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.

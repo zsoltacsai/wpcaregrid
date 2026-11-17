@@ -51,13 +51,13 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
 HELPER = LIBEXEC + "/wpcaregrid-g1-mysql.py"
 CONTRACT = LIBEXEC + "/production_g1_mysql_contract.py"
-MANIFEST = LIBEXEC + "/production-g1-mysql-manifest.json"
+MANIFEST = LIBEXEC + "/production_g1_mysql_manifest.json"
 PROFILE_P = APPARMOR + "/wpcaregrid-mysql-production"
 PROFILE_R = APPARMOR + "/wpcaregrid-mysql-production-restore"
 VENDOR_PROFILE = APPARMOR + "/usr.sbin.mysqld"
@@ -188,6 +188,59 @@ class RealHost:
                 st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
                 yield os.path.relpath(os.path.join(base, name), path), st
 
+    def datadir_fingerprint(self, path, mysql_ids, max_entries, max_total_bytes, max_file_bytes):
+        """Upgrader-grade hardened datadir walk (AppSec F2 fix).
+
+        Mirrors go54a-upgrade-apparmor.fingerprint_tree with explicit resource
+        bounds: every entry is stat'ed through the walk's directory FD, every
+        regular file is opened through that same FD with O_NOFOLLOW, and the
+        opened descriptor's identity is compared with the walked stat before
+        hashing, so a swapped parent directory or symlink cannot feed
+        out-of-tree bytes into the fingerprint.
+        """
+        root = os.lstat(path)
+        datadir_root_check(root, path, mysql_ids)
+        records, entries, total = [], 0, 0
+
+        def fail(exc):
+            raise HostError("walk_failed", errno.errorcode.get(exc.errno, str(exc.errno))) from exc
+
+        for base, dirs, files, dfd in os.fwalk(path, topdown=True, follow_symlinks=False, onerror=fail):
+            dirs.sort()
+            files.sort()
+            for name in dirs + files:
+                rel = os.path.relpath(os.path.join(base, name), path)
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                entries += 1
+                if entries > max_entries:
+                    raise HostError("datadir_entry_count_exceeded", path)
+                validate_datadir_entry(rel, st, mysql_ids)
+                digest = "-"
+                if stat.S_ISREG(st.st_mode):
+                    if st.st_size > max_file_bytes or total + st.st_size > max_total_bytes:
+                        raise HostError("datadir_exceeds_bounds", rel)
+                    total += st.st_size
+                    fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                                 | getattr(os, "O_NONBLOCK", 0), dir_fd=dfd)
+                    try:
+                        opened = os.fstat(fd)
+                        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+                            raise UnsafeState("datadir_changed_during_read", rel)
+                        data = b""
+                        while len(data) < max_file_bytes:
+                            chunk = os.read(fd, min(65536, max_file_bytes - len(data)))
+                            if not chunk:
+                                break
+                            data += chunk
+                        if len(data) >= max_file_bytes and os.read(fd, 1):
+                            raise HostError("datadir_exceeds_bounds", rel)
+                        digest = hashlib.sha256(data).hexdigest()
+                    finally:
+                        os.close(fd)
+                records.append(datadir_record(rel, st, digest))
+        material = repr((stat.S_IMODE(root.st_mode), root.st_uid, root.st_gid, root.st_mtime_ns, records)).encode()
+        return sha256(material), entries, total
+
     def run(self, args, timeout=COMMAND_TIMEOUT):
         try:
             done = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -241,6 +294,8 @@ def validate_package_dir(host, path):
     Deliberately does NOT compile profiles or regenerate them from the contract:
     the transaction tool performs those checks at execution time.
     """
+    if not host.lexists(path):
+        return "invalid:package_directory_missing"
     st = host.lstat(path)
     if not stat.S_ISDIR(st.st_mode):
         return "invalid:package_directory_not_directory"
@@ -305,6 +360,23 @@ def check_lock_state(host, emit):
     if host.flock_shared_probe(LOCK) == "held":
         return "HOLD", "lock_held_by_other_process"
     return "PASS", "lock_file_present_and_free"
+
+
+def check_parent_directories(host, emit):
+    """Mirror the upgrader's require_dir preconditions for LIBEXEC and APPARMOR:
+    an unsafe parent directory must stop the readiness verdict, not just the
+    later transaction."""
+    for path in (LIBEXEC, APPARMOR):
+        if not host.lexists(path):
+            return "HOLD", "parent_directory_missing:" + path
+        st = host.lstat(path)
+        if not stat.S_ISDIR(st.st_mode):
+            return "HOLD", "parent_directory_not_directory:" + path
+        if (st.st_uid, st.st_gid) != (0, 0):
+            return "HOLD", "parent_directory_owner_invalid:" + path
+        if stat.S_IMODE(st.st_mode) & 0o022:
+            return "HOLD", "parent_directory_mode_unsafe:" + path
+    return "PASS", "libexec_and_apparmor_parents_safe"
 
 
 def check_units_inactive(host, emit):
@@ -404,30 +476,24 @@ def check_vendor_profile_source(host, emit):
     return "PASS", "recorded_for_pre_post_comparison"
 
 
-def datadir_fingerprint(host, path, mysql_ids):
-    st = host.lstat(path)
+def datadir_root_check(st, path, mysql_ids):
+    """Shared datadir validation used by both the real host walk and the
+    synthetic test host, so the two cannot drift apart."""
     if not stat.S_ISDIR(st.st_mode):
         raise UnsafeState("datadir_not_directory", path)
     if (st.st_uid, st.st_gid) != mysql_ids or stat.S_IMODE(st.st_mode) & 0o022:
         raise UnsafeState("datadir_root_owner_or_mode_invalid", path)
-    records, entries, total = [], 0, 0
-    for rel, entry in host.walk_tree(path):
-        entries += 1
-        if entries > MAX_DATADIR_ENTRIES:
-            raise HostError("datadir_entry_count_exceeded", path)
-        if stat.S_ISLNK(entry.st_mode) or not (stat.S_ISDIR(entry.st_mode) or stat.S_ISREG(entry.st_mode)):
-            raise UnsafeState("datadir_entry_invalid", rel)
-        if (entry.st_uid, entry.st_gid) != mysql_ids or stat.S_IMODE(entry.st_mode) & 0o022:
-            raise UnsafeState("datadir_entry_owner_or_mode_invalid", rel)
-        digest = "-"
-        if stat.S_ISREG(entry.st_mode):
-            if entry.st_size > MAX_FILE_BYTES or total + entry.st_size > MAX_DATADIR_BYTES:
-                raise HostError("datadir_exceeds_bounds", rel)
-            total += entry.st_size
-            digest = sha256(host.read_regular(os.path.join(path, rel), MAX_FILE_BYTES))
-        records.append((rel, entry.st_mode, entry.st_uid, entry.st_gid, entry.st_size, entry.st_mtime_ns, digest))
-    material = repr((stat.S_IMODE(st.st_mode), st.st_uid, st.st_gid, st.st_mtime_ns, records)).encode()
-    return sha256(material), entries, total
+
+
+def validate_datadir_entry(rel, st, mysql_ids):
+    if stat.S_ISLNK(st.st_mode) or not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+        raise UnsafeState("datadir_entry_invalid", rel)
+    if (st.st_uid, st.st_gid) != mysql_ids or stat.S_IMODE(st.st_mode) & 0o022:
+        raise UnsafeState("datadir_entry_owner_or_mode_invalid", rel)
+
+
+def datadir_record(rel, st, digest):
+    return (rel, st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, digest)
 
 
 def check_datadirs(host, emit):
@@ -435,7 +501,8 @@ def check_datadirs(host, emit):
     for path in DATADIRS:
         if not host.lexists(path):
             return "HOLD", "datadir_missing:" + path
-        fingerprint, entries, total = datadir_fingerprint(host, path, mysql_ids)
+        fingerprint, entries, total = host.datadir_fingerprint(
+            path, mysql_ids, MAX_DATADIR_ENTRIES, MAX_DATADIR_BYTES, MAX_FILE_BYTES)
         emit("FINGERPRINT datadir:%s sha256=%s entries=%d bytes=%d" % (path, fingerprint, entries, total))
     return "PASS", "both_datadirs_fingerprinted"
 
@@ -471,13 +538,10 @@ def check_transaction_leftovers(host, emit):
     return "PASS", "no_journal_no_temporaries"
 
 
-def check_package_intake(host, package_dir, emit):
-    if package_dir:
-        verdict = validate_package_dir(host, package_dir)
-        if verdict != "valid":
-            return "HOLD", "package_invalid:" + verdict
-        emit("NOTE package_generated_profiles_and_parser_compilation_not_checked_here")
-        return "PASS", "package_verified:" + package_dir
+def scan_staged_packages(host, emit):
+    """The /root staging scan runs in BOTH modes (AppSec F5 fix): an unverified
+    incoming directory or an invalid staged package is a HOLD even when an
+    explicit --package was supplied."""
     try:
         names = host.listdir(ROOT_DIR)
     except (HostError, OSError):
@@ -492,17 +556,32 @@ def check_package_intake(host, package_dir, emit):
             return "HOLD", "staged_package_invalid:" + name + ":" + verdict
         emit("NOTE staged_package_validated:" + name)
         emit("NOTE package_generated_profiles_and_parser_compilation_not_checked_here")
-    if not staged:
-        return "PASS", "no_staged_go54a_package"
-    return "PASS", "staged_packages_recognized_and_validated"
+    return "PASS", ("staged_packages_recognized" if staged else "none")
+
+
+def check_package_intake(host, package_dir, emit):
+    status, detail = scan_staged_packages(host, emit)
+    if status != "PASS":
+        return status, detail
+    if package_dir is None:
+        if detail == "none":
+            return "PASS", "no_staged_go54a_package"
+        return "PASS", "staged_packages_recognized_and_validated"
+    verdict = validate_package_dir(host, package_dir)
+    if verdict != "valid":
+        return "HOLD", "package_invalid:" + verdict
+    emit("NOTE package_generated_profiles_and_parser_compilation_not_checked_here")
+    return "PASS", "package_verified:" + package_dir
 
 
 def toolkit_candidate_dirs(host):
-    """Fixed, caller-independent lookup: the frozen ops toolkit staged as a sibling
-    directory (the repository layout), or this tool's own directory (flat staging)."""
+    """Fixed, caller-independent lookup: the frozen ops toolkit staged as a
+    sibling directory (the repository layout), and this tool's own directory
+    (flat staging). No caller-supplied path is ever consulted."""
     base = host.script_dir().rstrip("/")
+    sibling = os.path.join(os.path.dirname(base), TOOLKIT_DIR_NAME)
     candidates = []
-    for path in (os.path.join(os.path.dirname(base), TOOLKIT_DIR_NAME), base):
+    for path in (sibling, base):
         if path and path not in candidates:
             candidates.append(path)
     return candidates
@@ -518,25 +597,38 @@ def companion_pins():
 
 
 def check_toolkit_companions(host, emit):
-    found = []
-    for directory in toolkit_candidate_dirs(host):
-        present = [name for name, _ in companion_pins() if host.lexists(os.path.join(directory, name))]
-        if present:
-            found.append((directory, present))
-    if not found:
-        emit("NOTE toolkit_companions_absent_standalone_run_verify_this_tool_by_its_pr_pinned_hash")
-        return "PASS", "companions_absent"
+    """Verify the frozen ops toolkit beside this tool (QA B2 fix).
+
+    Supported layouts: the repository/sibling layout and a standalone
+    diagnostics directory. In the sibling ops directory any of the three pins
+    triggers full validation. In this tool's own directory only the executable
+    companions trigger validation — the diagnostics directory legitimately
+    carries its own SHA256SUMS, which must never be mistaken for a partial ops
+    companion set. Wherever verification is triggered, all three companions
+    must be present with the exact reviewed bytes."""
     pins = companion_pins()
-    for directory, present in found:
-        if len(present) != len(pins):
-            return "HOLD", ("toolkit_companions_incomplete:" + os.path.basename(directory)
-                            + ":" + ",".join(present))
+    pin_names = {name for name, _ in pins}
+    verified = False
+    for directory in toolkit_candidate_dirs(host):
+        own_directory = os.path.basename(directory.rstrip("/")) != TOOLKIT_DIR_NAME
+        triggers = {UPGRADER_NAME, FETCH_NAME} if own_directory else pin_names
+        present = {name for name in pin_names if host.lexists(os.path.join(directory, name))}
+        if not present & triggers:
+            continue
+        missing = sorted(pin_names - present)
+        if missing:
+            return "HOLD", ("toolkit_companions_incomplete:" + os.path.basename(directory.rstrip("/"))
+                            + ":" + ",".join(missing))
         for name, expected in pins:
             digest = sha256(host.read_regular(os.path.join(directory, name), MAX_FILE_BYTES))
             if digest != expected:
-                return "HOLD", ("toolkit_companion_mismatch:" + os.path.basename(directory)
+                return "HOLD", ("toolkit_companion_mismatch:" + os.path.basename(directory.rstrip("/"))
                                 + "/" + name)
         emit("NOTE toolkit_companions_verified:" + directory)
+        verified = True
+    if not verified:
+        emit("NOTE toolkit_companions_absent_standalone_run_verify_this_tool_by_its_pr_pinned_hash")
+        return "PASS", "companions_absent"
     return "PASS", "companions_match_reviewed_pins"
 
 
@@ -556,7 +648,14 @@ def main(argv=None, host=None, stream=None):
             if index >= len(argv):
                 emit("G1_GO54A_READINESS=HOLD;CODE=package_argument_missing")
                 return 3
-            package_dir = argv[index]
+            value = argv[index]
+            if not value:
+                emit("G1_GO54A_READINESS=HOLD;CODE=package_argument_invalid:empty")
+                return 3
+            if package_dir is not None:
+                emit("G1_GO54A_READINESS=HOLD;CODE=duplicate_package_argument")
+                return 3
+            package_dir = value
         else:
             emit("G1_GO54A_READINESS=HOLD;CODE=argument_invalid:" + argument)
             return 3
@@ -574,6 +673,9 @@ def main(argv=None, host=None, stream=None):
 
     status, detail = guard(lambda: check_lock_state(host, emit))
     results.append(("lock_state", status, detail))
+
+    status, detail = guard(lambda: check_parent_directories(host, emit))
+    results.append(("parent_directories", status, detail))
 
     status, detail = guard(lambda: check_units_inactive(host, emit))
     results.append(("g1_units_inactive", status, detail))

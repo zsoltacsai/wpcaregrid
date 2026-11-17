@@ -38,12 +38,16 @@ INNOCENT_KERNEL_LINE = "Nov 17 19:00:03 kernel: usb 1-1: new device"
 
 class FakeHost:
     def __init__(self, journal="-- No entries --", journal_rc=0, commands=None,
-                 files=None, fail_journal=False):
+                 files=None, fail_journal=False, euid=0):
         self.journal, self.journal_rc = journal, journal_rc
         self.commands = commands or {}
         self.files = files or {}
         self.fail_journal = fail_journal
+        self.euid_value = euid
         self.run_args = []
+
+    def euid(self):
+        return self.euid_value
 
     def run(self, args, timeout=60):
         self.run_args.append(list(args))
@@ -90,7 +94,8 @@ class NotifyEvidenceTestCase(unittest.TestCase):
                              INNOCENT_KERNEL_LINE]) + "\n"
         self.host = FakeHost(journal=journal, commands=self.unit_commands())
         self.assertEqual(self.run_main(), 0)
-        self.assertIn("COUNTS denied_total=3 g1_denied_total=3 notify_target=2", self.output())
+        self.assertIn("COUNTS denied_total=3 g1_denied_total=3 notify_target=2 unrecognized=0",
+                      self.output())
         self.assertIn("ROW_HEADER ts | profile | operation | requested | denied | name | addr"
                       " | peer | peer_addr | error | info | comm | pid", self.output())
         # The full record keeps error and info distinguishable in their own columns.
@@ -108,7 +113,8 @@ class NotifyEvidenceTestCase(unittest.TestCase):
         self.host = FakeHost(journal="-- No entries --")
         self.assertEqual(self.run_main(), 0)
         self.assertIn("CHECK journal ABSENT journal_empty_or_no_entries", self.output())
-        self.assertIn("COUNTS denied_total=0 g1_denied_total=0 notify_target=0", self.output())
+        self.assertIn("COUNTS denied_total=0 g1_denied_total=0 notify_target=0 unrecognized=0",
+                      self.output())
         self.assertEqual(self.last_line(),
                          "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;CODE=journal_empty")
 
@@ -132,7 +138,8 @@ class NotifyEvidenceTestCase(unittest.TestCase):
     def test_non_notify_denials_do_not_count_as_targets(self):
         self.host = FakeHost(journal=SOCK_LOCK_DENIAL + "\n")
         self.assertEqual(self.run_main(), 0)
-        self.assertIn("COUNTS denied_total=1 g1_denied_total=1 notify_target=0", self.output())
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=1 notify_target=0 unrecognized=0",
+                      self.output())
         self.assertEqual(self.last_line(),
                          "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;"
                          "CODE=no_matching_records_in_bounded_window")
@@ -202,6 +209,71 @@ class NotifyEvidenceTestCase(unittest.TestCase):
         self.host = FakeHost(journal="-- No entries --")
         self.assertEqual(self.run_main(["--bogus"]), 4)
         self.assertIn("CODE=argument_invalid:--bogus", self.output())
+
+    # -- independent-reviewer findings (AppSec F1, F3, F4) ------------------
+
+    def test_not_root_is_unknown_never_a_verdict(self):
+        self.host = FakeHost(journal=NOTIFY_DENIAL_FULL + "\n", euid=1000)
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("CHECK console_root UNKNOWN not_root_console", self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;CODE=not_root_console")
+
+    def test_crafted_line_with_notify_in_info_is_not_a_target(self):
+        # AppSec F4 regression: a complete G1 record whose only mention of the
+        # notify path sits in free text must not fabricate target evidence.
+        crafted = ('Nov 17 19:00:09 kernel: audit: 1740000009.9:9 apparmor="DENIED" '
+                   'operation="open" profile="wpcaregrid-mysql-production" pid=3600 comm="mysqld" '
+                   'requested_mask="r" denied_mask="r" name="/etc/hosts" '
+                   'info="unrelated event mentions /run/systemd/notify"')
+        self.host = FakeHost(journal=crafted + "\n", commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=1 notify_target=0 unrecognized=0",
+                      self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;"
+                         "CODE=no_matching_records_in_bounded_window")
+
+    def test_unrecognized_denied_shape_is_visible_unknown_not_present(self):
+        # AppSec F4 regression: a DENIED line without the complete audit shape
+        # can never become target evidence and is reported as visible UNKNOWN.
+        malformed = ('Nov 17 19:00:10 kernel: audit: 1740000010.1:10 apparmor="DENIED" '
+                     'info="unrelated mentions /run/systemd/notify"')
+        self.host = FakeHost(journal=malformed + "\n", commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("COUNTS denied_total=0 g1_denied_total=0 notify_target=0 unrecognized=1",
+                      self.output())
+        self.assertIn("NOTE unrecognized_denied_records=1 not_counted_as_evidence", self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=UNKNOWN;COUNT=0;STATUS=UNKNOWN;"
+                         "CODE=unrecognized_denied_records")
+
+    def test_non_g1_valid_record_is_context_only(self):
+        other = ('Nov 17 19:00:11 kernel: audit: 1740000011.1:11 apparmor="DENIED" '
+                 'operation="sendmsg" profile="some-other-profile" pid=3601 comm="other" '
+                 'requested_mask="send" denied_mask="send" addr=/run/systemd/notify')
+        self.host = FakeHost(journal=other + "\n", commands=self.unit_commands())
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("COUNTS denied_total=1 g1_denied_total=0 notify_target=0 unrecognized=0",
+                      self.output())
+        self.assertEqual(self.last_line(),
+                         "G1_NOTIFY_EVIDENCE=ABSENT;COUNT=0;STATUS=HOLD;"
+                         "CODE=no_matching_records_in_bounded_window")
+
+    def test_profile_argument_accepts_only_basenames(self):
+        self.host = FakeHost(journal="-- No entries --")
+        self.assertEqual(self.run_main(["--profile", "wpcaregrid-php-fpm-production"]), 0)
+        files = {"/etc/apparmor.d/custom-profile": "  /run/systemd/notify w,\n"}
+        self.host = FakeHost(journal="-- No entries --", files=files)
+        self.assertEqual(self.run_main(["--profile", "custom-profile"]), 0)
+        self.assertIn("PROFILE_SOURCE /etc/apparmor.d/custom-profile notify_rule_present=yes",
+                      self.output())
+        self.host = FakeHost(journal="-- No entries --")
+        self.assertEqual(self.run_main(["--profile", "/etc/passwd"]), 4)
+        self.assertIn("CODE=profile_argument_invalid", self.output())
+        self.host = FakeHost(journal="-- No entries --")
+        self.assertEqual(self.run_main(["--profile", "../secrets"]), 4)
+        self.assertIn("CODE=profile_argument_invalid", self.output())
 
 
 if __name__ == "__main__":
