@@ -1,0 +1,46 @@
+[
+  {
+    "id": 6945646697,
+    "created_at": "2026-11-17T10:37:47Z",
+    "author_association": "OWNER",
+    "user": {
+      "login": "zsoltacsai"
+    },
+    "body": "WPCG_RELEASE_REVIEW_ARTIFACT_V3 role=integration_qa pr=417 head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f base_sha=822f284575306c8a5474c37ac87672df24a70ae6 agent=codex.qa.pr417.3f0f84a report_sha256=0ccfc1ae515125cf810e8c78c76e976f67f8282c35724aa21f0a06a3f15f22d1 report_base64=UFIgIzQxNyBzb3VyY2UgSW50ZWdyYXRpb24gUUEKSEVBRDogM2YwZjg0YWQyNmE1ZmU3YjZmZDAxY2U0YmU3MTFhNDE2ZGRiMjMwZgpCYXNlOiA4MjJmMjg0NTc1MzA2YzhhNTQ3NGMzN2FjODc2NzJkZjI0YTcwYWU2CgpTb3VyY2UgdmVyZGljdDogUEFTUy4gTm8gZGVmZWN0IGZvdW5kIGluIHRoZSBwcm9kdWN0aW9uLWFkbWlzc2lvbiBIT0xEIGVuZm9yY2VtZW50LCByZWNlaXB0IHZlcmlmaWNhdGlvbiwgdGVzdHMsIG9yIGRvY3VtZW50YXRpb24uIFRoaXMgdmVyZGljdCBjb3ZlcnMgc291cmNlIHJldmlldyBvbmx5LiBDSSBydW4gNDQwNjUyOTE2MTMgaXMgc3RpbGwgaW4gcHJvZ3Jlc3MgYW5kIGlzIG5vdCBQQVNTLiBQcm9kdWN0aW9uIHJlY292ZXJ5IHJlbWFpbnMgSE9MRCB1bnRpbCB0aGUgcmVxdWlyZWQgcnVudGltZSBldmlkZW5jZSBpcyBjb2xsZWN0ZWQuIE5vIGxpdmUgZGF0YWJhc2Ugb3IgaG9zdCB3YXMgYWNjZXNzZWQuClJldmlld2VyIG1vZGVsOiBHUFQtNiBMdW5hLCBtZWRpdW0gZWZmb3J0Lg==",
+    "body_sha256": "f21e60bcc35288d3b2501a5afb99f19f996e82e1bac22bfa7c6e264834af8b27",
+    "kind": "artifact"
+  },
+  {
+    "id": 6945647262,
+    "created_at": "2026-11-17T10:37:48Z",
+    "author_association": "OWNER",
+    "user": {
+      "login": "zsoltacsai"
+    },
+    "body": "WPCG_RELEASE_REVIEW_V3\nrole=integration_qa\npr=417\nhead_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f\nagent=codex.qa.pr417.3f0f84a\nreviewer_kind=ai_agent\ndecision=PASS\nevidence_sha256=0ccfc1ae515125cf810e8c78c76e976f67f8282c35724aa21f0a06a3f15f22d1",
+    "body_sha256": "5ff342365ea396c1a7dc0e1cdbba919ec6765837c87fd9f63462665180949f9a",
+    "kind": "review"
+  },
+  {
+    "id": 6945647897,
+    "created_at": "2026-11-17T10:37:50Z",
+    "author_association": "OWNER",
+    "user": {
+      "login": "zsoltacsai"
+    },
+    "body": "WPCG_RELEASE_REVIEW_ARTIFACT_V3 role=appsec pr=417 head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f base_sha=822f284575306c8a5474c37ac87672df24a70ae6 agent=codex.appsec.pr417.3f0f84a report_sha256=06d186d018c657c1884fb77942388d64fdf0365112f0ec213ccd0d57e92d3ec1 report_base64=UFIgIzQxNyBBcHBTZWMgZXhhY3QtaGVhZCByZXZpZXcKSEVBRDogM2YwZjg0YWQyNmE1ZmU3YjZmZDAxY2U0YmU3MTFhNDE2ZGRiMjMwZgpCYXNlOiA4MjJmMjg0NTc1MzA2YzhhNTQ3NGMzN2FjODc2NzJkZjI0YTcwYWU2CgpWZXJkaWN0OiBQQVNTIGZvciB0aGUgcHJvZHVjdGlvbi1yZWFkaW5lc3Mgc2VwYXJhdGlvbjsgcHJvZHVjdGlvbiByZWNvdmVyeSByZW1haW5zIEhPTEQuIFRoZSBtaWdyYXRpb24gcmVjZWlwdCBtdXN0IHJldGFpbiBwcm9kdWN0aW9uX2FkbWlzc2lvbi5zdGF0ZT1IT0xEIGFuZCB0aGUgZXhhY3QgdGhyZWUgcmVxdWlyZWQgcnVudGltZSBhdHRlc3RhdGlvbnMuIFRoZSB2ZXJpZmllciByZWplY3RzIGFueSByZWNlaXB0IHRoYXQgY2hhbmdlcyB0aGUgc3RhdGUgdG8gUEFTUzsgdGhlIENMSSBsYWJlbHMgYWNjZXB0ZWQgcmVjZWlwdHMgVkFMSURfQ0xPTkVfUkVIRUFSU0FMX09OTFkgYW5kIHJlcG9ydHMgcHJvZHVjdGlvbiByZWNvdmVyeSBIT0xELiBObyBwcm9tb3Rpb24gcGF0aCB3YXMgZm91bmQuCgpUaGUgcmVtYWluaW5nIHJ1bnRpbWUgYXR0ZXN0YXRpb25zIGFyZTogKDEpIG15c3FsZHVtcCBlbmRwb2ludC10by1pbnN0YW5jZSBpZGVudGl0eTsgKDIpIGlkZW50aXR5IHVzaW5nIHRoZSBhY3R1YWwgcHJvdGVjdGVkIGFwcGxpY2F0aW9uIGNyZWRlbnRpYWxzOyBhbmQgKDMpIGV2aWRlbmNlIHRoYXQgdGhlIGV4YWN0IHZlcmlmaWVkIGNhbmRpZGF0ZSBtaWdyYXRpb24gYnl0ZXMgd2VyZSBleGVjdXRlZC4gU3ludGhldGljL3NvdXJjZSB0ZXN0cyBkbyBub3Qgc2F0aXNmeSB0aGVzZSBnYXRlcy4gQ0kgcnVuIDQ0MDY1MjkxNjEzIGlzIHN0aWxsIGluIHByb2dyZXNzIGFuZCBpcyBub3QgUEFTUy4gTm8gaG9zdCBvciBkYXRhYmFzZSB3YXMgYWNjZXNzZWQuClJldmlld2VyIG1vZGVsOiBHUFQtNi4xLCBtZWRpdW0gZWZmb3J0Lg==",
+    "body_sha256": "4c6d2f0c7490fdcf26b2cdfe9e66c812b1b4af490fcb8bddd30849d71addeeaa",
+    "kind": "artifact"
+  },
+  {
+    "id": 6945648524,
+    "created_at": "2026-11-17T10:37:52Z",
+    "author_association": "OWNER",
+    "user": {
+      "login": "zsoltacsai"
+    },
+    "body": "WPCG_RELEASE_REVIEW_V3\nrole=appsec\npr=417\nhead_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f\nagent=codex.appsec.pr417.3f0f84a\nreviewer_kind=ai_agent\ndecision=PASS\nevidence_sha256=06d186d018c657c1884fb77942388d64fdf0365112f0ec213ccd0d57e92d3ec1",
+    "body_sha256": "efbf3be019215080a10198906b717f21915aeb245b307067f02d47bd79d539f9",
+    "kind": "review"
+  }
+]
