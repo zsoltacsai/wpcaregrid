@@ -369,10 +369,11 @@ def verify_document(document, key, purpose):
     return body
 
 
-def _load_signed(path, key, purpose, spec, *, owner_uid, maximum=MAX_RECORD_BYTES, code="DOCUMENT_SCHEMA_INVALID"):
+def _load_signed(path, key, purpose, spec, *, owner_uid, maximum=MAX_RECORD_BYTES, code="DOCUMENT_SCHEMA_INVALID",
+                 spec_for=None):
     document, file_sha = V2.read_protected_json(path, owner_uid=owner_uid, maximum=maximum)
     body = verify_document(document, key, purpose)
-    _check(body, spec, code)
+    _check(body, spec_for(body) if spec_for is not None else spec, code)
     return body, file_sha
 
 
@@ -447,6 +448,14 @@ def source_policy_object(policy):
     _check_application_consistency(policy["recovery_point_kind"], policy["application"], "SOURCE_POLICY_INVALID")
     if policy["backup_account"].split("@", 1)[0].lower() in {"root", "mysql.sys", "mysql.session", "mysql.infoschema"}:
         refuse("SOURCE_POLICY_INVALID")
+    V2.require_source_schema(policy["schema"], "SOURCE_POLICY_INVALID")
+    if policy["schema"] == "wpcg_prod_main":
+        # The G1 production schema is only ever dumped from the production
+        # instance: loopback and the contract's pinned production port (3308).
+        production = V2._g1_contract()[0]
+        if (policy["schema"] != production.schema or policy["mysql"]["host"] != "127.0.0.1"
+                or policy["mysql"]["port"] != production.port):
+            refuse("SOURCE_POLICY_INVALID")
     return policy
 
 
@@ -687,7 +696,8 @@ def capture(source_policy_path, archive_path, archive_id, config_reference_path,
     _fsync_directory(archive.parent)
     raw, _ = _read_protected_bytes(archive, owner_uid=owner_uid, maximum=MAX_ARCHIVE_BYTES, code="ARCHIVE")
     captured_sql = V2.decode_verified_archive(raw, _sha(raw))
-    V2.audit_sql(captured_sql, CAPTURE_AUDIT_TARGET, policy["approved_definer"])
+    V2.audit_sql(captured_sql, CAPTURE_AUDIT_TARGET, policy["approved_definer"],
+                 source_schema=policy["schema"])
     after = (observe or observe_source_identity)(policy)
     check_source_observation(policy, after)
     if observation != after:
@@ -758,7 +768,14 @@ def bind_capture_to_manifest(capture, manifest, policy):
         refuse("CAPTURE_SOURCE_IDENTITY_MISMATCH")
     destination = policy["destination_identity"]
     destination_uuid_sha = _sha(policy["mysql"]["server_uuid"].encode("ascii", "replace"))
-    if (destination_uuid_sha == source["server_uuid_sha256"]
+    if policy["isolation"]["kind"] == V2.ISOLATION_KIND_G1_SYSTEMD:
+        # Same-VPS G1 instances share host/environment ids; separation is the
+        # distinct server UUID, pinned distinct ports/datadirs (validated in the
+        # destination policy against the G1 contract) and the production schema.
+        production = V2._g1_contract()[0]
+        if destination_uuid_sha == source["server_uuid_sha256"] or source["schema"] != production.schema:
+            refuse("DESTINATION_NOT_SEPARATE_FROM_SOURCE")
+    elif (destination_uuid_sha == source["server_uuid_sha256"]
             or destination["environment_id"] == source["environment_id"]
             or destination["host_id"] == source["host_id"]):
         refuse("DESTINATION_NOT_SEPARATE_FROM_SOURCE")
@@ -814,10 +831,31 @@ RESTORE_RECEIPT_SPEC = {
 }
 
 
+# The Production G1 restore instance shares a VPS with the production instance, so
+# its receipt does not (and must not) claim host/environment distinctness. It
+# records the separation that actually holds: distinct server UUID, distinct
+# pinned ports and datadirs, and distinct schemas. Container receipts keep the
+# unchanged RESTORE_RECEIPT_SPEC above.
+G1_RESTORE_RECEIPT_SPEC = {
+    **RESTORE_RECEIPT_SPEC,
+    "separation": {"server_uuid_distinct": True, "port_distinct": True, "datadir_distinct": True,
+                   "schema_distinct": True, "target_schema_absent_before_import": True,
+                   "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD},
+}
+
+
+def _restore_receipt_spec_for(body):
+    separation = body.get("separation") if isinstance(body, dict) else None
+    if isinstance(separation, dict) and separation.get("isolation_kind") == V2.ISOLATION_KIND_G1_SYSTEMD:
+        return G1_RESTORE_RECEIPT_SPEC
+    return RESTORE_RECEIPT_SPEC
+
+
 def verify_restore_receipt(path, key, *, owner_uid, now=None, capture_sha256=None, allow_stale=False):
     now = _now(now)
     body, file_sha = _load_signed(path, key, PURPOSE_RESTORE_RECEIPT, RESTORE_RECEIPT_SPEC,
-                                  owner_uid=owner_uid, maximum=MAX_RECEIPT_BYTES, code="RESTORE_RECEIPT_INVALID")
+                                  owner_uid=owner_uid, maximum=MAX_RECEIPT_BYTES, code="RESTORE_RECEIPT_INVALID",
+                                  spec_for=_restore_receipt_spec_for)
     started, completed = _utc(body["started_at"]), _utc(body["completed_at"])
     issued, expires = _utc(body["issued_at"]), _utc(body["expires_at"])
     if (not started <= completed <= issued or expires <= issued or expires - issued > MAX_RESTORE_RECEIPT_AGE
@@ -825,7 +863,13 @@ def verify_restore_receipt(path, key, *, owner_uid, now=None, capture_sha256=Non
         refuse("RESTORE_RECEIPT_TIME_INVALID")
     if not allow_stale and expires <= now:
         refuse("RESTORE_RECEIPT_STALE")
-    if (body["source"]["server_uuid_sha256"] == body["destination"]["server_uuid_sha256"]
+    if body["separation"].get("isolation_kind") == V2.ISOLATION_KIND_G1_SYSTEMD:
+        # Same-VPS G1 receipt: host/environment ids may legitimately be equal.
+        if (body["source"]["server_uuid_sha256"] == body["destination"]["server_uuid_sha256"]
+                or body["source"]["schema"] != V2._g1_contract()[0].schema
+                or body["source"]["schema"] == body["destination"]["target_schema"]):
+            refuse("RESTORE_RECEIPT_SEPARATION_INVALID")
+    elif (body["source"]["server_uuid_sha256"] == body["destination"]["server_uuid_sha256"]
             or body["source"]["environment_id"] == body["destination"]["environment_id"]
             or body["source"]["host_id"] == body["destination"]["host_id"]
             or body["source"]["schema"] == body["destination"]["target_schema"]):
@@ -836,6 +880,15 @@ def verify_restore_receipt(path, key, *, owner_uid, now=None, capture_sha256=Non
     if capture_sha256 is not None and body["capture_record_sha256"] != capture_sha256:
         refuse("RESTORE_RECEIPT_CAPTURE_MISMATCH")
     return body, file_sha
+
+
+def _receipt_separation(policy):
+    if policy["isolation"]["kind"] == V2.ISOLATION_KIND_G1_SYSTEMD:
+        return {"server_uuid_distinct": True, "port_distinct": True, "datadir_distinct": True,
+                "schema_distinct": True, "target_schema_absent_before_import": True,
+                "isolation_kind": V2.ISOLATION_KIND_G1_SYSTEMD}
+    return {"server_uuid_distinct": True, "environment_distinct": True, "host_distinct": True,
+            "schema_distinct": True, "target_schema_absent_before_import": True}
 
 
 def _restore_receipt_body(capture, capture_sha, manifest, manifest_sha, policy, policy_sha, v2_receipt,
@@ -860,8 +913,7 @@ def _restore_receipt_body(capture, capture_sha, manifest, manifest_sha, policy, 
         "destination": {"environment_id": policy["destination_identity"]["environment_id"],
                         "host_id": policy["destination_identity"]["host_id"],
                         "server_uuid_sha256": destination_uuid_sha, "target_schema": manifest["target_schema"]},
-        "separation": {"server_uuid_distinct": True, "environment_distinct": True, "host_distinct": True,
-                       "schema_distinct": True, "target_schema_absent_before_import": True},
+        "separation": _receipt_separation(policy),
         "observed": {"schema_sha256": observed["schema_sha256"], "ledger_sha256": observed["ledger_sha256"],
                      "data_sha256": observed["data_sha256"],
                      "table_names": manifest["expected"]["table_names"],
@@ -896,7 +948,7 @@ def restore_authenticated(manifest_path, policy_path, config_path, receipt_path,
             refuse("INPUTS_CHANGED_DURING_RESTORE")
         body = _restore_receipt_body(capture, capture_sha, manifest, manifest_sha, policy, policy_sha,
                                      v2_receipt, v2_receipt_sha, bound, _now(None))
-        _check(body, RESTORE_RECEIPT_SPEC, "RESTORE_RECEIPT_INVALID")
+        _check(body, _restore_receipt_spec_for(body), "RESTORE_RECEIPT_INVALID")
         _write_signed(authenticated_path, body, key, PURPOSE_RESTORE_RECEIPT, owner_uid=owner_uid)
     except BaseException:
         # No PASS evidence may outlive a failed chain: remove the restored

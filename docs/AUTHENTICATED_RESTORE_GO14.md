@@ -231,6 +231,74 @@ authenticated-restore-v3.py verify-migration-receipt --migration-receipt OUT --s
 authenticated-restore-v3.py cleanup  --release-manifest M --destination-policy D --receipt RECEIPT --signing-key K
 ```
 
+## Update — 2026-11-17 (GO-20.1: source-only compatibility with the Production G1 instances)
+
+**Still HOLD / NO-GO.** This section records a source change only. Nothing was
+run against a host, MySQL instance, systemd unit or network, and production
+recovery is **not** made admissible by it.
+
+A source-only analysis found v2/v3 incompatible with the two Production G1
+instances (`mysql@wpcaregrid-production` on `127.0.0.1:3308`, schema
+`wpcg_prod_main`; `mysql@wpcaregrid-production-restore` on `127.0.0.1:3309`) in
+three ways. The minimal, backward-compatible fixes:
+
+1. **Source schema allowlist.** The dump header regexes, the audit's
+   `USE` check and the manifest validators (`backup.source_schema`,
+   `source_identity.database`) no longer hard-code `wpcaregrid`. The v2 module has
+   an explicit allowlist `SOURCE_SCHEMA_ALLOWLIST = {wpcaregrid, wpcg_prod_main}`.
+   `audit_sql(..., source_schema="wpcaregrid")` defaults to the legacy name, so
+   every existing caller behaves as before; the restore engine passes the
+   manifest's `backup.source_schema`, and v3 capture audits with its policy
+   schema. A dump naming a different schema than the one declared is refused
+   (`DATABASE_SELECTOR_SOURCE_MISMATCH`), a non-allowlisted name is refused
+   (`SOURCE_SCHEMA_NOT_ALLOWED`), and the manifest's two schema fields must be
+   allowlisted and equal. A v3 source policy for `wpcg_prod_main` must use
+   `127.0.0.1` and the production port from `production_g1_mysql_contract.py`
+   (3308); that is where the source port is pinned.
+2. **Second destination isolation kind `g1_systemd_restore_instance`.** The
+   destination policy's `isolation` object is then exactly
+   `{approved: true, kind, unit, port, datadir, socket}` and every value must equal
+   the restore instance in `scripts/production_g1_mysql_contract.py`
+   (`mysql@wpcaregrid-production-restore.service`, `3309`,
+   `/var/lib/mysql-wpcaregrid-production-restore`,
+   `/run/mysqld/wpcaregrid-production-restore.sock`); `mysql.host` must be
+   `127.0.0.1` and `mysql.port` the restore port. The contract is loaded lazily and
+   only for this kind, and it fails closed if the two instances ever share a port,
+   datadir, socket, unit or schema. The `disposable_mysql_container` kind is
+   unchanged (network id, `public_ports=false`, and distinct host/environment).
+3. **Same-VPS separation, for that kind only.** `host_id`/`environment_id` may be
+   equal between source and destination. Separation is instead enforced by
+   distinct MySQL server UUIDs (manifest and policy must agree on the destination
+   UUID), distinct pinned ports and datadirs (from the contract), a source pinned
+   to the production schema `wpcg_prod_main`, and distinct schemas. The
+   authenticated restore receipt for this kind records
+   `separation = {server_uuid_distinct, port_distinct, datadir_distinct,
+   schema_distinct, target_schema_absent_before_import, isolation_kind}` and does
+   **not** claim `host_distinct`/`environment_distinct`; the verifier selects the
+   receipt shape from `isolation_kind` and applies the matching separation rules.
+   The container receipt shape and its rules are unchanged.
+
+**Production admission is unchanged and hardcoded.** Every migration receipt still
+carries `production_admission.state = HOLD`; the verifier still requires that exact
+value and these three real-host attestations as explicit HOLD items, none of which
+this change supplies or can supply from source:
+
+- `mysqldump_endpoint_instance_identity` — proof the dump endpoint on 3308 is the
+  production instance (socket inode/peer PID/unit/`mysqld` executable, boot ID).
+- `application_connection_identity` — the real production application connection's
+  `CURRENT_USER()`, `USER()`, `DATABASE()`, `@@server_uuid` and grants fingerprint.
+- `candidate_migration_bytes_execution` — root-controlled execution of the exact
+  candidate migration bytes with per-migration receipts.
+
+Same-host distinct-instance separation is source-level evidence of configuration
+only; it does not prove that port 3309 is currently the restore instance, that
+the datadirs are what the contract says, or that the instances are isolated at
+the operating-system level. Tests:
+`scripts/tests/restore-v3-g1-compatibility-test.py` (CI step "Restore v2/v3
+Production G1 compatibility"), covering the positive kind, wrong port/datadir/
+socket/unit, same server UUID, wrong schema, the unchanged container kind
+(including equal host/environment still refused) and the preserved HOLD.
+
 ## Not proven here
 
 Real MySQL import, real grants and `SHOW GRANTS` output on the pinned 8.4 release,

@@ -1,5 +1,13 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-17 (GO-20.1: restore v2/v3 source compatibility with Production G1 — source only, draft)
+
+- **Base:** `567b03eaf3f52274df9f7bbb940c0bc106cc602a`. Source and synthetic tests only; no host, service, database, network or credential was touched. **Production database recovery remains HOLD / NO-GO.**
+- **What:** restore v2/v3 could not work with the G1 instances (hard-coded source schema `wpcaregrid`; destination policy only accepted a disposable container; equal host/environment refused although both G1 instances share one VPS). Minimal, backward-compatible change: (a) explicit source-schema allowlist `{wpcaregrid, wpcg_prod_main}` threaded through the dump-header regexes, audit and manifest validators (default unchanged); (b) second destination isolation kind `g1_systemd_restore_instance` validated against the constants in `scripts/production_g1_mysql_contract.py` (unit, port 3309, datadir, socket), with the source pinned to production port 3308; (c) host/environment equality relaxed for that kind only, replaced by distinct server UUIDs, ports and datadirs and a distinct receipt separation shape. The container kind and its rules are unchanged. Details: [AUTHENTICATED_RESTORE_GO14.md](AUTHENTICATED_RESTORE_GO14.md) (GO-20.1 section).
+- **Fail-closed gate kept:** `production_admission.state` stays hardcoded `HOLD`; the three real-host attestations (`mysqldump_endpoint_instance_identity`, `application_connection_identity`, `candidate_migration_bytes_execution`) remain explicit HOLD items and are not satisfied by this change.
+- **Validation:** `scripts/tests/restore-v3-g1-compatibility-test.py` (new, CI-wired) — 13 passed; existing `isolated-staging-restore-test.py` 12, `isolated-staging-restore-v2-test.py` 26, `authenticated-restore-v3-test.py` 38 and `production-g1-mysql-contract-test.py` pass unchanged.
+- **Known limits:** no real mysqldump/import/grant was exercised; the same-VPS separation is configuration-level evidence, not proof of OS-level isolation. Exact-head QA/AppSec and required CI remain gates.
+
 ## Update — 2026-11-17 (GO-20: confinement package 1.0.6, production on PHP 8.5 — source only, review pending)
 
 - **Decision (Owner):** production runs PHP 8.5 in a dedicated FPM service `wpcaregrid-production-php8.5-fpm.service`; legacy staging stays PHP 8.4 (`php8.4-fpm.service`), staging-next stays PHP 8.5 (`php8.5-fpm.service`); PHP 8.4 is not removed; no new Linux user/group/FPM UID (`www-data` 33/33 under the confinement model).
