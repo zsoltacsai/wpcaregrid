@@ -213,6 +213,11 @@ jobs:
           python3 scripts/tests/isolated-staging-restore-v2-test.py
           python3 -m py_compile scripts/isolated-staging-restore-v2.py scripts/tests/isolated-staging-restore-v2-test.py
 
+      - name: GO-14 authenticated recovery point and migration receipt contract
+        run: |
+          python3 -B scripts/tests/authenticated-restore-v3-test.py
+          python3 -m py_compile scripts/authenticated-restore-v3.py scripts/tests/authenticated-restore-v3-test.py
+
       - name: Gate 1 fake-only transition and Linux lock regression
         run: sudo -n python3 scripts/tests/deploy-transition-state-machine-test.py
 

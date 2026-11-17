@@ -46,6 +46,19 @@ CREATE_DB_RE = re.compile(
 USE_DB_RE = re.compile(rb"USE\s+`?wpcaregrid`?\s*;\Z", re.IGNORECASE)
 
 
+def wrap_single_schema_dump(sql, source_schema, charset, collation):
+    """Add the constrained database selector framing omitted by single-schema mysqldump."""
+    if (not isinstance(sql, bytes) or not IDENT_RE.fullmatch(source_schema)
+            or not IDENT_RE.fullmatch(charset) or not IDENT_RE.fullmatch(collation)):
+        refuse("DUMP_SELECTOR_METADATA_INVALID")
+    header = (f"CREATE DATABASE /*!32312 IF NOT EXISTS*/ `{source_schema}` "
+              f"/*!40100 DEFAULT CHARACTER SET {charset} COLLATE {collation} */;\n"
+              f"USE `{source_schema}`;\n").encode("ascii")
+    if len(sql) + len(header) > MAX_UNCOMPRESSED_SQL_BYTES:
+        refuse("DUMP_SIZE_LIMIT")
+    return header + sql
+
+
 class RestoreRefused(Exception):
     """Fixed-code refusal; messages must never contain dump or DB values."""
 
@@ -291,6 +304,15 @@ def remove_safe_mysqldump_trigger_session_wrappers(sql):
 
 
 def validate_lexical_sql_mode(tokens):
+    # These modes do not alter SQL tokenization/quoting, so preserving common
+    # server modes on dumped triggers is safe for the fixed UTF-8 parser.
+    # Quoting-related modes such as ANSI_QUOTES and NO_BACKSLASH_ESCAPES are
+    # intentionally absent and remain fail-closed.
+    safe_modes = {
+        "ALLOW_INVALID_DATES", "ERROR_FOR_DIVISION_BY_ZERO", "NO_AUTO_VALUE_ON_ZERO",
+        "NO_ENGINE_SUBSTITUTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY",
+        "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES",
+    }
     for i, token in enumerate(tokens):
         if _id(token) != "sql_mode" or i + 1 >= len(tokens):
             continue
@@ -299,7 +321,20 @@ def validate_lexical_sql_mode(tokens):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
             continue
         if tokens[i + 1].kind == "SYMBOL" and tokens[i + 1].value == "=":
-            if i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING" or tokens[i + 2].value != "'NO_AUTO_VALUE_ON_ZERO'":
+            statement_end = next((j for j in range(i + 2, len(tokens))
+                                  if tokens[j].kind == "SYMBOL" and tokens[j].value == ";"), len(tokens))
+            # MySQL concatenates adjacent string literals. Accept exactly one
+            # complete literal through the statement terminator; validating
+            # only the first STRING would let a second literal append a
+            # lexer-changing mode such as ANSI_QUOTES.
+            if (i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING"
+                    or statement_end != i + 3):
+                refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
+            literal = tokens[i + 2].value
+            if not re.fullmatch(r"'[A-Za-z0-9_, ]*'", literal):
+                refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
+            modes = [part.strip().upper() for part in literal[1:-1].split(",") if part.strip()]
+            if len(modes) != len(set(modes)) or any(mode not in safe_modes for mode in modes):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
 
 
@@ -1032,69 +1067,71 @@ def _mysql_identity(policy):
             "binlog_format": fields[3], "trust_function_creators": fields[4]}
 
 
-def _inventory(policy, schema, manifest, plan):
-    tables = plan["expected_tables"]
-    if tables != manifest["expected"]["table_names"]:
-        refuse("BACKUP_TABLE_INVENTORY_MISMATCH")
-    schema_queries = (
-        ("database_defaults", "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"),
-        ("tables", "SELECT TABLE_NAME,ENGINE,TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME"),
-        ("columns", "SELECT TABLE_NAME,ORDINAL_POSITION,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COALESCE(COLUMN_DEFAULT,''),EXTRA,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION"),
-        ("indexes", "SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,COALESCE(SUB_PART,0),INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX"),
-        ("foreign_keys", "SELECT TABLE_NAME,CONSTRAINT_NAME,COLUMN_NAME,ORDINAL_POSITION,CASE WHEN REFERENCED_TABLE_SCHEMA=DATABASE() THEN '<self>' ELSE COALESCE(REFERENCED_TABLE_SCHEMA,'') END,COALESCE(REFERENCED_TABLE_NAME,''),COALESCE(REFERENCED_COLUMN_NAME,'') FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,CONSTRAINT_NAME,ORDINAL_POSITION"),
-        ("constraints", "SELECT tc.TABLE_NAME,tc.CONSTRAINT_NAME,tc.CONSTRAINT_TYPE,COALESCE(cc.CHECK_CLAUSE,'') FROM information_schema.TABLE_CONSTRAINTS tc LEFT JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME WHERE tc.TABLE_SCHEMA=DATABASE() ORDER BY tc.TABLE_NAME,tc.CONSTRAINT_NAME"),
-        ("partitions", "SELECT TABLE_NAME,COALESCE(PARTITION_NAME,''),COALESCE(SUBPARTITION_NAME,''),COALESCE(PARTITION_METHOD,''),COALESCE(PARTITION_EXPRESSION,''),COALESCE(PARTITION_DESCRIPTION,'') FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,PARTITION_ORDINAL_POSITION,SUBPARTITION_ORDINAL_POSITION"),
-    )
+SCHEMA_QUERIES = (
+    ("database_defaults", "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"),
+    ("tables", "SELECT TABLE_NAME,ENGINE,TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME"),
+    ("columns", "SELECT TABLE_NAME,ORDINAL_POSITION,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COALESCE(COLUMN_DEFAULT,''),EXTRA,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION"),
+    ("indexes", "SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,COALESCE(SUB_PART,0),INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX"),
+    ("foreign_keys", "SELECT TABLE_NAME,CONSTRAINT_NAME,COLUMN_NAME,ORDINAL_POSITION,CASE WHEN REFERENCED_TABLE_SCHEMA=DATABASE() THEN '<self>' ELSE COALESCE(REFERENCED_TABLE_SCHEMA,'') END,COALESCE(REFERENCED_TABLE_NAME,''),COALESCE(REFERENCED_COLUMN_NAME,'') FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,CONSTRAINT_NAME,ORDINAL_POSITION"),
+    ("constraints", "SELECT tc.TABLE_NAME,tc.CONSTRAINT_NAME,tc.CONSTRAINT_TYPE,COALESCE(cc.CHECK_CLAUSE,'') FROM information_schema.TABLE_CONSTRAINTS tc LEFT JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME WHERE tc.TABLE_SCHEMA=DATABASE() ORDER BY tc.TABLE_NAME,tc.CONSTRAINT_NAME"),
+    ("partitions", "SELECT TABLE_NAME,COALESCE(PARTITION_NAME,''),COALESCE(SUBPARTITION_NAME,''),COALESCE(PARTITION_METHOD,''),COALESCE(PARTITION_EXPRESSION,''),COALESCE(PARTITION_DESCRIPTION,'') FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,PARTITION_ORDINAL_POSITION,SUBPARTITION_ORDINAL_POSITION"),
+)
+TRIGGER_QUERY = ("SELECT TRIGGER_NAME,EVENT_MANIPULATION,EVENT_OBJECT_TABLE,ACTION_TIMING,"
+                 "ACTION_ORIENTATION,DEFINER,SHA2(ACTION_STATEMENT,256) FROM information_schema.TRIGGERS "
+                 "WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME")
+OBJECT_QUERY = ("SELECT 'views',COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA=DATABASE() UNION ALL "
+                "SELECT 'routines',COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() UNION ALL "
+                "SELECT 'events',COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE() ORDER BY 1")
+LEDGER_QUERY = "SELECT migration FROM migrations ORDER BY migration"
+
+
+def observe_schema(policy, schema, *, expected_defaults=None):
+    """Read-only schema/trigger fingerprint of one restored database.
+
+    Shared by restore verification (``_inventory``) and migration rehearsal
+    receipts so that both sides hash exactly the same observations. The hash
+    does not depend on the schema name. ``expected_defaults`` is an optional
+    ``(charset, collation)`` pair that is enforced while reading.
+    """
     schema_hash = hashlib.sha256()
     components = {}
-    for name, query in schema_queries:
+    for name, query in SCHEMA_QUERIES:
         raw = mysql_query(policy, query, database=schema)
-        if name == "database_defaults":
-            expected_defaults = (manifest["database_charset"] + "\t" + manifest["database_collation"] + "\n").encode("ascii")
-            if raw != expected_defaults:
+        if name == "database_defaults" and expected_defaults is not None:
+            if raw != (expected_defaults[0] + "\t" + expected_defaults[1] + "\n").encode("ascii"):
                 refuse("DATABASE_DEFAULTS_MISMATCH")
-        item = hashlib.sha256(query.encode("ascii") + b"\0" + raw).hexdigest()
-        components[name] = item
+        components[name] = hashlib.sha256(query.encode("ascii") + b"\0" + raw).hexdigest()
         schema_hash.update(query.encode("ascii") + b"\0" + raw + b"\0")
-    trigger_query = ("SELECT TRIGGER_NAME,EVENT_MANIPULATION,EVENT_OBJECT_TABLE,ACTION_TIMING,"
-                     "ACTION_ORIENTATION,DEFINER,SHA2(ACTION_STATEMENT,256) FROM information_schema.TRIGGERS "
-                     "WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME")
-    trigger_raw = mysql_query(policy, trigger_query, database=schema)
-    components["triggers"] = hashlib.sha256(trigger_query.encode("ascii") + b"\0" + trigger_raw).hexdigest()
-    schema_hash.update(trigger_query.encode("ascii") + b"\0" + trigger_raw + b"\0")
+    trigger_raw = mysql_query(policy, TRIGGER_QUERY, database=schema)
+    components["triggers"] = hashlib.sha256(TRIGGER_QUERY.encode("ascii") + b"\0" + trigger_raw).hexdigest()
+    schema_hash.update(TRIGGER_QUERY.encode("ascii") + b"\0" + trigger_raw + b"\0")
     try:
         trigger_rows = [line.split("\t") for line in trigger_raw.decode("ascii", "strict").splitlines() if line]
     except UnicodeError:
         refuse("TRIGGER_INVENTORY_INVALID")
-    expected_triggers = manifest["expected"]["triggers"]
-    normalized = []
+    triggers = []
     for row in trigger_rows:
         if len(row) != 7:
             refuse("TRIGGER_INVENTORY_INVALID")
-        normalized.append({"name": row[0], "event": row[1], "table": row[2], "timing": row[3],
-                           "orientation": row[4], "definer": row[5], "action_sha256": row[6]})
-    if normalized != expected_triggers:
-        refuse("TRIGGER_DEFINITION_MISMATCH")
-    object_query = ("SELECT 'views',COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA=DATABASE() UNION ALL "
-                    "SELECT 'routines',COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE() UNION ALL "
-                    "SELECT 'events',COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE() ORDER BY 1")
-    object_raw = mysql_query(policy, object_query, database=schema, maximum=256)
-    if object_raw not in (b"events\t0\nroutines\t0\nviews\t0\n", b"events\t0\nroutines\t0\nviews\t0"):
-        refuse("UNEXPECTED_SCHEMA_OBJECT_PRESENT")
-    components["non_table_objects"] = hashlib.sha256(object_query.encode("ascii") + b"\0" + object_raw).hexdigest()
-    schema_hash.update(object_query.encode("ascii") + b"\0" + object_raw + b"\0")
-    schema_sha = schema_hash.hexdigest()
-    if schema_sha != manifest["expected"]["schema_sha256"]:
-        refuse("SCHEMA_FINGERPRINT_MISMATCH")
-    ledger_query = "SELECT migration FROM migrations ORDER BY migration"
-    ledger_raw = mysql_query(policy, ledger_query, database=schema)
+        triggers.append({"name": row[0], "event": row[1], "table": row[2], "timing": row[3],
+                         "orientation": row[4], "definer": row[5], "action_sha256": row[6]})
+    object_raw = mysql_query(policy, OBJECT_QUERY, database=schema, maximum=256)
+    components["non_table_objects"] = hashlib.sha256(OBJECT_QUERY.encode("ascii") + b"\0" + object_raw).hexdigest()
+    schema_hash.update(OBJECT_QUERY.encode("ascii") + b"\0" + object_raw + b"\0")
+    return {"schema_sha256": schema_hash.hexdigest(), "schema_components": components,
+            "triggers": triggers, "object_raw": object_raw}
+
+
+def observe_ledger(policy, schema):
+    ledger_raw = mysql_query(policy, LEDGER_QUERY, database=schema)
     try:
         migrations = [line for line in ledger_raw.decode("ascii", "strict").splitlines() if line]
     except UnicodeError:
         refuse("MIGRATION_LEDGER_INVALID")
-    ledger_sha = hashlib.sha256(ledger_raw).hexdigest()
-    if migrations != manifest["expected"]["migrations"] or ledger_sha != manifest["expected"]["ledger_sha256"]:
-        refuse("MIGRATION_LEDGER_MISMATCH")
+    return migrations, hashlib.sha256(ledger_raw).hexdigest()
+
+
+def observe_row_counts(policy, schema, tables):
     count_sql = " UNION ALL ".join("SELECT '" + name + "',COUNT(*) FROM `" + name + "`" for name in tables)
     counts_raw = mysql_query(policy, count_sql + " ORDER BY 1", database=schema, timeout=180)
     try:
@@ -1106,12 +1143,33 @@ def _inventory(policy, schema, manifest, plan):
             counts[fields[0]] = int(fields[1])
     except UnicodeError:
         refuse("ROW_COUNT_INVENTORY_INVALID")
+    return counts
+
+
+def _inventory(policy, schema, manifest, plan):
+    tables = plan["expected_tables"]
+    if tables != manifest["expected"]["table_names"]:
+        refuse("BACKUP_TABLE_INVENTORY_MISMATCH")
+    observed_schema = observe_schema(
+        policy, schema, expected_defaults=(manifest["database_charset"], manifest["database_collation"]))
+    normalized = observed_schema["triggers"]
+    if normalized != manifest["expected"]["triggers"]:
+        refuse("TRIGGER_DEFINITION_MISMATCH")
+    if observed_schema["object_raw"] not in (b"events\t0\nroutines\t0\nviews\t0\n", b"events\t0\nroutines\t0\nviews\t0"):
+        refuse("UNEXPECTED_SCHEMA_OBJECT_PRESENT")
+    schema_sha = observed_schema["schema_sha256"]
+    if schema_sha != manifest["expected"]["schema_sha256"]:
+        refuse("SCHEMA_FINGERPRINT_MISMATCH")
+    migrations, ledger_sha = observe_ledger(policy, schema)
+    if migrations != manifest["expected"]["migrations"] or ledger_sha != manifest["expected"]["ledger_sha256"]:
+        refuse("MIGRATION_LEDGER_MISMATCH")
+    counts = observe_row_counts(policy, schema, tables)
     if counts != manifest["expected"]["table_row_counts"]:
         refuse("ROW_COUNT_MISMATCH")
     data_sha, data_bytes = _safe_dump_hash(policy, schema, tables)
     if data_sha != manifest["expected"]["data_sha256"]:
         refuse("DATA_FINGERPRINT_MISMATCH")
-    return {"schema_sha256": schema_sha, "schema_components": components,
+    return {"schema_sha256": schema_sha, "schema_components": observed_schema["schema_components"],
             "ledger_sha256": ledger_sha, "data_sha256": data_sha, "data_bytes": data_bytes,
             "table_row_counts": counts, "migrations": migrations, "triggers": normalized}
 
@@ -1119,8 +1177,29 @@ def _inventory(policy, schema, manifest, plan):
 def _normalized_grant(line):
     if not isinstance(line, str) or any(ord(c) < 32 for c in line):
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
-    return " ".join(line.replace("`", "").replace("'", "")
-                     .replace('"', "").split()).casefold()
+    match = re.fullmatch(
+        r"\s*GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+(.+?)(\s+WITH\s+GRANT\s+OPTION)?\s*",
+        line, re.IGNORECASE)
+    if not match:
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    privileges = sorted(" ".join(item.split()).casefold()
+                        for item in match.group(1).split(","))
+    # Normalize SQL keywords and whitespace, but retain object identifier case:
+    # MySQL may distinguish schema/table names by case on the target host.
+    # Preserve object spelling and quote structure exactly. In particular, do
+    # not turn an identifier containing quotes into an allowlisted plain name.
+    object_name = " ".join(match.group(2).split())
+    raw_recipient = " ".join(match.group(3).split())
+    recipient_match = re.fullmatch(
+        r"(?:`([A-Za-z0-9_.-]+)`|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+))@"
+        r"(?:`([A-Za-z0-9_.:%-]+)`|'([A-Za-z0-9_.:%-]+)'|([A-Za-z0-9_.:%-]+))",
+        raw_recipient)
+    if recipient_match is None:
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    recipient = ((recipient_match.group(1) or recipient_match.group(2) or recipient_match.group(3))
+                 + "@" + (recipient_match.group(4) or recipient_match.group(5) or recipient_match.group(6)))
+    suffix = " with grant option" if match.group(4) else ""
+    return f"grant {', '.join(privileges)} on {object_name} to {recipient}{suffix}"
 
 
 def _grant_pattern_identifier(name):
@@ -1147,10 +1226,13 @@ def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
     except UnicodeError:
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
     grant_schema = _grant_pattern_identifier(schema)
-    expected = {_normalized_grant("GRANT USAGE ON *.* TO " + user + "@" + host),
-                _normalized_grant("GRANT TRIGGER ON " + grant_schema + ".* TO " + user + "@" + host)}
-    expected.update(_normalized_grant("GRANT SELECT ON " + grant_schema + "." + _grant_pattern_identifier(table)
-                                      + " TO " + user + "@" + host)
+    expected = {_normalized_grant("GRANT USAGE ON *.* TO `" + user + "`@`" + host + "`"),
+                _normalized_grant("GRANT TRIGGER ON `" + grant_schema + "`.* TO `" + user + "`@`" + host + "`")}
+    # A schema-level grant uses a privilege-pattern identifier, where `_`
+    # must be escaped. A table grant names a literal qualified object, so its
+    # schema and table identifiers must remain unescaped inside the grant.
+    expected.update(_normalized_grant("GRANT SELECT ON `" + schema + "`.`" + table + "`"
+                                      + " TO `" + user + "`@`" + host + "`")
                     for table in select_tables)
     if observed != expected:
         refuse("DEFINER_GRANTS_NOT_MINIMAL")
