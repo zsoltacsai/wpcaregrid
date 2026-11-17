@@ -1210,7 +1210,7 @@ def test_definer_grant_validators_accept_the_same_exact_phase2b_grants():
     raw_lines = [
         "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
         f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
-        f"GRANT SELECT ON `{escaped}`.`migrations` TO `restore_owner`@`localhost`",
+        f"GRANT SELECT ON `{schema}`.`migrations` TO `restore_owner`@`localhost`",
     ]
 
     def query(_policy, sql, *, database=None, **_kwargs):
@@ -1231,6 +1231,16 @@ def test_definer_grant_validators_accept_the_same_exact_phase2b_grants():
     assert lifecycle["schema_privileges"] == ["TRIGGER"]
     assert lifecycle["select_tables"] == ["migrations"]
 
+    # A privilege-pattern escaped schema is valid only for schema-wide grants,
+    # not for a literal table object.
+    raw_lines[2] = f"GRANT SELECT ON `{escaped}`.`migrations` TO `restore_owner`@`localhost`"
+    with mock.patch.object(V2, "mysql_query", side_effect=query):
+        expect("DEFINER_GRANTS_NOT_MINIMAL", V2.verify_definer_lifecycle,
+               object(), schema, account, ["migrations"])
+        expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
+               allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
+               allowed_table_privileges={"migrations": {"select"}})
+
 
 def test_definer_table_grants_are_exactly_allowlisted():
     schema = CLONE_SCHEMA
@@ -1239,7 +1249,7 @@ def test_definer_table_grants_are_exactly_allowlisted():
     raw_lines = [
         "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
         f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
-        f"GRANT SELECT, INSERT ON `{escaped}`.`migrations` TO `restore_owner`@`localhost`",
+        f"GRANT SELECT, INSERT ON `{schema}`.`migrations` TO `restore_owner`@`localhost`",
     ]
     with mock.patch.object(V2, "mysql_query", return_value=("\n".join(raw_lines) + "\n").encode()):
         expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,

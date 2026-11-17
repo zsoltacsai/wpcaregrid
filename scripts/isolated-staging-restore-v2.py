@@ -1207,7 +1207,10 @@ def verify_definer_lifecycle(policy, schema, approved_definer, select_tables):
     grant_schema = _grant_pattern_identifier(schema)
     expected = {_normalized_grant("GRANT USAGE ON *.* TO " + user + "@" + host),
                 _normalized_grant("GRANT TRIGGER ON " + grant_schema + ".* TO " + user + "@" + host)}
-    expected.update(_normalized_grant("GRANT SELECT ON " + grant_schema + "." + _grant_pattern_identifier(table)
+    # A schema-level grant uses a privilege-pattern identifier, where `_`
+    # must be escaped. A table grant names a literal qualified object, so its
+    # schema and table identifiers must remain unescaped inside the grant.
+    expected.update(_normalized_grant("GRANT SELECT ON `" + schema + "`.`" + table + "`"
                                       + " TO " + user + "@" + host)
                     for table in select_tables)
     if observed != expected:

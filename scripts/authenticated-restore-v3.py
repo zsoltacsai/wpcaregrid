@@ -1015,7 +1015,7 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
             schema_privileges.update(privileges)
         elif allowed_table_privileges is not None:
             table_name = next((name for name, table_privileges in allowed_table_privileges.items()
-                               if obj == scoped + "." + V2._grant_pattern_identifier(name)), None)
+                               if obj == schema + "." + name), None)
             if table_name is None or not set(privileges) <= set(allowed_table_privileges[table_name]):
                 refuse("ACCOUNT_SCOPE_EXCESSIVE")
         else:

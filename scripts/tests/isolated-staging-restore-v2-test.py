@@ -540,7 +540,7 @@ def test_definer_account_must_be_locked_and_have_exact_minimal_grants():
     definer = "restore_owner@localhost"
     expected_grants = (b"GRANT USAGE ON *.* TO `restore_owner`@`localhost`\n"
                        b"GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`\n"
-                       b"GRANT SELECT ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
+                       b"GRANT SELECT ON `wpcg_recovery_restore_20261104_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
     with mock.patch.object(RESTORE, "mysql_query", side_effect=[b"Y\n", expected_grants]) as query:
         observed = RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
     assert observed["account_locked"] is True
@@ -565,6 +565,21 @@ def test_definer_grants_preserve_literal_underscore_escaping():
     expected = "GRANT TRIGGER ON " + RESTORE._grant_pattern_identifier(SCHEMA) + ".* TO restore_owner@localhost"
     assert RESTORE._normalized_grant(escaped) == RESTORE._normalized_grant(expected)
     assert RESTORE._normalized_grant(escaped) != RESTORE._normalized_grant(wildcard)
+
+
+def test_table_grant_uses_literal_schema_identifier_not_pattern_escape():
+    policy = {"mysql": {"server_uuid": "server"}}
+    definer = "restore_owner@localhost"
+    grants = (b"GRANT USAGE ON *.* TO `restore_owner`@`localhost`\n"
+              b"GRANT TRIGGER ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.* TO `restore_owner`@`localhost`\n"
+              b"GRANT SELECT ON `wpcg\\_recovery\\_restore\\_20261104\\_a1b2c3d4`.`migrations` TO `restore_owner`@`localhost`\n")
+    with mock.patch.object(RESTORE, "mysql_query", side_effect=[b"Y\n", grants]):
+        try:
+            RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
+        except RESTORE.RestoreRefused as error:
+            assert str(error) == "DEFINER_GRANTS_NOT_MINIMAL"
+        else:
+            raise AssertionError("Pattern-escaped table grant was accepted")
 
 
 def test_production_entrypoint_requires_root():
@@ -708,6 +723,7 @@ def main():
         test_production_entrypoint_requires_root,
         test_mysql_import_pins_utf8mb4_and_initial_sql_mode,
         test_definer_grants_preserve_literal_underscore_escaping,
+        test_table_grant_uses_literal_schema_identifier_not_pattern_escape,
         test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,
