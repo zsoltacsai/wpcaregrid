@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `68e14873a92229dd3de1d96f73c5793eb09e4832687a9e41b9504bff132913aa`)
+    (SHA-256 `4c8e06e9e0cb7130cbbc6d75160ab077c86eeee8c83e825895c19b5a158d6504`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
-    (SHA-256 `270ed3a3cba54272e583814a2535d781402f0fe46394b6a3f2244a04855d5c81`)
+    (SHA-256 `8a078a619a8f196bd092795b0795031323c362bef667065a8574e799caa05412`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `ccf197778a3dd49000d47da4799f1f08509f1bf9564d485bc2335c763f0bb3b5`)
+    `72981bd72b58bd3a15df4e4546176c20dbb02daac63ce433d5252c5eb60848af`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -60,6 +60,15 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     (`MAX_JOURNAL_BYTES`, streaming read, kill on overflow →
     `journal_exceeds_bounds` UNKNOWN); untrusted evidence and rejected
     arguments are control-character sanitized in the output.
+  - Reviewer corrections included in v1.3.0 (AppSec round 3): the journal
+    read enforces its deadline while stdout is idle (selector-based reads,
+    kill and reap on timeout — a stalling producer can no longer hold the
+    collector); the datadir post-read consistency check compares device,
+    inode, size, mtime AND ctime for both the still-open descriptor and the
+    re-stat'ed pathname (same-size inode replacement or an in-place rewrite
+    with restored mtime are caught through the never-restorable ctime and
+    inode identity); the accepted `--since` value is sanitized before it
+    reaches the output.
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.

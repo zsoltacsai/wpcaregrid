@@ -9,6 +9,8 @@ evidence only and do NOT approve the tool for host use.
 
 import importlib.util
 import io
+import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -345,6 +347,37 @@ class NotifyEvidenceTestCase(unittest.TestCase):
         self.host = FakeHost(journal="-- No entries --")
         self.assertEqual(self.run_main(), 4)
         self.assertIn("CODE=journal_exceeds_bounds", self.output())
+
+    # -- AppSec round-3 findings (R3-F1 deadline, --since sanitization) -----
+
+    def test_run_stdout_bounded_enforces_deadline_while_idle(self):
+        # AppSec R3 F1: a producer that emits a short chunk and then stalls
+        # must not hold the collector past its deadline. Local synthetic
+        # child process only; no host access.
+        host = ne.RealHost()
+        child = ("import sys,time\n"
+                 "sys.stdout.buffer.write(b'x')\n"
+                 "sys.stdout.buffer.flush()\n"
+                 "time.sleep(30)\n")
+        start = time.monotonic()
+        with self.assertRaisesRegex(ne.HostError, "command_failed"):
+            host.run_stdout_bounded([sys.executable, "-c", child], 1024, timeout=0.5)
+        self.assertLess(time.monotonic() - start, 10)
+
+    def test_run_stdout_bounded_overflow_kills_producer(self):
+        host = ne.RealHost()
+        child = ("import sys\n"
+                 "sys.stdout.buffer.write(b'x' * 262144)\n")
+        with self.assertRaisesRegex(ne.HostError, "journal_exceeds_bounds"):
+            host.run_stdout_bounded([sys.executable, "-c", child], 1024, timeout=30)
+
+    def test_since_value_is_sanitized_in_output(self):
+        # AppSec R3 finding 3: an accepted --since value must never inject
+        # control characters into the archived output.
+        self.host = FakeHost(journal="-- No entries --")
+        self.assertEqual(self.run_main(["--since", "2026-11-17\rEVIL"]), 0)
+        self.assertIn("JOURNAL lines_cap=20000 since=2026-11-17?EVIL", self.output())
+        self.assertNotIn("since=2026-11-17\rEVIL", self.output())
 
 
 if __name__ == "__main__":

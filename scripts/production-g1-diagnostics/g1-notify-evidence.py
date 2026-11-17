@@ -37,7 +37,7 @@ import stat
 import sys
 
 TOOL = "g1-notify-evidence"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 TARGET = "/run/systemd/notify"
 PROFILE_DIR = "/etc/apparmor.d/"
@@ -92,9 +92,11 @@ class RealHost:
         return done.returncode, done.stdout
 
     def run_stdout_bounded(self, args, max_bytes, timeout):
-        """AppSec R2 F8 fix: never buffer unbounded subprocess output. Reads
-        stdout incrementally, kills the producer on overflow or deadline, and
-        fails closed with a HostError instead of exhausting memory."""
+        """AppSec R2-F8/R3-F1 fix: never buffer unbounded subprocess output and
+        never block past the deadline while stdout is idle. Reads only when
+        the pipe is readable (selectors), enforces the deadline between
+        reads, and kills/reaps the producer on overflow or timeout."""
+        import selectors
         import subprocess
         import time
 
@@ -106,20 +108,26 @@ class RealHost:
         data = b""
         overflow = False
         deadline = time.monotonic() + timeout
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
         try:
             while True:
-                chunk = process.stdout.read(65536)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    raise HostError("command_failed", args[0])
+                events = selector.select(timeout=remaining)
+                if not events:
+                    continue  # the deadline fires on the next loop iteration
+                chunk = process.stdout.read1(65536)
                 if not chunk:
                     break
                 if len(data) + len(chunk) > max_bytes:
                     overflow = True
-                    process.kill()
                     break
                 data += chunk
-                if time.monotonic() > deadline:
-                    process.kill()
-                    raise HostError("command_failed", args[0])
         finally:
+            selector.close()
             if process.poll() is None:
                 process.kill()
             process.wait()
@@ -327,7 +335,7 @@ def main(argv=None, host=None, stream=None):
 
     host = host if host is not None else RealHost()
     emit("TOOL %s %s mode=read_only target=%s" % (TOOL, VERSION, TARGET))
-    emit("JOURNAL lines_cap=%d since=%s" % (lines_cap, since or "none"))
+    emit("JOURNAL lines_cap=%d since=%s" % (lines_cap, sanitize(since) if since else "none"))
 
     if host.euid() != 0:
         emit("CHECK console_root UNKNOWN not_root_console")

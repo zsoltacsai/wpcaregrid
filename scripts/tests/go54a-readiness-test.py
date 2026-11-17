@@ -24,7 +24,7 @@ SPEC.loader.exec_module(rd)
 TOOLKIT_SIBLING = "production-g1-ops"
 
 
-def fake_stat(kind, mode, uid, gid, size=0, mtime_ns=1000):
+def fake_stat(kind, mode, uid, gid, size=0, mtime_ns=1000, ino=1, ctime_ns=1000):
     if kind == "dir":
         full = stat.S_IFDIR | mode
     elif kind == "file":
@@ -32,7 +32,8 @@ def fake_stat(kind, mode, uid, gid, size=0, mtime_ns=1000):
     else:
         full = stat.S_IFLNK | 0o777
     return SimpleNamespace(st_mode=full, st_uid=uid, st_gid=gid, st_size=size,
-                           st_mtime_ns=mtime_ns, st_nlink=1, st_dev=1, st_ino=1)
+                           st_mtime_ns=mtime_ns, st_nlink=1, st_dev=1, st_ino=ino,
+                           st_ctime_ns=ctime_ns)
 
 
 class FakeHost:
@@ -40,7 +41,7 @@ class FakeHost:
 
     def __init__(self, files=None, dirs=None, symlinks=None, euid=0,
                  ids=None, commands=None, lock=None, script_dir="/opt/toolkit-empty",
-                 mutate_on_read=None):
+                 mutate_on_read=None, replace_on_read=None, rewrite_on_read=None):
         self.files = files or {}
         self.dirs = dirs or {}
         self.symlinks = symlinks or {}
@@ -50,6 +51,11 @@ class FakeHost:
         self.lock = lock or {}
         self.script_dir_value = script_dir
         self.mutate_on_read = mutate_on_read or set()
+        # Simulated evasions from the AppSec round-3 review: a same-size inode
+        # replacement with restored mtime, and an in-place rewrite with
+        # restored mtime (ctime cannot be restored on a real host).
+        self.replace_on_read = replace_on_read or set()
+        self.rewrite_on_read = rewrite_on_read or set()
 
     def _all_paths(self):
         return list(self.files) + list(self.dirs) + list(self.symlinks)
@@ -75,11 +81,13 @@ class FakeHost:
             spec = self.files[path]
             return fake_stat("file", spec.get("mode", 0o644), spec.get("uid", 0),
                              spec.get("gid", 0), len(spec.get("content", b"")),
-                             spec.get("mtime_ns", 1000))
+                             spec.get("mtime_ns", 1000), spec.get("ino", 1),
+                             spec.get("ctime_ns", 1000))
         if path in self.dirs:
             spec = self.dirs[path]
             return fake_stat("dir", spec.get("mode", 0o755), spec.get("uid", 0),
-                             spec.get("gid", 0), 0, spec.get("mtime_ns", 1000))
+                             spec.get("gid", 0), 0, spec.get("mtime_ns", 1000),
+                             spec.get("ino", 1), spec.get("ctime_ns", 1000))
         raise FileNotFoundError(path)
 
     def _children(self, path):
@@ -150,8 +158,14 @@ class FakeHost:
                     data = self.read_regular(full, max_file_bytes)
                     if full in self.mutate_on_read:
                         self.files[full]["mtime_ns"] = self.files[full].get("mtime_ns", 1000) + 1
-                    st_after = self.lstat(full)
-                    total = rd.datadir_read_check(rel, st, st_after, len(data), total, max_total_bytes)
+                    if full in self.rewrite_on_read:
+                        self.files[full]["ctime_ns"] = self.files[full].get("ctime_ns", 1000) + 1
+                    st_after_fd = self.lstat(full)
+                    if full in self.replace_on_read:
+                        self.files[full]["ino"] = self.files[full].get("ino", 1) + 1
+                    st_after_path = self.lstat(full)
+                    total = rd.datadir_read_check(rel, st, st_after_fd, st_after_path,
+                                                   len(data), total, max_total_bytes)
                     digest = rd.sha256(data)
                 records.append(rd.datadir_record(rel, st, digest))
                 if full in self.dirs:
@@ -757,13 +771,33 @@ class ReadinessTestCase(unittest.TestCase):
         before = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000)
         same = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000)
         grown = fake_stat("file", 0o640, 105, 105, size=9, mtime_ns=1001)
-        self.assertEqual(rd.datadir_read_check("f", before, same, 4, 0, 100), 4)
-        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read"):
-            rd.datadir_read_check("f", before, grown, 9, 0, 100)
+        rewritten_ctime = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000, ctime_ns=1001)
+        replaced_ino = fake_stat("file", 0o640, 105, 105, size=4, mtime_ns=1000, ino=2)
+        self.assertEqual(rd.datadir_read_check("f", before, same, same, 4, 0, 100), 4)
+        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read:f:fd$"):
+            rd.datadir_read_check("f", before, grown, same, 9, 0, 100)
+        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read:f:fd$"):
+            rd.datadir_read_check("f", before, rewritten_ctime, same, 4, 0, 100)
+        with self.assertRaisesRegex(rd.HostError, "datadir_changed_during_read:f:path$"):
+            rd.datadir_read_check("f", before, same, replaced_ino, 4, 0, 100)
         with self.assertRaisesRegex(rd.HostError, "datadir_exceeds_bounds"):
-            rd.datadir_read_check("f", before, same, 4, 99, 100)
+            rd.datadir_read_check("f", before, same, same, 4, 99, 100)
         with self.assertRaisesRegex(rd.HostError, "datadir_exceeds_bounds"):
-            rd.datadir_read_check("f", before, same, 5, 99, 100)
+            rd.datadir_read_check("f", before, same, same, 5, 99, 100)
+
+    def test_datadir_same_size_replacement_with_restored_mtime_yields_unknown(self):
+        # AppSec R3 finding 2: a same-size inode replacement with restored
+        # mtime must not yield a stale-fingerprint PASS.
+        self.host = self.healthy_host(replace_on_read={rd.DATADIRS[0] + "/ib_logfile0"})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0:path", self.output())
+
+    def test_datadir_inplace_rewrite_with_restored_mtime_yields_unknown(self):
+        # AppSec R3 finding 2: an in-place same-size rewrite with restored
+        # mtime is caught through the descriptor's ctime (never restorable).
+        self.host = self.healthy_host(rewrite_on_read={rd.DATADIRS[0] + "/ib_logfile0"})
+        self.assertEqual(self.run_main(), 4)
+        self.assertIn("UNKNOWN datadir_changed_during_read:ib_logfile0:fd", self.output())
 
 
 if __name__ == "__main__":
