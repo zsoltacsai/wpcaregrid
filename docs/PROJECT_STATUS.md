@@ -1,8 +1,14 @@
 # WP CareGrid — Project Status
 
-## Update — 2026-11-17 (GO-13 Workstream B: 1.0.4 acceptance-tool correction — source only)
+## Update — 2026-11-17 (GO-13 Workstream B: confinement package 1.0.5 — source, review pending)
 
-- **Status:** 1.0.4 is being prepared in source only; it is not reviewed, merged, installed or kernel-validated. The immutable 1.0.1–1.0.3 packages remain unchanged.
+- **Status:** 1.0.5 is a new immutable successor under `deploy/php-fpm-confinement/1.0.5/`; 1.0.4 and earlier package bytes remain unchanged. It is not yet independently reviewed, merged, installed or kernel-validated.
+- **AppSec corrections:** production CLI permissions are split. `wpcaregrid-php-cli-production-deploy` is read-only and can connect only to the fixed production MySQL Unix socket for the runtime identity probe; `wpcaregrid-php-cli-production-build` runs only `package:discover` and `config:cache`, with cache/storage writes but no network or socket permissions. Network denial audit evidence now binds family, socket type and action; collector stability includes GIDs and supplementary groups; verifier CLI arity and runbook continuation syntax have regression coverage.
+- **Validation:** `scripts/tests/php-fpm-confinement-test.py` — 214 passed, 1 skipped because local `apparmor_parser` is unavailable. `SHA256SUMS` has 28 entries; its SHA-256 is `a1832c21e60553d4c9876e6392427e008e6dfdcfe9583711068d3906e97eb6e5`. Parser compilation, required CI and independent exact-head QA/AppSec remain gates. No host or service was touched.
+
+## Historical update — 2026-11-17 (GO-13 Workstream B: 1.0.4 acceptance-tool correction — superseded)
+
+- **Status:** immutable package 1.0.4 is preserved as historical source; 1.0.5 supersedes it. The 1.0.4 acceptance-tool details below describe that predecessor, not the current package.
 - **Correction:** the sibling-socket check now requires a root-run, harmless listener to return the exact canary banner in the unconfined baseline, and an AppArmor-correlated denial in the confined run. `ECONNREFUSED`, missing or wrong listener is a failure. The probe explicitly exercises `SOCK_RAW` creation for unix and netlink; the deploy profile denies both.
 - **Next gates:** finish package hashes and runbook/test consistency, real-parser CI, independent exact-head Integration QA and AppSec. No host changes are authorized by this source preparation.
 
