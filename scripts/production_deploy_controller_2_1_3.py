@@ -44,9 +44,23 @@ TRANSFER_USER = "deploy"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/production/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/production/2.1.3/wpcaregrid-deploy-production-priv")
-HELPER_ARTIFACT_SHA256 = "6ccd4fef69a5e10b5bd0adbfcc580db01e9ccf54ee3c9dd4d382f83650090991"
+HELPER_ARTIFACT_SHA256 = "d8580587ecb74ab99513acd13e965dc0f3ed9e5f5d2c041d386826430b7f5076"
 HELPER_VERSION = "2.1.3"
 HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
+# Exact merged Workstream B package 1.0.5 binding, as compiled by the helper's
+# schema-3 environment contract. The digest covers the package version,
+# SHA256SUMS digest, Git tree object, every installed file hash and every
+# service/transient role binding. This controller never loads or edits the package.
+CONFINEMENT_SCHEMA = 3
+CONFINEMENT_PACKAGE_VERSION = "1.0.5"
+CONFINEMENT_SHA256SUMS_SHA256 = "b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c"
+CONFINEMENT_PACKAGE_TREE = "e8e59b769ed6c6acd85a3bf259364bace5ec374b"
+CONFINEMENT_FILE_COUNT = 17
+CONFINEMENT_SERVICE_ROLES = (
+    "production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler",
+    "jobs-legacy-scheduler")
+CONFINEMENT_TRANSIENT_ROLES = ("production-deploy-cli", "production-build-cli")
+CONFINEMENT_BINDING_SHA256 = "0c189479fca557e8b47a7bfdeddaf753d96a75c24c3a58321cdf81ac2507cee0"
 DELEGATION_VARIABLES = frozenset({
     "SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND", "SUDO_HOME", "PKEXEC_UID", "DOAS_USER",
 })
@@ -457,7 +471,14 @@ def package(application_sha: str, base_sha: str) -> dict[str, object]:
     archive, artifact_sha = _package_release(latest_sha, base_sha)
     return {"result": "PASS", "reason": "release_archive_transferred", "application_sha": latest_sha,
             "base_application_sha": base_sha, "artifact_sha256": artifact_sha,
-            "transfer_path": str(archive), "helper_version": HELPER_VERSION}
+            "transfer_path": str(archive), "helper_version": HELPER_VERSION,
+            "php_fpm_confinement": {
+                "schema": CONFINEMENT_SCHEMA, "package_version": CONFINEMENT_PACKAGE_VERSION,
+                "sha256sums_sha256": CONFINEMENT_SHA256SUMS_SHA256,
+                "package_tree": CONFINEMENT_PACKAGE_TREE, "files": CONFINEMENT_FILE_COUNT,
+                "services": list(CONFINEMENT_SERVICE_ROLES),
+                "transients": list(CONFINEMENT_TRANSIENT_ROLES),
+                "binding_sha256": CONFINEMENT_BINDING_SHA256}}
 
 
 def root_preflight() -> dict[str, object]:

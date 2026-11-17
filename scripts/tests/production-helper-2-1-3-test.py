@@ -99,7 +99,7 @@ def file_sha(relative: str) -> str:
 
 def synthetic_pin(file_hashes=None):
     hashes = file_hashes or {path: f"{index + 1:064x}" for index, path in enumerate(CONTRACT.CONFINEMENT_FILES)}
-    return CONTRACT.ConfinementPin("1.0.0", "a" * 64, hashes)
+    return CONTRACT.ConfinementPin("1.0.0", "a" * 64, "b" * 40, hashes)
 
 
 PIN = synthetic_pin()
@@ -107,11 +107,15 @@ PIN = synthetic_pin()
 
 def confinement_policy(pin=PIN):
     return {
-        "schema": 2, "package_version": pin.package_version,
-        "package_sha256sums_sha256": pin.sha256sums_sha256, "files": dict(pin.file_sha256),
+        "schema": CONTRACT.CONFINEMENT_SCHEMA, "package_version": pin.package_version,
+        "package_sha256sums_sha256": pin.sha256sums_sha256, "package_tree": pin.package_tree,
+        "files": dict(pin.file_sha256),
         "services": {role: {"unit": b.unit, "apparmor_profile": b.apparmor_profile,
                             "profile_path": b.profile_path, "attachment_path": b.attachment_path}
                      for role, b in CONTRACT.CONFINEMENT_SERVICES.items()},
+        "transients": {role: {"apparmor_profile": t.apparmor_profile, "profile_path": t.profile_path,
+                              "executable": t.executable}
+                       for role, t in CONTRACT.TRANSIENT_CLASSES.items()},
     }
 
 
@@ -153,6 +157,7 @@ FPM_EXE = {"production": "/usr/sbin/php-fpm8.4", "staging-next": "/usr/sbin/php-
            "staging-legacy": "/usr/sbin/php-fpm8.4", "nginx": "/usr/sbin/nginx"}
 HELPER_CGROUP = "/user.slice/user-0.slice/session-7.scope"
 DEPLOY_CLI_LABEL = "wpcaregrid-php-cli-production-deploy (enforce)"
+BUILD_CLI_LABEL = "wpcaregrid-php-cli-production-build (enforce)"
 
 
 def peer(pid, *, unit, label, exe, comm="php-fpm", uid=33, gid=33, groups=(), fds=("/dev/null",)):
@@ -185,7 +190,9 @@ def observation(pin=PIN):
             "www_data_scheduled_jobs": {"complete": True, "crontab_present": False, "system_cron_entries": 0,
                                         "at_jobs": 0},
             "helper": {"pid": 4000, "starttime": 50, "cgroup": HELPER_CGROUP, "deploy_cli_profile_mode": "enforce",
-                       "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256(SOCKET)},
+                       "deploy_cli_cmdline_sha256": BACKEND.deploy_cli_cmdline_sha256(SOCKET),
+                       "build_cli_profile_mode": "enforce",
+                       "build_cli_cmdline_sha256": BACKEND.build_cli_cmdline_sha256()},
             "same_uid_peers": {"complete": True, "incomplete_reasons": [], "processes": processes}}
 
 
@@ -215,6 +222,14 @@ def cmdline_sha(argv):
 def deploy_cli_peer(pid, argv=None, **changes):
     argv = argv or BACKEND._deploy_cli_commands(SOCKET)[0]
     item = peer(pid, unit="", label=DEPLOY_CLI_LABEL, exe="/usr/bin/php8.4", comm="php8.4")
+    item.update(cgroup=HELPER_CGROUP, cmdline_sha256=cmdline_sha(argv), argv0=argv[0])
+    item.update(changes)
+    return item
+
+
+def build_cli_peer(pid, argv=None, **changes):
+    argv = argv or BACKEND._build_cli_commands()[0]
+    item = peer(pid, unit="", label=BUILD_CLI_LABEL, exe="/usr/bin/php8.4", comm="php8.4")
     item.update(cgroup=HELPER_CGROUP, cmdline_sha256=cmdline_sha(argv), argv0=argv[0])
     item.update(changes)
     return item
@@ -275,7 +290,24 @@ class FrozenAndManifestTests(unittest.TestCase):
         self.assertEqual(INSTALLER.CONTROLLER_SHA256, manifest["controller_sha256"])
         self.assertEqual(manifest["privileged_invocation"], "root-console-direct")
         self.assertEqual(manifest["transfer_identity"], "deploy")
-        self.assertEqual(manifest["php_fpm_confinement_pin"], "UNSET_PENDING_WORKSTREAM_B_APPROVAL")
+        pin = CONTRACT.confinement_pin()
+        self.assertEqual(manifest["php_fpm_confinement_pin"], {
+            "schema": CONTRACT.CONFINEMENT_SCHEMA, "package_version": pin.package_version,
+            "sha256sums_sha256": pin.sha256sums_sha256, "package_tree": pin.package_tree,
+            "files": len(CONTRACT.CONFINEMENT_FILES),
+            "services": list(CONTRACT.REQUIRED_ROLES),
+            "transients": list(CONTRACT.TRANSIENT_ROLES),
+            "binding_sha256": CONTRACT.confinement_binding_sha256()})
+        expected_binding = CONTRACT.confinement_binding_sha256()
+        for module in (CONTROLLER, INSTALLER):
+            self.assertEqual(module.CONFINEMENT_SCHEMA, CONTRACT.CONFINEMENT_SCHEMA)
+            self.assertEqual(module.CONFINEMENT_PACKAGE_VERSION, pin.package_version)
+            self.assertEqual(module.CONFINEMENT_SHA256SUMS_SHA256, pin.sha256sums_sha256)
+            self.assertEqual(module.CONFINEMENT_PACKAGE_TREE, pin.package_tree)
+            self.assertEqual(module.CONFINEMENT_FILE_COUNT, len(CONTRACT.CONFINEMENT_FILES))
+            self.assertEqual(tuple(module.CONFINEMENT_SERVICE_ROLES), CONTRACT.REQUIRED_ROLES)
+            self.assertEqual(tuple(module.CONFINEMENT_TRANSIENT_ROLES), CONTRACT.TRANSIENT_ROLES)
+            self.assertEqual(module.CONFINEMENT_BINDING_SHA256, expected_binding)
         runbook = RUNBOOK.read_text()
         for value in (*hashes.values(), digest, manifest["controller_sha256"], manifest["root_installer_sha256"]):
             self.assertIn(f"`{value}`", runbook)
@@ -321,17 +353,33 @@ class FrozenAndManifestTests(unittest.TestCase):
 # ==========================================================================
 
 class ContractTests(unittest.TestCase):
+    def test_approved_pin_binds_package_1_0_5_exactly(self):
+        pin = CONTRACT.confinement_pin()
+        self.assertEqual(pin.package_version, "1.0.5")
+        self.assertEqual(pin.sha256sums_sha256,
+                         "b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c")
+        self.assertEqual(pin.package_tree, "e8e59b769ed6c6acd85a3bf259364bace5ec374b")
+        self.assertEqual(len(CONTRACT.CONFINEMENT_FILES), 17)
+        self.assertEqual(set(pin.file_sha256), set(CONTRACT.CONFINEMENT_FILES))
+        self.assertEqual(CONTRACT.TRANSIENT_ROLES, ("production-deploy-cli", "production-build-cli"))
+
     def test_unset_pin_refuses_resolution_and_observation(self):
-        self.assertIsNone(CONTRACT.CONFINEMENT_PIN)
-        with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "^confinement_package_not_approved$"):
-            CONTRACT.resolve_environment("production", production_config=production_config())
         env = resolved()
-        with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "^confinement_package_not_approved$"):
-            CONTRACT.verify_confinement_observation(env, observation())
+        with patch.object(CONTRACT, "CONFINEMENT_PIN", None):
+            with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "^confinement_package_not_approved$"):
+                CONTRACT.resolve_environment("production", production_config=production_config())
+            with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "^confinement_package_not_approved$"):
+                CONTRACT.verify_confinement_observation(env, observation())
 
     def test_malformed_pin_refuses(self):
-        bad = CONTRACT.ConfinementPin("1.0.0", "a" * 64, {CONTRACT.CONFINEMENT_FILES[0]: "b" * 64})
+        bad = CONTRACT.ConfinementPin("1.0.0", "a" * 64, "b" * 40,
+                                      {CONTRACT.CONFINEMENT_FILES[0]: "b" * 64})
         with patch.object(CONTRACT, "CONFINEMENT_PIN", bad), \
+                self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "confinement_package_pin_invalid"):
+            CONTRACT.resolve_environment("production", production_config=production_config())
+        bad_tree = CONTRACT.ConfinementPin("1.0.0", "a" * 64, "not-a-tree",
+                                           synthetic_pin().file_sha256)
+        with patch.object(CONTRACT, "CONFINEMENT_PIN", bad_tree), \
                 self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "confinement_package_pin_invalid"):
             CONTRACT.resolve_environment("production", production_config=production_config())
 
@@ -363,6 +411,10 @@ class ContractTests(unittest.TestCase):
             "production_confinement_service_binding_invalid": dict(production_config(), php_fpm_confinement=dict(
                 policy, services={**policy["services"], "staging-legacy": dict(
                     policy["services"]["staging-legacy"], apparmor_profile="unconfined")})),
+            "production_confinement_transient_binding_invalid": dict(
+                production_config(), php_fpm_confinement=dict(
+                    policy, transients={**policy["transients"], "production-build-cli": dict(
+                        policy["transients"]["production-build-cli"], executable="/usr/bin/php8.5")})),
             "production_confinement_schema_invalid": dict(production_config(), php_fpm_confinement=dict(
                 policy, schema=1)),
             "production_php_version_invalid": dict(production_config(), php_version="8.5"),
@@ -371,6 +423,9 @@ class ContractTests(unittest.TestCase):
             for code, config in cases.items():
                 with self.subTest(code=code), self.assertRaisesRegex(CONTRACT.EnvironmentRefused, f"^{code}$"):
                     CONTRACT.resolve_environment("production", production_config=config)
+            with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "production_confinement_package_mismatch"):
+                CONTRACT.resolve_environment("production", production_config=production_config(
+                    php_fpm_confinement=dict(policy, package_tree="c" * 40)))
             with self.assertRaisesRegex(CONTRACT.EnvironmentRefused, "environment_unknown"):
                 CONTRACT.resolve_environment("staging-next")
 
@@ -547,9 +602,10 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((binding.unit, binding.apparmor_profile, binding.attachment_path), (
             "wpcaregrid-staging-legacy-scheduler.service", "wpcaregrid-php-cli-staging",
             "/etc/systemd/system/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf"))
-        self.assertEqual(len(CONTRACT.CONFINEMENT_FILES), 16)
+        self.assertEqual(len(CONTRACT.CONFINEMENT_FILES), 17)
         self.assertIn(binding.attachment_path, CONTRACT.CONFINEMENT_FILES)
         self.assertIn("/etc/apparmor.d/wpcaregrid-php-cli-production-deploy", CONTRACT.CONFINEMENT_FILES)
+        self.assertIn("/etc/apparmor.d/wpcaregrid-php-cli-production-build", CONTRACT.CONFINEMENT_FILES)
         legacy = lambda d: d["services"]["jobs-legacy-scheduler"]  # noqa: E731
         self.assertEqual(self._refusal(lambda d: d["services"].pop("jobs-legacy-scheduler")),
                          "confinement_service_unobserved")
@@ -595,9 +651,41 @@ class ContractTests(unittest.TestCase):
                              ({"cgroup": "/user.slice/user-1001.slice/session-3.scope"},
                               "confinement_helper_not_root_console_session"),
                              ({"deploy_cli_profile_mode": "unloaded"}, "confinement_deploy_cli_profile_not_enforced"),
-                             ({"deploy_cli_cmdline_sha256": []}, "confinement_observation_invalid")):
+                             ({"deploy_cli_cmdline_sha256": []}, "confinement_observation_invalid"),
+                             ({"build_cli_profile_mode": "unloaded"}, "confinement_build_cli_profile_not_enforced"),
+                             ({"build_cli_cmdline_sha256": []}, "confinement_observation_invalid")):
             with self.subTest(change=change):
                 self.assertEqual(self._refusal(lambda d, c=change: helper(d).update(c)), code)
+
+    def test_production_build_cli_class_is_exact(self):
+        for argv in BACKEND._build_cli_commands():
+            with self.subTest(argv=argv[:3]):
+                self._passes(with_peer(observation(), build_cli_peer(8250, argv)))
+        cases = (
+            (build_cli_peer(8251, unit="wpcaregrid-production-php8.4-fpm.service",
+                            cgroup="/system.slice/wpcaregrid-production-php8.4-fpm.service"),
+             "confinement_build_cli_outside_helper_session"),
+            (build_cli_peer(8252, cgroup="/user.slice/user-0.slice/session-8.scope"),
+             "confinement_build_cli_outside_helper_session"),
+            (build_cli_peer(8253, exe="/usr/bin/php8.5"), "confinement_peer_executable_unexpected"),
+            (build_cli_peer(8254, argv=("/usr/bin/php8.4", "artisan", "tinker")),
+             "confinement_build_cli_command_unexpected"),
+            (build_cli_peer(8255, argv=BACKEND._deploy_cli_commands(SOCKET)[0]),
+             "confinement_build_cli_command_unexpected"),
+            (build_cli_peer(8256, uids=[33, 33, 0, 33]), "confinement_build_cli_identity_invalid"),
+            (build_cli_peer(8257, groups=[33, 1001]), "confinement_build_cli_identity_invalid"),
+            (build_cli_peer(8258, argv0="php"), "confinement_peer_executable_unexpected"),
+            (build_cli_peer(8259, starttime=10), "confinement_build_cli_stale"),
+            (build_cli_peer(8260, fds=["/var/lib/wpcaregrid-deploy/staging-next/shared/.env"]),
+             "confinement_peer_foreign_descriptor"),
+            (build_cli_peer(8261, label="wpcaregrid-php-cli-production-build (complain)"),
+             "confinement_process_not_confined"),
+            (deploy_cli_peer(8262, argv=BACKEND._build_cli_commands()[0]),
+             "confinement_deploy_cli_command_unexpected"),
+        )
+        for item, code in cases:
+            with self.subTest(code=code, pid=item["pid"]):
+                self.assertEqual(self._refusal(lambda d, item=item: with_peer(d, item)), code)
 
     def test_production_jobs_fence_is_required_and_checked_first(self):
         fence_of = lambda d: d["production_jobs_fence"]  # noqa: E731
@@ -733,7 +821,8 @@ class BackendProfileTests(unittest.TestCase):
 
     def test_preflight_gate_refuses_while_pin_unset(self):
         profile = production_profile()
-        with patch.object(BACKEND, "_verify_directory_chain") as chain, \
+        with patch.object(CONTRACT, "CONFINEMENT_PIN", None), \
+                patch.object(BACKEND, "_verify_directory_chain") as chain, \
                 self.assertRaisesRegex(BACKEND.DeployRefused, "^confinement_package_not_approved$"):
             BACKEND.preflight(profile, invoking_uid=0)
         chain.assert_not_called()
@@ -763,7 +852,7 @@ class BackendProfileTests(unittest.TestCase):
                                                     artifact_sha256="b" * 64).reason,
                              "confinement_same_uid_peer_unconfined")
 
-    def test_application_php_runs_only_as_exact_commands_under_the_deploy_cli_profile(self):
+    def test_application_php_runs_only_as_exact_commands_under_the_matching_cli_profile(self):
         profile = production_profile()
         calls, gates = [], []
         probe = list(BACKEND._deploy_cli_commands(SOCKET)[0])
@@ -777,12 +866,19 @@ class BackendProfileTests(unittest.TestCase):
                                         "/usr/bin/aa-exec", "-p", "wpcaregrid-php-cli-production-deploy", "--",
                                         *probe])
             self.assertEqual(len(gates), 1, "inventory re-checked after the PHP operation")
+            for index, argv in enumerate(BACKEND._build_cli_commands(), start=1):
+                BACKEND._run_as_php_fpm(profile, list(argv), cwd=Path("/"), timeout=5)
+                self.assertEqual(calls[index], ["/usr/sbin/runuser", "--user", "www-data", "--group", "www-data",
+                                                "--", "/usr/bin/aa-exec", "-p",
+                                                "wpcaregrid-php-cli-production-build", "--", *argv])
+            self.assertEqual(len(gates), 3, "inventory re-checked after every PHP operation")
             for argv in (["/usr/bin/php8.4", "-v"], ["/usr/local/bin/php", "-r", probe[2]],
-                         ["/usr/bin/php8.4", "artisan", "migrate", "--force"]):
+                         ["/usr/bin/php8.4", "artisan", "migrate", "--force"],
+                         ["/usr/bin/php8.4", "-r", BACKEND._MIGRATION_RUNNER_SCRIPT]):
                 with self.subTest(argv=argv[:3]), \
                         self.assertRaisesRegex(BACKEND.DeployRefused, "deploy_cli_command_not_allowed"):
                     BACKEND._run_as_php_fpm(profile, argv, cwd=Path("/"), timeout=5)
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(calls), 3)
         # A failed PHP command still re-checks, and a confinement refusal takes precedence.
         with patch.object(BACKEND.os, "geteuid", return_value=0), \
                 patch.object(BACKEND.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="www-data")), \
@@ -793,17 +889,24 @@ class BackendProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(BACKEND.DeployRefused, "confinement_same_uid_peer_unconfined"):
                 BACKEND._run_as_php_fpm(profile, probe, cwd=Path("/"), timeout=5)
 
-    def test_deploy_cli_commands_are_the_helpers_actual_php_calls(self):
-        commands = BACKEND._deploy_cli_commands(SOCKET)
-        self.assertEqual(len(commands), 4)
-        self.assertTrue(all(argv[0] == "/usr/bin/php8.4" for argv in commands))
+    def test_deploy_and_build_cli_commands_are_the_helpers_actual_php_calls(self):
+        deploy = BACKEND._deploy_cli_commands(SOCKET)
+        build = BACKEND._build_cli_commands()
+        self.assertEqual(len(deploy), 1)
+        self.assertEqual(len(build), 2)
+        self.assertTrue(all(argv[0] == "/usr/bin/php8.4" for argv in (*deploy, *build)))
+        self.assertEqual([argv[1:3] for argv in build],
+                         [("artisan", "package:discover"), ("artisan", "config:cache")])
         source = (ROOT / "scripts/deployment_backend_v2_1_3.py").read_text()
         self.assertEqual(source.count("_run_as_php_fpm(profile,"), 5)
         self.assertIn('runner = "/usr/local/bin/php" if profile.test_only else PHP_BINARY', source)
         self.assertNotIn('_run_as_php_fpm(profile, ["/usr/local/bin/php"', source)
         old = (ROOT / "scripts/deployment_backend_v2_1_2.py").read_text()
         self.assertIn('output = _run_as_php_fpm(profile, ["/usr/local/bin/php", "-r", script]', old)
-        self.assertEqual(len(set(BACKEND.deploy_cli_cmdline_sha256(SOCKET))), 4)
+        self.assertEqual(len(set(BACKEND.deploy_cli_cmdline_sha256(SOCKET))), 1)
+        self.assertEqual(len(set(BACKEND.build_cli_cmdline_sha256())), 2)
+        self.assertFalse(set(BACKEND.deploy_cli_cmdline_sha256(SOCKET))
+                         & set(BACKEND.build_cli_cmdline_sha256()))
 
     def test_release_activation_is_followed_by_the_peer_gate_before_any_receipt(self):
         source = (ROOT / "scripts/deployment_backend_v2_1_3.py").read_text()
@@ -861,7 +964,6 @@ class DatabaseSocketPolicyTests(unittest.TestCase):
         with patch.object(CONTRACT, "PRODUCTION_DATABASE_SOCKET", "/run/mysqld/other.sock"):
             other = BACKEND.deploy_cli_cmdline_sha256("/run/mysqld/other.sock")
         self.assertNotEqual(other[0], BACKEND.deploy_cli_cmdline_sha256(SOCKET)[0])
-        self.assertEqual(other[1:], BACKEND.deploy_cli_cmdline_sha256(SOCKET)[1:])
 
     def test_rendered_probe_is_valid_php(self):
         php = shutil.which("php")
@@ -1312,7 +1414,8 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.profiles = self.tmp / "profiles"
         self.profiles.write_text("".join(f"{b.apparmor_profile} (enforce)\n"
                                          for b in CONTRACT.CONFINEMENT_SERVICES.values())
-                                 + "wpcaregrid-php-cli-production-deploy (enforce)\nother (complain)\n")
+                                 + "wpcaregrid-php-cli-production-deploy (enforce)\n"
+                                 + "wpcaregrid-php-cli-production-build (enforce)\nother (complain)\n")
         self.enabled = self.tmp / "enabled"
         self.enabled.write_text("Y\n")
         (self.tmp / "cron.d").mkdir()
@@ -1424,7 +1527,11 @@ class ConfinementCollectorTests(unittest.TestCase):
         self.assertEqual(data["www_data_scheduled_jobs"], {"complete": True, "crontab_present": False,
                                                            "system_cron_entries": 0, "at_jobs": 0})
         self.assertEqual((data["helper"]["pid"], data["helper"]["starttime"], data["helper"]["cgroup"],
-                          data["helper"]["deploy_cli_profile_mode"]), (self.helper_pid, 1, HELPER_CGROUP, "enforce"))
+                          data["helper"]["deploy_cli_profile_mode"], data["helper"]["build_cli_profile_mode"]),
+                         (self.helper_pid, 1, HELPER_CGROUP, "enforce", "enforce"))
+        self.assertEqual(data["helper"]["deploy_cli_cmdline_sha256"],
+                         BACKEND.deploy_cli_cmdline_sha256(SOCKET))
+        self.assertEqual(data["helper"]["build_cli_cmdline_sha256"], BACKEND.build_cli_cmdline_sha256())
         self.verify(data)
 
     def test_collected_production_jobs_fence(self):
@@ -1784,7 +1891,11 @@ class EntrypointTests(unittest.TestCase):
         return policy, run
 
     def test_enabled_policy_with_every_pin_correct_still_refuses_while_confinement_pin_unset(self):
-        policy, run = self._fixture()
+        raw = (ROOT / SOURCES["environment_contract_sha256"]).read_bytes()
+        unset = re.sub(rb"CONFINEMENT_PIN: ConfinementPin \| None = ConfinementPin\(.*?\n\)\n",
+                       b"CONFINEMENT_PIN: ConfinementPin | None = None\n", raw, count=1, flags=re.S)
+        self.assertNotEqual(unset, raw)
+        policy, run = self._fixture(unset)
         with self.assertRaisesRegex(ENTRY.Refused, "^confinement_package_not_approved$"):
             run(policy)
 
@@ -1806,11 +1917,11 @@ class EntrypointTests(unittest.TestCase):
 
     def test_approved_pin_loads_root_console_profile_bound_to_verified_modules(self):
         raw = (ROOT / SOURCES["environment_contract_sha256"]).read_bytes()
-        old = b"CONFINEMENT_PIN: ConfinementPin | None = None\n"
-        self.assertEqual(raw.count(old), 1)
+        pattern = re.compile(rb"CONFINEMENT_PIN: ConfinementPin \| None = ConfinementPin\(.*?\n\)\n", re.S)
+        self.assertIsNotNone(pattern.search(raw))
         pin_source = ("CONFINEMENT_PIN: ConfinementPin | None = ConfinementPin(\"1.0.0\", \"" + "a" * 64
-                      + "\", MappingProxyType(" + repr(dict(PIN.file_sha256)) + "))\n").encode()
-        policy, run = self._fixture(raw.replace(old, pin_source))
+                      + "\", \"" + "b" * 40 + "\", MappingProxyType(" + repr(dict(PIN.file_sha256)) + "))\n").encode()
+        policy, run = self._fixture(pattern.sub(lambda _match: pin_source, raw, count=1))
         backend, profile, operation, app_sha, artifact_sha = run(policy, ("stage", "a" * 40, "b" * 64))
         self.assertEqual((operation, app_sha, artifact_sha), ("stage", "a" * 40, "b" * 64))
         self.assertEqual((profile.allowed_uid, profile.transfer_uid, profile.php_fpm_uid), (0, TRANSFER_UID, 33))
@@ -2073,6 +2184,12 @@ class InstallerTests(unittest.TestCase):
                           policy["php_fpm_confinement"], policy["deploy_user"]),
                          (2, False, "root-console-direct", None, None))
         self.assertEqual(set(policy), set(INSTALLER.POLICY_KEYS))
+        self.assertEqual(receipt["php_fpm_confinement"], {
+            "schema": 3, "package_version": "1.0.5",
+            "sha256sums_sha256": CONTRACT.CONFINEMENT_PIN.sha256sums_sha256,
+            "package_tree": CONTRACT.CONFINEMENT_PIN.package_tree, "files": 17,
+            "services": list(CONTRACT.REQUIRED_ROLES), "transients": list(CONTRACT.TRANSIENT_ROLES),
+            "binding_sha256": CONTRACT.confinement_binding_sha256()})
         self.assertFalse(self.layout.inbox.exists(), "private inbox copies are removed after publication")
         self.assertEqual(self.sudoers_bytes(), self.sudoers_before)
         self.assertEqual(sorted(p.name for p in (self.tmp / "sudoers.d").iterdir()), ["wpcaregrid-deploy"])
@@ -2087,13 +2204,38 @@ class InstallerTests(unittest.TestCase):
     def test_partial_install_is_refused_and_never_repaired(self):
         self.install()
         (self.layout.helper_dir / "deployment_backend_v2_1_3.py").unlink()
-        self.refused("partial_installation_detected")
+        message = self.refused("partial_installation_detected")
+        self.assertIn("RECOVERY=REINSTALL_AFTER_MANUAL_CLEANUP", message)
         self.assertFalse((self.layout.helper_dir / "deployment_backend_v2_1_3.py").exists())
 
     def test_leftover_private_inbox_is_a_partial_install(self):
         self.layout.inbox_parent.mkdir(mode=0o700)
         self.layout.inbox.mkdir(mode=0o700)
-        self.refused("partial_installation_detected")
+        message = self.refused("partial_installation_detected")
+        self.assertIn("RECOVERY=REMOVE_STALE_INBOX", message)
+
+    def test_partial_install_recovery_is_advisory_and_never_mutates(self):
+        self.install()
+        backend = self.layout.helper_dir / "deployment_backend_v2_1_3.py"
+        backend.unlink()
+        before = {path: (path.exists(), path.read_bytes() if path.is_file() else None)
+                  for _name, path, _mode in self.layout.targets()}
+        self.assertEqual(INSTALLER._recovery(self.layout), "REINSTALL_AFTER_MANUAL_CLEANUP")
+        after = {path: (path.exists(), path.read_bytes() if path.is_file() else None)
+                 for _name, path, _mode in self.layout.targets()}
+        self.assertEqual(after, before)
+        self.assertFalse(backend.exists(), "recovery classification never repairs")
+
+    def test_disabled_policy_is_the_only_installed_policy(self):
+        receipt = self.install()
+        policy = json.loads(self.layout.policy.read_text())
+        self.assertIs(policy["enabled"], False)
+        self.assertTrue(all(policy[field] is None for field in CONTRACT.environment_fields()
+                            if field not in {"privileged_invocation", "php_fpm_confinement"}))
+        self.assertEqual(policy["privileged_invocation"], "root-console-direct")
+        self.assertIsNone(policy["php_fpm_confinement"])
+        self.assertEqual(receipt["profile_enabled"], False)
+        self.assertEqual(receipt["phase_b_policy"], "DISABLED")
 
     def test_existing_target_is_never_overwritten(self):
         self.layout.helper_parent.mkdir(mode=0o755)

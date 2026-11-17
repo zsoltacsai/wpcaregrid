@@ -2352,20 +2352,39 @@ def _runtime_probe_script(socket_path: str | None = None) -> str:
 
 
 def _deploy_cli_commands(socket_path: str | None = None) -> tuple[tuple[str, ...], ...]:
-    """Every exact argv the helper may run as www-data under the deploy-CLI profile."""
+    """Every exact argv the helper may run as www-data under the deploy-CLI profile.
+
+    1.0.5 splits the read-only runtime identity probe from the offline cache
+    builders. The deploy profile supports only this probe; package:discover and
+    config:cache run under the separate build profile. The Phase B migration
+    runner stays disabled and is not listed under either class.
+    """
     php = _ENVIRONMENT_MODULE.DEPLOY_CLI_EXECUTABLE
+    return ((php, "-r", _runtime_probe_script(socket_path)),)
+
+
+def _build_cli_commands() -> tuple[tuple[str, ...], ...]:
+    """Every exact argv the helper may run as www-data under the build-CLI profile."""
+    php = _ENVIRONMENT_MODULE.BUILD_CLI_EXECUTABLE
     return (
-        (php, "-r", _runtime_probe_script(socket_path)),
         (php, "artisan", "package:discover", "--ansi", "--no-interaction"),
         (php, "artisan", "config:cache", "--no-interaction"),
-        (php, "-r", _MIGRATION_RUNNER_SCRIPT),  # Phase B only; Phase B stays disabled
     )
+
+
+def _cmdline_sha256(commands: tuple[tuple[str, ...], ...]) -> list[str]:
+    return [hashlib.sha256(b"".join(arg.encode("utf-8") + b"\0" for arg in argv)).hexdigest()
+            for argv in commands]
 
 
 def deploy_cli_cmdline_sha256(socket_path: str | None = None) -> list[str]:
     """SHA-256 of each /proc/<pid>/cmdline the deploy-CLI commands produce."""
-    return [hashlib.sha256(b"".join(arg.encode("utf-8") + b"\0" for arg in argv)).hexdigest()
-            for argv in _deploy_cli_commands(socket_path)]
+    return _cmdline_sha256(_deploy_cli_commands(socket_path))
+
+
+def build_cli_cmdline_sha256() -> list[str]:
+    """SHA-256 of each /proc/<pid>/cmdline the build-CLI commands produce."""
+    return _cmdline_sha256(_build_cli_commands())
 
 
 def _verify_database_socket(profile: StagingProfile) -> None:
@@ -2432,12 +2451,19 @@ def _run_as_php_fpm(profile: StagingProfile, argv: list[str], *, cwd: Path,
             return _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
                               extra_env=extra_env, home=home, classify_failure=classify_failure)
         # Shared www-data identity: application PHP started by root runs only as one
-        # of the exact deploy-CLI commands, under the dedicated production deploy-CLI
-        # profile (never the FPM profile, never unconfined).
+        # of the exact transient commands under the matching production CLI profile
+        # (deploy: read-only runtime probe; build: offline cache builders). Never the
+        # FPM profile and never unconfined.
         confinement = getattr(BOUND_ENVIRONMENT, "php_fpm_confinement", None)
         _require(profile.name == "production" and confinement is not None, "php_fpm_confinement_unbound")
-        _require(tuple(argv) in _deploy_cli_commands(), "deploy_cli_command_not_allowed")
-        prefix += [AA_EXEC, "-p", _ENVIRONMENT_MODULE.DEPLOY_CLI_PROFILE, "--"]
+        command = tuple(argv)
+        if command in _deploy_cli_commands():
+            cli_profile = _ENVIRONMENT_MODULE.DEPLOY_CLI_PROFILE
+        elif command in _build_cli_commands():
+            cli_profile = _ENVIRONMENT_MODULE.BUILD_CLI_PROFILE
+        else:
+            raise DeployRefused("deploy_cli_command_not_allowed")
+        prefix += [AA_EXEC, "-p", cli_profile, "--"]
         try:
             output = _run_fixed([*prefix, *argv], cwd=cwd, timeout=timeout, maximum=maximum,
                                 extra_env=extra_env, home=home, classify_failure=classify_failure)
@@ -3535,7 +3561,7 @@ def _observe_www_data_scheduled_jobs() -> Mapping[str, object]:
 
 
 def _observe_helper(loaded: Mapping[str, str]) -> Mapping[str, object]:
-    """This root helper process: its session cgroup bounds the production deploy-CLI peer class."""
+    """This root helper process: its session cgroup bounds both production CLI peer classes."""
     pid = os.getpid()
     try:
         text = _read_proc_bytes(CONFINEMENT_PROC_ROOT / str(pid) / "cgroup", maximum=65536).decode("utf-8")
@@ -3550,7 +3576,9 @@ def _observe_helper(loaded: Mapping[str, str]) -> Mapping[str, object]:
         raise DeployRefused("confinement_helper_cgroup_unavailable") from None
     return {"pid": pid, "starttime": starttime, "cgroup": unified[0],
             "deploy_cli_profile_mode": loaded.get(module.DEPLOY_CLI_PROFILE, "unloaded"),
-            "deploy_cli_cmdline_sha256": deploy_cli_cmdline_sha256()}
+            "deploy_cli_cmdline_sha256": deploy_cli_cmdline_sha256(),
+            "build_cli_profile_mode": loaded.get(module.BUILD_CLI_PROFILE, "unloaded"),
+            "build_cli_cmdline_sha256": build_cli_cmdline_sha256()}
 
 
 def _systemd_unit_state(unit: str) -> Mapping[str, str]:

@@ -1,5 +1,14 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-17 (GO-14 Workstream A: bind merged package 1.0.5 — source only, review pending)
+
+- **Base:** protected primary `04a8e10711e0a24bf5b85a258764c99ec3f878bd` plus the merged GO-13 history. Source only: nothing installed, loaded, enabled or deployed; no host, service, database, sudoers or credential change.
+- **What:** the merged Workstream B package `deploy/php-fpm-confinement/1.0.5/` is now bound by the 2.1.3 helper instead of the former unset pin. `CONFINEMENT_SCHEMA` is 3: `ConfinementPin(package_version, sha256sums_sha256, package_tree, file_sha256)` pins 1.0.5, its `SHA256SUMS` digest `b1ce309c…f469c`, its Git tree object `e8e59b76…c374b`, the exact seventeen installed files, the seven service roles and the two transient CLI roles (`production-deploy-cli`, `production-build-cli`). The canonical binding digest `0c189479…7cee0` is carried by the contract, manifest, controller and installer, and written into the installer receipt.
+- **Split CLI profiles:** application PHP run by the helper is limited to three exact command lines. The read-only runtime probe runs under `wpcaregrid-php-cli-production-deploy` (MySQL Unix socket only); `artisan package:discover` and `artisan config:cache` run under `wpcaregrid-php-cli-production-build` (no network or socket). The Phase B migration runner is not listed under either class and now refuses as `deploy_cli_command_not_allowed`; Phase B stays disabled.
+- **Unchanged invariants:** no-cron model, the seventh legacy scheduler role, the deploy transfer-only identity and its staging grant, Unix MySQL production socket, production jobs fence, root-console-only privilege, deploy transfer only and no production sudoers rule. Historical 2.1.2 and staging helpers are untouched.
+- **Install recovery:** a non-pristine install still refuses and never repairs; the refusal now carries a read-only advisory `partial_installation_detected;RECOVERY=<code>` (`REMOVE_STALE_INBOX`, `REINSTALL_AFTER_MANUAL_CLEANUP`, `MANUAL_QUARANTINE`, `MANUAL_REVIEW`).
+- **Validation:** `scripts/tests/production-helper-2-1-3-test.py` — 121 passed, 1 skipped; `scripts/tests/php-fpm-confinement-test.py` — 214 passed, 1 skipped (no local `apparmor_parser`); `py_compile`, CI supply-chain and deploy-privilege policies, release-review V3, artifact consistency and `git diff --check` pass. Independent exact-head QA/AppSec, required CI, live AppArmor/acceptance and an Owner install GO remain gates.
+
 ## Update — 2026-11-17 (GO-13 post-merge CI and squash-history correction)
 
 - **Primary:** PR #415 merged at `37eefe29e694be434dff2dc70d80cfb221c9903b`; its seven required PR-head checks and exact-head QA/AppSec passed, and the V3 records/report artifacts were verified in the actual #174 ledger.

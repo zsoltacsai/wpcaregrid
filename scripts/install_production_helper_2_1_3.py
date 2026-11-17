@@ -25,7 +25,7 @@ GO-13 model:
   verified read-only.
 
 The profile stays disabled; enabling it requires a separately approved schema-2
-policy whose PHP-FPM confinement binding matches the (currently unset) pin of
+policy whose PHP-FPM confinement binding matches the approved 1.0.5 pin of
 ``deployment_environment_contract_2_1_3.py``.
 """
 
@@ -56,12 +56,27 @@ REVIEW_POLICY_SOURCE = "release_review_policy_v3.py"
 CONTROLLER_SOURCE = "production_deploy_controller_2_1_3.py"
 
 ENTRY_SHA256 = "357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3"
-BACKEND_SHA256 = "f123d5225056bfaa45f26b338e0d48768cd47c688d025c98847ff199c8b14a0f"
+BACKEND_SHA256 = "b586d4bf8aca330339f86e435290b1812e789d8e101d7097ce8e841825572cb0"
 TRANSACTION_SHA256 = "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00"
-ENVIRONMENT_SHA256 = "2ccbf8c430905aa69c6a121471657aafca6750f23aacce8228c6b1e1532acf32"
+ENVIRONMENT_SHA256 = "53a12565ac6d7abf5636e1ebf416d319dc16cfbfa188b2789791454b47967765"
 REVIEW_POLICY_SHA256 = "e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db"
-HELPER_ARTIFACT_SHA256 = "6ccd4fef69a5e10b5bd0adbfcc580db01e9ccf54ee3c9dd4d382f83650090991"
-CONTROLLER_SHA256 = "02f8a008b650b9a5c0f6c5289f683e2e8ba1b558be639f25260a48a6af0724bd"
+HELPER_ARTIFACT_SHA256 = "d8580587ecb74ab99513acd13e965dc0f3ed9e5f5d2c041d386826430b7f5076"
+CONTROLLER_SHA256 = "c483e8017e25961006973a42670420d574bce1bd9307be17130d6374506da2be"
+
+# Exact merged Workstream B package 1.0.5 binding, as compiled by
+# deployment_environment_contract_2_1_3.py (schema 3). The binding digest covers
+# the package version, SHA256SUMS digest, Git tree object, all seventeen installed
+# file hashes, all seven service role bindings and both transient CLI role bindings.
+CONFINEMENT_SCHEMA = 3
+CONFINEMENT_PACKAGE_VERSION = "1.0.5"
+CONFINEMENT_SHA256SUMS_SHA256 = "b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c"
+CONFINEMENT_PACKAGE_TREE = "e8e59b769ed6c6acd85a3bf259364bace5ec374b"
+CONFINEMENT_FILE_COUNT = 17
+CONFINEMENT_SERVICE_ROLES = (
+    "production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler",
+    "jobs-legacy-scheduler")
+CONFINEMENT_TRANSIENT_ROLES = ("production-deploy-cli", "production-build-cli")
+CONFINEMENT_BINDING_SHA256 = "0c189479fca557e8b47a7bfdeddaf753d96a75c24c3a58321cdf81ac2507cee0"
 
 TRANSFER_USER = "deploy"
 STAGING_HELPER = "/usr/local/sbin/wpcaregrid-deploy-priv"
@@ -635,6 +650,30 @@ def _state(layout: Layout) -> str:
     return "PARTIAL"
 
 
+def _recovery(layout: Layout) -> str:
+    """Classify a non-pristine install state. Nothing is ever repaired automatically.
+
+    The code is advisory and read-only: an operator removes or quarantines the
+    recorded leftovers, then re-runs this installer from its pinned root copy.
+    """
+    state = _state(layout)
+    if state == "NONE":
+        return "PROCEED"
+    if state == "COMPLETE":
+        return "NO_OP_VERIFY"
+    present = [path for _name, path, _mode_value in layout.targets() if _exists(path)]
+    if _exists(layout.helper_dir):
+        try:
+            expected = {path.name for name, path, _mode_value in layout.targets() if name != "policy"}
+            if set(os.listdir(layout.helper_dir)) - expected:
+                return "MANUAL_QUARANTINE"
+        except OSError:
+            return "MANUAL_REVIEW"
+    if not present:
+        return "REMOVE_STALE_INBOX" if _exists(layout.inbox) else "MANUAL_REVIEW"
+    return "REINSTALL_AFTER_MANUAL_CLEANUP"
+
+
 def _expected_files(policy_raw: bytes, layout: Layout) -> tuple[tuple[Path, int, str], ...]:
     hashes = dict(SOURCE_HASHES, policy=_sha(policy_raw))
     return tuple((path, mode, hashes[name]) for name, path, mode in layout.targets())
@@ -653,9 +692,19 @@ def _readback(files, layout: Layout) -> None:
             _fail("installed_file_hash_mismatch")
 
 
+def _confinement_receipt() -> dict[str, object]:
+    return {"schema": CONFINEMENT_SCHEMA, "package_version": CONFINEMENT_PACKAGE_VERSION,
+            "sha256sums_sha256": CONFINEMENT_SHA256SUMS_SHA256,
+            "package_tree": CONFINEMENT_PACKAGE_TREE, "files": CONFINEMENT_FILE_COUNT,
+            "services": list(CONFINEMENT_SERVICE_ROLES),
+            "transients": list(CONFINEMENT_TRANSIENT_ROLES),
+            "binding_sha256": CONFINEMENT_BINDING_SHA256}
+
+
 def _receipt(result: str, files, snapshot, rules) -> dict[str, object]:
     return {
         "result": result, "helper_version": VERSION, "compatibility_contract": CONTRACT,
+        "php_fpm_confinement": _confinement_receipt(),
         "helper_artifact_sha256": HELPER_ARTIFACT_SHA256, "controller_sha256": CONTROLLER_SHA256,
         "environment_contract_sha256": ENVIRONMENT_SHA256,
         "release_review_policy_sha256": REVIEW_POLICY_SHA256, "release_review_policy": "V3",
@@ -687,7 +736,7 @@ def verify_existing(layout: Layout = PRODUCTION, *, runner=subprocess.run) -> di
 def install(layout: Layout = PRODUCTION, *, runner=subprocess.run) -> dict[str, object]:
     state = _state(layout)
     if state == "PARTIAL":
-        _fail("partial_installation_detected")
+        _fail(f"partial_installation_detected;RECOVERY={_recovery(layout)}")
     if state == "COMPLETE":
         return verify_existing(layout, runner=runner)
 

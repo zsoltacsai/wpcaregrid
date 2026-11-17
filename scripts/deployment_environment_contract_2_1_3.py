@@ -19,12 +19,11 @@ Differences from the original contract:
   console (``privileged_invocation = "root-console-direct"``), never through
   sudo.
 
-The confinement pin (``CONFINEMENT_PIN``) is deliberately ``None`` until the
-GO-13 Workstream B package is reviewed and approved. While it is unset every
-resolution and every observation check refuses with
-``confinement_package_not_approved``. The only remaining source change is to
-replace ``CONFINEMENT_PIN = None`` with the approved ``ConfinementPin(...)``
-(and then re-pin the helper artifacts that hash this file).
+The confinement pin (``CONFINEMENT_PIN``) binds the approved and merged
+Workstream B package **1.0.5**: its Git tree object, ``SHA256SUMS`` digest, the
+exact seventeen installed files, the seven service roles and both transient
+production CLI classes. There is no unset/placeholder pin. A pin that does not
+exactly match this module still refuses with ``confinement_package_pin_invalid``.
 
 This module is pure policy: it never reads a host, loads a profile or starts a
 service. Observation data is collected as root by the helper backend.
@@ -33,6 +32,7 @@ service. Observation data is collected as root by the helper backend.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -46,7 +46,9 @@ class EnvironmentRefused(ValueError):
 
 CONTRACT_VERSION = "2.1.3"
 POLICY_SCHEMA = 2
-CONFINEMENT_SCHEMA = 2
+# The confinement binding gained a package tree id, the split build CLI profile and
+# explicit transient-class bindings in GO-14; the previous shape is not accepted.
+CONFINEMENT_SCHEMA = 3
 OBSERVATION_SCHEMA = 3
 PRIVILEGED_INVOCATION = "root-console-direct"
 TRANSFER_USER = "deploy"
@@ -67,10 +69,11 @@ FOREIGN_DATABASE_SOCKETS = frozenset({"/run/mysqld/mysqld.sock", "/run/mysqld/wp
 # the production transfer identity.
 STAGING_NEXT_DEPLOY_UID = 996
 
-# Installed paths, units and profile names follow the Workstream B package
-# structure (branch t3/go-13-php-fpm-confinement: 1.0.1 binding.json @5472123,
-# plus the Owner-approved 1.0.2 production deploy-CLI profile). Only structure is
-# compiled here; no B hash is pinned until B's final package is approved.
+# Installed paths, units and profile names follow the reviewed, merged Workstream B
+# package 1.0.5 (deploy/php-fpm-confinement/1.0.5/binding.json): the original
+# structure plus the split production CLI profiles
+# wpcaregrid-php-cli-production-deploy (runtime probe only) and
+# wpcaregrid-php-cli-production-build (offline package:discover/config:cache).
 _APPARMOR = "/etc/apparmor.d"
 _SYSTEMD = "/etc/systemd/system"
 _P_PROFILE = f"{_APPARMOR}/wpcaregrid-php-fpm-production"
@@ -87,28 +90,71 @@ _SUP_DROPIN = f"{_SYSTEMD}/supervisor.service.d/90-wpcaregrid-confinement.conf"
 _SCH_DROPIN = f"{_SYSTEMD}/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf"
 _LSCH_DROPIN = f"{_SYSTEMD}/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf"
 _D_PROFILE = f"{_APPARMOR}/wpcaregrid-php-cli-production-deploy"
+_B_PROFILE = f"{_APPARMOR}/wpcaregrid-php-cli-production-build"
 _P_MASTER = "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf"
 _P_POOL = "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf"
 
-# Exact installed path set of the confinement package. The hashes are part of
-# the pin below; the set itself is fixed by this contract version.
+# Exact installed path set of package 1.0.5 (the key order of its binding.json).
+# The hashes are part of the pin below; the set itself is fixed by this version.
 CONFINEMENT_FILES: tuple[str, ...] = (
-    _P_PROFILE, _N_PROFILE, _L_PROFILE, _COMMON, _P_UNIT, _N_DROPIN, _L_DROPIN, _P_MASTER,
-    _X_PROFILE, _J_PROFILE, _X_DROPIN, _SUP_DROPIN, _SCH_DROPIN, _P_POOL, _LSCH_DROPIN, _D_PROFILE,
+    _COMMON, _X_PROFILE, _B_PROFILE, _D_PROFILE, _J_PROFILE, _P_PROFILE, _L_PROFILE, _N_PROFILE,
+    _P_MASTER, _P_POOL, _X_DROPIN, _L_DROPIN, _N_DROPIN, _SUP_DROPIN, _P_UNIT, _LSCH_DROPIN, _SCH_DROPIN,
 )
 
 
 @dataclass(frozen=True)
 class ConfinementPin:
-    """The single approved confinement package identity (Workstream B)."""
+    """The single approved confinement package identity (Workstream B 1.0.5)."""
     package_version: str
     sha256sums_sha256: str
+    package_tree: str
     file_sha256: Mapping[str, str]
 
 
-# Follow-on pin update: set this to the reviewed ConfinementPin only after the
-# Workstream B package is approved. Any intermediate hash is unapproved.
-CONFINEMENT_PIN: ConfinementPin | None = None
+# Approved, merged Workstream B package 1.0.5. The tree id is the immutable Git
+# tree object of deploy/php-fpm-confinement/1.0.5; SHA256SUMS and the per-file
+# hashes are re-derived from the package bytes. No intermediate/unset pin exists.
+CONFINEMENT_PIN: ConfinementPin | None = ConfinementPin(
+    package_version="1.0.5",
+    sha256sums_sha256="b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c",
+    package_tree="e8e59b769ed6c6acd85a3bf259364bace5ec374b",
+    file_sha256=MappingProxyType({
+        "/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common":
+            "f98fb21a032eea9d53d49035a221396f662566c64b4b6b6fc548666255ca228f",
+        "/etc/apparmor.d/wpcaregrid-nginx":
+            "482900237742347e1620e5fc80aaa27c21feb3ea2aaccbfac785e395b48d835e",
+        "/etc/apparmor.d/wpcaregrid-php-cli-production-build":
+            "d7aa3c8946c634fa09c71c34f5d5a58a22ed86140c94babac329c72bfc135a4f",
+        "/etc/apparmor.d/wpcaregrid-php-cli-production-deploy":
+            "947d36f33a29d68f089a127b2344ebb897114a31610fbf37204b7fd307ea7186",
+        "/etc/apparmor.d/wpcaregrid-php-cli-staging":
+            "236235672dc781f052c6c4ab1a0dc91e4e7a1047748c3edbbecf329df00e213d",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-production":
+            "a108eb879921f11b765d828a997b7ec3b539d50b1f869eb851e0cf1bdf70087f",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-staging-legacy":
+            "3d8fdfd901418b316e40ee1e50cda9ba29cfb27088faa487655a640d3157053b",
+        "/etc/apparmor.d/wpcaregrid-php-fpm-staging-next":
+            "b2a66953fa277e2150efd163ffaa66c7237a21255026fa683e38efb0fa65bfbc",
+        "/etc/php/8.4/fpm-wpcaregrid-production/php-fpm.conf":
+            "b93717257439300941ff45ee0e8bf4b766d2bc669cde849c8b0772d30d11b6ff",
+        "/etc/php/8.4/fpm-wpcaregrid-production/pool.d/wpcaregrid-production.conf":
+            "5c4bba770bc78c942e2ab44f61b81c6ef1c7b9334729b197c154d4501f29ea57",
+        "/etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf":
+            "6713c313eede322bc175a8081ecc14d49e385189e74ea3229647a8a1755897f3",
+        "/etc/systemd/system/php8.4-fpm.service.d/90-wpcaregrid-confinement.conf":
+            "93ee1a1a1cd6d9d428639a9acf8fc9e2ff879b4d269c2daa05c8b96542336515",
+        "/etc/systemd/system/php8.5-fpm.service.d/90-wpcaregrid-confinement.conf":
+            "b7e13fc638c2425914adb1c8982b851038135ae5bd403a3e3ae54a69f9f0f843",
+        "/etc/systemd/system/supervisor.service.d/90-wpcaregrid-confinement.conf":
+            "34f3d2c80029d42169afb400e0ba849ddebba95e3823ee0aabc2884e35ebf34d",
+        "/etc/systemd/system/wpcaregrid-production-php8.4-fpm.service":
+            "de72575cc1759cd324fa58f593bb1e98645ddb9b16988dbfe60c96e976fc816c",
+        "/etc/systemd/system/wpcaregrid-staging-legacy-scheduler.service.d/90-wpcaregrid-confinement.conf":
+            "55ffab7b4578bfb0fd5b7ee9283bc4670ced33ef34c31fe83faf707fcdfacffc",
+        "/etc/systemd/system/wpcaregrid-staging-next-scheduler.service.d/90-wpcaregrid-confinement.conf":
+            "f7eff0de001c3bcd548b9506b48fa541fb33fa077a67f6a5a657d630c031a22a",
+    }),
+)
 
 
 @dataclass(frozen=True)
@@ -150,6 +196,37 @@ CONFINEMENT_SERVICES: Mapping[str, ServiceBinding] = MappingProxyType({
 REQUIRED_ROLES: tuple[str, ...] = (
     "production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor", "jobs-scheduler",
     "jobs-legacy-scheduler")
+# Production application PHP run by the root helper, never by the FPM profile.
+DEPLOY_CLI_PROFILE = "wpcaregrid-php-cli-production-deploy"
+DEPLOY_CLI_PROFILE_PATH = _D_PROFILE
+DEPLOY_CLI_EXECUTABLE = "/usr/bin/php8.4"
+BUILD_CLI_PROFILE = "wpcaregrid-php-cli-production-build"
+BUILD_CLI_PROFILE_PATH = _B_PROFILE
+BUILD_CLI_EXECUTABLE = "/usr/bin/php8.4"
+
+
+@dataclass(frozen=True)
+class TransientClass:
+    """One short-lived production www-data class started by the root helper console."""
+    name: str
+    apparmor_profile: str
+    profile_path: str
+    files: tuple[str, ...]
+    executable: str
+
+
+# Both production application-PHP classes are transient, run only inside the
+# root helper's own console session and never as a service. 1.0.5 splits the
+# read-only runtime probe (deploy) from the offline cache builders (build).
+TRANSIENT_CLASSES: Mapping[str, TransientClass] = MappingProxyType({
+    "production-deploy-cli": TransientClass(
+        "production-deploy-cli", DEPLOY_CLI_PROFILE, DEPLOY_CLI_PROFILE_PATH,
+        (_COMMON, DEPLOY_CLI_PROFILE_PATH), DEPLOY_CLI_EXECUTABLE),
+    "production-build-cli": TransientClass(
+        "production-build-cli", BUILD_CLI_PROFILE, BUILD_CLI_PROFILE_PATH,
+        (_COMMON, BUILD_CLI_PROFILE_PATH), BUILD_CLI_EXECUTABLE),
+})
+TRANSIENT_ROLES: tuple[str, ...] = tuple(TRANSIENT_CLASSES)
 # Long-running roles that must be active with at least one www-data worker.
 SERVING_ROLES: tuple[str, ...] = ("production", "staging-next", "staging-legacy", "nginx")
 # Job roles may be idle (oneshot scheduler, stopped programs) but stay attached and enforced.
@@ -159,11 +236,6 @@ JOBS_PROFILE = "wpcaregrid-php-cli-staging"
 # /etc/cron.d entry, and no www-data at job may exist; there is no unconfined class.
 WWW_DATA_CRONTAB_PATH = "/var/spool/cron/crontabs/www-data"
 AT_SPOOL_PATH = "/var/spool/cron/atjobs"
-# Production deploy CLI (Owner-approved, B package 1.0.2): application PHP that the
-# root helper itself runs as www-data, never the FPM profile.
-DEPLOY_CLI_PROFILE = "wpcaregrid-php-cli-production-deploy"
-DEPLOY_CLI_PROFILE_PATH = _D_PROFILE
-DEPLOY_CLI_EXECUTABLE = "/usr/bin/php8.4"
 # The root helper console: a root login session scope, never a service unit.
 _HELPER_SESSION_CGROUP = re.compile(r"/user\.slice/user-0\.slice/session-[1-9][0-9]{0,9}\.scope")
 _JOB_EXECUTABLES = frozenset({"/usr/bin/php8.4", "/usr/bin/php8.5", "/usr/bin/dash", "/usr/bin/bash",
@@ -179,6 +251,7 @@ CLASS_EXECUTABLES: Mapping[str, frozenset] = MappingProxyType({
     "jobs-scheduler": _JOB_EXECUTABLES,
     "jobs-legacy-scheduler": _JOB_EXECUTABLES,
     "production-deploy-cli": frozenset({DEPLOY_CLI_EXECUTABLE}),
+    "production-build-cli": frozenset({BUILD_CLI_EXECUTABLE}),
 })
 # Descriptor targets a peer of each side may never hold (other environment's secrets/state).
 _PRODUCTION_PRIVATE = ("/var/lib/wpcaregrid-deploy/production/",)
@@ -191,8 +264,10 @@ class PhpFpmConfinement:
     """Compiled expectation bound into a resolved production contract."""
     package_version: str
     sha256sums_sha256: str
+    package_tree: str
     file_sha256: Mapping[str, str]
     roles: tuple[str, ...]
+    transients: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -262,9 +337,12 @@ _ENVIRONMENT_FIELDS = (
     "privileged_invocation", "php_fpm_confinement",
 )
 _PRODUCTION_KEYS = frozenset({"schema", "profile", "enabled", *_ENVIRONMENT_FIELDS})
-_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "files", "services"})
+_CONFINEMENT_KEYS = frozenset({"schema", "package_version", "package_sha256sums_sha256", "package_tree", "files",
+                               "services", "transients"})
 _SERVICE_KEYS = frozenset({"unit", "apparmor_profile", "profile_path", "attachment_path"})
+_TRANSIENT_KEYS = frozenset({"apparmor_profile", "profile_path", "executable"})
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_TREE = re.compile(r"[0-9a-f]{40}\Z")
 _VERSION = re.compile(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z")
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}\Z")
 _PROFILE_NAME = re.compile(r"[a-z][a-z0-9-]{1,31}\Z")
@@ -291,11 +369,38 @@ def confinement_pin() -> ConfinementPin:
         raise EnvironmentRefused("confinement_package_not_approved")
     if (not isinstance(pin, ConfinementPin) or not isinstance(pin.package_version, str)
             or _VERSION.fullmatch(pin.package_version) is None or not _sha(pin.sha256sums_sha256)
+            or not isinstance(pin.package_tree, str) or _TREE.fullmatch(pin.package_tree) is None
             or not isinstance(pin.file_sha256, Mapping)
             or set(pin.file_sha256) != set(CONFINEMENT_FILES)
             or any(not _sha(value) for value in pin.file_sha256.values())):
         raise EnvironmentRefused("confinement_package_pin_invalid")
     return pin
+
+
+def confinement_binding() -> Mapping[str, object]:
+    """Canonical schema-3 binding: package, tree, every file hash, service and transient role."""
+    pin = confinement_pin()
+    return {
+        "schema": CONFINEMENT_SCHEMA,
+        "package_version": pin.package_version,
+        "package_sha256sums_sha256": pin.sha256sums_sha256,
+        "package_tree": pin.package_tree,
+        "files": dict(pin.file_sha256),
+        "services": {role: {"unit": binding.unit, "apparmor_profile": binding.apparmor_profile,
+                            "profile_path": binding.profile_path,
+                            "attachment_path": binding.attachment_path}
+                     for role, binding in CONFINEMENT_SERVICES.items()},
+        "transients": {role: {"apparmor_profile": transient.apparmor_profile,
+                              "profile_path": transient.profile_path,
+                              "executable": transient.executable}
+                       for role, transient in TRANSIENT_CLASSES.items()},
+    }
+
+
+def confinement_binding_sha256() -> str:
+    """Digest of the canonical binding, carried verbatim by manifest, controller and installer."""
+    raw = json.dumps(confinement_binding(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _fixed_path(value: object, *, label: str, root: str | None = None) -> str:
@@ -332,7 +437,8 @@ def _confinement_config(data: object) -> PhpFpmConfinement:
             or type(data["schema"]) is not int or data["schema"] != CONFINEMENT_SCHEMA:
         raise EnvironmentRefused("production_confinement_schema_invalid")
     if data["package_version"] != pin.package_version \
-            or data["package_sha256sums_sha256"] != pin.sha256sums_sha256:
+            or data["package_sha256sums_sha256"] != pin.sha256sums_sha256 \
+            or data["package_tree"] != pin.package_tree:
         raise EnvironmentRefused("production_confinement_package_mismatch")
     files = data["files"]
     if not isinstance(files, Mapping) or set(files) != set(CONFINEMENT_FILES) \
@@ -349,8 +455,17 @@ def _confinement_config(data: object) -> PhpFpmConfinement:
                 "unit": binding.unit, "apparmor_profile": binding.apparmor_profile,
                 "profile_path": binding.profile_path, "attachment_path": binding.attachment_path}:
             raise EnvironmentRefused("production_confinement_service_binding_invalid")
-    return PhpFpmConfinement(pin.package_version, pin.sha256sums_sha256,
-                             MappingProxyType(dict(pin.file_sha256)), REQUIRED_ROLES)
+    transients = data["transients"]
+    if not isinstance(transients, Mapping) or set(transients) != set(TRANSIENT_CLASSES):
+        raise EnvironmentRefused("production_confinement_transient_binding_invalid")
+    for role, transient in TRANSIENT_CLASSES.items():
+        entry = transients[role]
+        if not isinstance(entry, Mapping) or set(entry) != _TRANSIENT_KEYS or dict(entry) != {
+                "apparmor_profile": transient.apparmor_profile, "profile_path": transient.profile_path,
+                "executable": transient.executable}:
+            raise EnvironmentRefused("production_confinement_transient_binding_invalid")
+    return PhpFpmConfinement(pin.package_version, pin.sha256sums_sha256, pin.package_tree,
+                             MappingProxyType(dict(pin.file_sha256)), REQUIRED_ROLES, TRANSIENT_ROLES)
 
 
 def _production_config(data: object) -> EnvironmentContract:
@@ -501,7 +616,8 @@ def resolve_environment(name: str, *, production_config: Mapping[str, object] | 
 _OBSERVATION_KEYS = frozenset({"schema", "apparmor_enabled", "production_jobs_fence", "files", "services",
                                "www_data_scheduled_jobs", "helper", "same_uid_peers"})
 _SCHEDULED_JOB_KEYS = frozenset({"complete", "crontab_present", "system_cron_entries", "at_jobs"})
-_HELPER_KEYS = frozenset({"pid", "starttime", "cgroup", "deploy_cli_profile_mode", "deploy_cli_cmdline_sha256"})
+_HELPER_KEYS = frozenset({"pid", "starttime", "cgroup", "deploy_cli_profile_mode", "deploy_cli_cmdline_sha256",
+                          "build_cli_profile_mode", "build_cli_cmdline_sha256"})
 _FENCE_KEYS = frozenset({"units", "supervisor", "markers"})
 _FENCE_UNIT_KEYS = frozenset({"load_state", "active_state", "unit_file_state"})
 _FENCE_SUPERVISOR_KEYS = frozenset({"config_complete", "runtime_available", "programs"})
@@ -641,19 +757,29 @@ def _verify_no_www_data_scheduled_jobs(jobs: object) -> None:
 
 
 def _verify_helper(helper: object) -> Mapping:
-    """The root helper console that may own transient production deploy-CLI peers."""
+    """The root helper console that may own transient production CLI peers.
+
+    Both split profiles (deploy runtime probe, build cache commands) must be
+    loaded in enforce mode and the helper must declare the exact command-line
+    digests allowed for each class.
+    """
     if not isinstance(helper, Mapping) or set(helper) != _HELPER_KEYS or not _pid(helper["pid"]) \
             or type(helper["starttime"]) is not int or helper["starttime"] < 0 \
-            or not isinstance(helper["cgroup"], str) or not isinstance(helper["deploy_cli_profile_mode"], str) \
-            or not isinstance(helper["deploy_cli_cmdline_sha256"], (list, tuple)) \
-            or not 1 <= len(helper["deploy_cli_cmdline_sha256"]) <= 8 \
-            or len(set(helper["deploy_cli_cmdline_sha256"])) != len(helper["deploy_cli_cmdline_sha256"]) \
-            or not all(_sha(item) for item in helper["deploy_cli_cmdline_sha256"]):
+            or not isinstance(helper["cgroup"], str) \
+            or not isinstance(helper["deploy_cli_profile_mode"], str) \
+            or not isinstance(helper["build_cli_profile_mode"], str):
         raise EnvironmentRefused("confinement_observation_invalid")
+    for key in ("deploy_cli_cmdline_sha256", "build_cli_cmdline_sha256"):
+        digests = helper[key]
+        if not isinstance(digests, (list, tuple)) or not 1 <= len(digests) <= 8 \
+                or len(set(digests)) != len(digests) or not all(_sha(item) for item in digests):
+            raise EnvironmentRefused("confinement_observation_invalid")
     if _HELPER_SESSION_CGROUP.fullmatch(helper["cgroup"]) is None:
         raise EnvironmentRefused("confinement_helper_not_root_console_session")
     if helper["deploy_cli_profile_mode"] != "enforce":
         raise EnvironmentRefused("confinement_deploy_cli_profile_not_enforced")
+    if helper["build_cli_profile_mode"] != "enforce":
+        raise EnvironmentRefused("confinement_build_cli_profile_not_enforced")
     return helper
 
 
@@ -687,22 +813,27 @@ def _classify_peer(peer: Mapping, helper: Mapping) -> str:
         raise EnvironmentRefused("confinement_same_uid_peer_unconfined")
     if not label.endswith(" (enforce)"):
         raise EnvironmentRefused("confinement_process_not_confined")  # complain, kill, unknown modes
-    if label == _enforce(DEPLOY_CLI_PROFILE):
+    transient = next((item for item in TRANSIENT_CLASSES.values()
+                      if label == _enforce(item.apparmor_profile)), None)
+    if transient is not None:
         # Transient application PHP started by this root helper console, nowhere else.
+        # 1.0.5 splits the read-only runtime probe (deploy) from the offline cache
+        # builders (build); each class has its own helper-declared command digests.
+        prefix = "deploy" if transient.name == "production-deploy-cli" else "build"
         if unit or peer["cgroup"] != helper["cgroup"]:
-            raise EnvironmentRefused("confinement_deploy_cli_outside_helper_session")
-        if exe != DEPLOY_CLI_EXECUTABLE or peer["argv0"] != DEPLOY_CLI_EXECUTABLE:
+            raise EnvironmentRefused(f"confinement_{prefix}_cli_outside_helper_session")
+        if exe != transient.executable or peer["argv0"] != transient.executable:
             raise EnvironmentRefused("confinement_peer_executable_unexpected")
         if any(v != WWW_DATA_UID for v in peer["uids"]) or any(v != WWW_DATA_GID for v in peer["gids"]) \
                 or any(v != WWW_DATA_GID for v in peer["groups"]):
-            raise EnvironmentRefused("confinement_deploy_cli_identity_invalid")
+            raise EnvironmentRefused(f"confinement_{prefix}_cli_identity_invalid")
         if peer["starttime"] < helper["starttime"]:
             # Only children of this helper run: nothing left over from an earlier run.
-            raise EnvironmentRefused("confinement_deploy_cli_stale")
-        if peer["cmdline_sha256"] not in helper["deploy_cli_cmdline_sha256"]:
-            raise EnvironmentRefused("confinement_deploy_cli_command_unexpected")
+            raise EnvironmentRefused(f"confinement_{prefix}_cli_stale")
+        if peer["cmdline_sha256"] not in helper[f"{prefix}_cli_cmdline_sha256"]:
+            raise EnvironmentRefused(f"confinement_{prefix}_cli_command_unexpected")
         _forbidden_descriptor(peer, production_side=True)
-        return "production-deploy-cli"
+        return transient.name
     candidates = [role for role in REQUIRED_ROLES if CONFINEMENT_SERVICES[role].unit == unit]
     if not candidates:
         if any(label == _enforce(b.apparmor_profile) for b in CONFINEMENT_SERVICES.values()):
@@ -815,7 +946,9 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
          "services": {role: {unit, load_state, active_state, main_pid, main_label,
                              apparmor_profile_property, loaded_profile_mode}},
          "www_data_scheduled_jobs": {complete, crontab_present, system_cron_entries, at_jobs},
-         "helper": {pid, starttime, cgroup, deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex]},
+         "helper": {pid, starttime, cgroup,
+                    deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex],
+                    build_cli_profile_mode, build_cli_cmdline_sha256: [hex]},
          "same_uid_peers": {complete, incomplete_reasons,
                             processes: [{pid, starttime, uids, gids, groups, ppid, state, comm, exe, argv0,
                                          cmdline_sha256, cgroup, unit, label, fds}]}}
@@ -830,8 +963,11 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     class (``wpcaregrid-php-cli-production-deploy``) is only ``/usr/bin/php8.4``
     (exe and argv0) as 33/33 with no other supplementary group, started after the
     current helper process, running one of the helper's exact command lines inside
-    the helper's own root console session cgroup, never a service unit. No www-data crontab,
-    system cron line or at job may exist. Unknown, unconfined, complain-mode,
+    the helper's own root console session cgroup, never a service unit. The
+    production build-CLI class (``wpcaregrid-php-cli-production-build``) has the
+    same identity, lifetime and cgroup rules and must run one of the helper's
+    build command lines; both profiles must be loaded in enforce mode. No www-data
+    crontab, system cron line or at job may exist. Unknown, unconfined, complain-mode,
     mislabelled or incomplete evidence refuses.
 
     The production jobs fence is checked first: both scheduler units masked and
@@ -847,8 +983,10 @@ def verify_confinement_observation(contract: EnvironmentContract, observation: o
     if (getattr(contract, "name", None) != "production" or not isinstance(confinement, PhpFpmConfinement)
             or confinement.package_version != pin.package_version
             or confinement.sha256sums_sha256 != pin.sha256sums_sha256
+            or confinement.package_tree != pin.package_tree
             or dict(confinement.file_sha256) != dict(pin.file_sha256)
-            or tuple(confinement.roles) != REQUIRED_ROLES):
+            or tuple(confinement.roles) != REQUIRED_ROLES
+            or tuple(confinement.transients) != TRANSIENT_ROLES):
         raise EnvironmentRefused("confinement_not_bound")
     if not isinstance(observation, Mapping) or set(observation) != _OBSERVATION_KEYS \
             or type(observation["schema"]) is not int or observation["schema"] != OBSERVATION_SCHEMA \

@@ -1,4 +1,4 @@
-# Production helper 2.1.3 — GO-13 Workstream A (source only)
+# Production helper 2.1.3 — GO-14 Workstream A (source only)
 
 Status: **source only. Not installed, not enabled, not release-ready.** Nothing in this change
 touches a host, sudoers, a service, a database or production. Every host step below needs its
@@ -18,7 +18,7 @@ pins their bytes.
 | Transfer identity | `deploy-production` | the existing `deploy` account, **untrusted and transfer-only**. No new user, group or FPM UID. |
 | Environment contract | `deployment_environment_contract.py` (schema 1, dedicated FPM UID) | `deployment_environment_contract_2_1_3.py` (policy schema 2, `www-data` 33/33 only with the exact PHP-FPM confinement binding and a passing schema-3 observation) |
 | Release admission | V3 records, exact-head artifacts, latest protected-primary SHA, CI | **unchanged** (byte-identical functions) |
-| Application PHP run by the helper | `runuser` as the FPM user | only four exact `/usr/bin/php8.4` command lines, `runuser` as `www-data` **and** `aa-exec -p wpcaregrid-php-cli-production-deploy` (never the FPM profile); inventory re-checked after each |
+| Application PHP run by the helper | `runuser` as the FPM user | only three exact `/usr/bin/php8.4` command lines under the merged 1.0.5 split: one read-only runtime probe as `wpcaregrid-php-cli-production-deploy`, two offline cache builders as `wpcaregrid-php-cli-production-build`; `runuser` as `www-data`, never the FPM profile, inventory re-checked after each |
 
 ### `deploy` keeps its staging grant exactly
 
@@ -50,32 +50,32 @@ root-owned private inbox (`/var/lib/wpcaregrid-deploy/production-helper-inbox/2.
 installer, the profile `inbox` for release archives) and only the root-owned copy is used. No
 deploy-owned file is executed, imported, linked or renamed by root.
 
-### PHP-FPM confinement binding (Workstream B dependency)
+### PHP-FPM confinement binding (merged Workstream B package 1.0.5)
 
-`CONFINEMENT_PIN` in `scripts/deployment_environment_contract_2_1_3.py` is **unset** (`None`)
-until the Workstream B package (`deploy/php-fpm-confinement/<version>/`) is corrected, reviewed
-and approved. While it is unset:
+`CONFINEMENT_PIN` in `scripts/deployment_environment_contract_2_1_3.py` is the approved, merged
+Workstream B package **1.0.5** (`deploy/php-fpm-confinement/1.0.5/`). It is a single
+`ConfinementPin(package_version, sha256sums_sha256, package_tree, file_sha256)`:
 
-* `resolve_environment` refuses every production policy with `confinement_package_not_approved`;
-* the helper therefore refuses `preflight`, `verify-install`, `authorize`, `stage` and `deploy`;
-* the installed policy stays `enabled=false`.
+| Field | Exact value |
+| --- | --- |
+| `package_version` | `1.0.5` |
+| `sha256sums_sha256` | `b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c` |
+| `package_tree` | `e8e59b769ed6c6acd85a3bf259364bace5ec374b` |
+| installed files | seventeen (`CONFINEMENT_FILES`), including the split build profile |
+| service roles | seven: `production`, `staging-next`, `staging-legacy`, `nginx`, `jobs-supervisor`, `jobs-scheduler`, `jobs-legacy-scheduler` |
+| transient roles | two: `production-deploy-cli`, `production-build-cli` |
+| canonical binding digest | `0c189479fca557e8b47a7bfdeddaf753d96a75c24c3a58321cdf81ac2507cee0` |
 
-The pin is a single `ConfinementPin(package_version, sha256sums_sha256, file_sha256)` over the
-fixed sixteen-path installed file set (`CONFINEMENT_FILES`). Paths, units and profile names
-follow the Workstream B package structure (branch `t3/go-13-php-fpm-confinement`: the 1.0.1
-`binding.json` at `5472123`, plus the Owner-approved deploy-CLI profile
-`/etc/apparmor.d/wpcaregrid-php-cli-production-deploy` first introduced in 1.0.2); **no B hash is
-pinned**. Candidates 1.0.2 (TCP egress) and 1.0.3 (acceptance-tool gaps that could misstate live
-security evidence) are **not** bound and are not claimed reviewed. The pin is set only after B's
-immutable **1.0.4** is final with independent exact-head review: first confirm the exact package,
-16-file, 7-role (no cron, `jobs-legacy-scheduler`) and socket mapping, then bind the exact package
-and file hashes and re-pin the helper atomically (environment hash → artifact digest → controller →
-installer → manifest → this runbook) in one change; the 2.1.3 test fails until every pin matches.
+The digest is `sha256` over `deployment_environment_contract_2_1_3.confinement_binding()` serialized
+with sorted keys and compact separators. It covers the package version, SHA256SUMS digest, Git tree
+object, all seventeen file hashes and every service/transient role binding. The manifest, controller
+and installer carry that digest; the installer writes it into its receipt. There is no unset pin,
+and a pin that does not exactly match refuses with `confinement_package_pin_invalid`.
 
-When the pin is set, a schema-2 production policy must echo it in `php_fpm_confinement`
-(`schema` 2, `package_version`, `package_sha256sums_sha256`, the exact `files` map and the seven
-service bindings: `production`, `staging-next`, `staging-legacy`, `nginx`, `jobs-supervisor`,
-`jobs-scheduler`, `jobs-legacy-scheduler`; there is no crontab pin). Before every operation,
+A schema-2 production policy must echo the schema-3 binding in `php_fpm_confinement`:
+`schema` 3, `package_version`, `package_sha256sums_sha256`, `package_tree`, the exact `files` map,
+the seven service bindings and the two transient bindings
+(`apparmor_profile`, `profile_path`, `executable`). There is no crontab pin. Before every operation,
 after every application-PHP command and after release activation, the backend collects, as root
 and only from fixed host interfaces, a schema-3 observation:
 
@@ -89,7 +89,9 @@ and only from fixed host interfaces, a schema-3 observation:
  services: {role: {unit, load_state, active_state, main_pid, main_label,
                    apparmor_profile_property, loaded_profile_mode}},
  www_data_scheduled_jobs: {complete, crontab_present, system_cron_entries, at_jobs},
- helper: {pid, cgroup, deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex]},
+ helper: {pid, cgroup,
+          deploy_cli_profile_mode, deploy_cli_cmdline_sha256: [hex],
+          build_cli_profile_mode, build_cli_cmdline_sha256: [hex]},
  same_uid_peers: {complete, incomplete_reasons,
                   processes: [{pid, starttime, uids, gids, groups, ppid, state, comm, exe, argv0,
                                cmdline_sha256, cgroup, unit, label, fds}]}}
@@ -139,7 +141,8 @@ the scan are inventoried in up to three passes; continued churn is `peer_set_uns
 | `staging-legacy` | `php8.4-fpm.service` | `wpcaregrid-php-fpm-staging-legacy (enforce)` | `php-fpm8.4` |
 | `nginx` | `nginx.service` | `wpcaregrid-nginx (enforce)` | `nginx` |
 | `jobs-supervisor`, `jobs-scheduler`, `jobs-legacy-scheduler` | `supervisor.service`, `wpcaregrid-staging-next-scheduler.service`, `wpcaregrid-staging-legacy-scheduler.service` | `wpcaregrid-php-cli-staging (enforce)` | `php8.4`, `php8.5`, `dash`, `bash`, `flock`, `logger` |
-| `production-deploy-cli` | none: the helper's own root console session (`/user.slice/user-0.slice/session-N.scope`), never a service unit | `wpcaregrid-php-cli-production-deploy (enforce)` | `/usr/bin/php8.4` only, all UIDs/GIDs 33, command line SHA-256 equal to one of the helper's four commands |
+| `production-deploy-cli` | none: the helper's own root console session (`/user.slice/user-0.slice/session-N.scope`), never a service unit | `wpcaregrid-php-cli-production-deploy (enforce)` | `/usr/bin/php8.4` only, all UIDs/GIDs 33, command line SHA-256 equal to the helper's runtime-probe command |
+| `production-build-cli` | none: the same helper root console session, never a service unit | `wpcaregrid-php-cli-production-build (enforce)` | `/usr/bin/php8.4` only, all UIDs/GIDs 33, command line SHA-256 equal to one of the helper's two build commands |
 
 There is **no unconfined class** (Owner decision, shim-free model): no www-data crontab
 (`/var/spool/cron/crontabs/www-data`), no `/etc/crontab` or `/etc/cron.d` line running as
@@ -158,33 +161,35 @@ queue/scheduler worker, shell, renamed FPM, a cron/`at` shell or a GID-33-only p
 tree), `confinement_peer_inventory_incomplete`, `confinement_worker_labels_missing` (a serving role
 with no www-data worker), `confinement_master_not_confined` (an active unit's main process not in
 its enforce label), `confinement_www_data_scheduled_job_present`,
-`confinement_www_data_jobs_unverifiable`, and for the deploy CLI
+`confinement_www_data_jobs_unverifiable`, and for the transient CLI classes
 `confinement_deploy_cli_outside_helper_session`, `confinement_deploy_cli_command_unexpected`,
 `confinement_deploy_cli_identity_invalid`, `confinement_deploy_cli_profile_not_enforced`,
+`confinement_build_cli_outside_helper_session`, `confinement_build_cli_command_unexpected`,
+`confinement_build_cli_identity_invalid`, `confinement_build_cli_profile_not_enforced`,
 `confinement_helper_not_root_console_session`. Files and services (all seven attached without a
 `-` fail-open prefix and in `enforce`; serving roles active) are checked as before. A pass is
 recorded state only; kernel enforcement remains the separate live acceptance gate in the
 Workstream B runbook.
 
-**Production deploy CLI (Owner-approved; profile introduced in B's 1.0.2, to be bound from final 1.0.4).** The helper
-runs application PHP only as these exact argv (`_deploy_cli_commands`), each through
-`runuser --user www-data --group www-data -- /usr/bin/aa-exec -p wpcaregrid-php-cli-production-deploy --`:
+**Production CLI classes (merged B 1.0.5 split).** The helper runs application PHP only as these
+exact argv, each through `runuser --user www-data --group www-data -- /usr/bin/aa-exec -p <profile> --`:
 
-1. `/usr/bin/php8.4 -r <runtime identity probe bound to the policy database socket>` (every preflight;
-   before and after activation);
-2. `/usr/bin/php8.4 artisan package:discover --ansi --no-interaction` (bootstrap cache of a candidate release);
-3. `/usr/bin/php8.4 artisan config:cache --no-interaction` (same);
-4. `/usr/bin/php8.4 -r <fixed Phase B migration runner>`, only when Phase B is enabled, which it
-   is not; its interpreter moved from `/usr/local/bin/php` (2.1.2) to `/usr/bin/php8.4`.
+| Class | Profile | Exact argv |
+| --- | --- | --- |
+| `production-deploy-cli` | `wpcaregrid-php-cli-production-deploy` | `/usr/bin/php8.4 -r <runtime identity probe bound to the policy database socket>` (every preflight; before and after activation) |
+| `production-build-cli` | `wpcaregrid-php-cli-production-build` | `/usr/bin/php8.4 artisan package:discover --ansi --no-interaction` and `/usr/bin/php8.4 artisan config:cache --no-interaction` (bootstrap cache of a candidate release) |
 
-Any other argv is `deploy_cli_command_not_allowed` before anything runs. After each command,
-successful or not, the full inventory is re-collected and verified (a confinement refusal takes
-precedence over the command's own error); after release activation and acceptance it is verified
-again before any receipt, and a refusal there rolls the release back. Until B's approved profile is
-installed and enforced, `deploy_cli_profile_mode` is not `enforce` and every operation holds.
-The deploy-CLI class additionally requires `argv0` `/usr/bin/php8.4`, no supplementary group
-other than 33, and a start time not earlier than the current helper process (leftovers from an
-earlier run refuse with `confinement_deploy_cli_stale`).
+The former Phase B migration runner is not listed under either class: Phase B stays disabled, and
+that argv now refuses as `deploy_cli_command_not_allowed`. The runtime-probe class has the MySQL
+Unix socket grant only; the build class has no network or socket grant. Any other argv is
+`deploy_cli_command_not_allowed` before anything runs. After each command, successful or not, the
+full inventory is re-collected and verified (a confinement refusal takes precedence over the
+command's own error); after release activation and acceptance it is verified again before any
+receipt, and a refusal there rolls the release back. Both `deploy_cli_profile_mode` and
+`build_cli_profile_mode` must be `enforce`; otherwise the operation holds. Both transient classes
+additionally require `argv0` `/usr/bin/php8.4`, no supplementary group other than 33, and a start
+time not earlier than the current helper process (leftovers refuse with
+`confinement_deploy_cli_stale` / `confinement_build_cli_stale`).
 
 **Database access: Unix socket only (Owner decision, option a).** The deploy-CLI profile has no
 network. The production policy field `database_socket` must be exactly
@@ -228,13 +233,13 @@ sibling PHP that runs `sendmail`, `proc_open` or `exec`, then complain-mode soak
 | Artifact | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
-| `scripts/deployment_backend_v2_1_3.py` | `f123d5225056bfaa45f26b338e0d48768cd47c688d025c98847ff199c8b14a0f` |
+| `scripts/deployment_backend_v2_1_3.py` | `b586d4bf8aca330339f86e435290b1812e789d8e101d7097ce8e841825572cb0` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `2ccbf8c430905aa69c6a121471657aafca6750f23aacce8228c6b1e1532acf32` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `53a12565ac6d7abf5636e1ebf416d319dc16cfbfa188b2789791454b47967765` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `6ccd4fef69a5e10b5bd0adbfcc580db01e9ccf54ee3c9dd4d382f83650090991` |
-| `scripts/production_deploy_controller_2_1_3.py` | `02f8a008b650b9a5c0f6c5289f683e2e8ba1b558be639f25260a48a6af0724bd` |
-| `scripts/install_production_helper_2_1_3.py` | `002dec192a105774bd9fcbd4753de0c82d5751a8d449a54a3239ab528b0fdd60` |
+| helper artifact digest | `d8580587ecb74ab99513acd13e965dc0f3ed9e5f5d2c041d386826430b7f5076` |
+| `scripts/production_deploy_controller_2_1_3.py` | `c483e8017e25961006973a42670420d574bce1bd9307be17130d6374506da2be` |
+| `scripts/install_production_helper_2_1_3.py` | `8ec48c8ce95305967dc3c9486dcfed3bf7232c2ab04554b628f9df468a9bd004` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.
@@ -254,8 +259,10 @@ All root-owned; no sudoers file.
 The installer refuses (`legacy_production_helper_present`) while any 2.0.0, 2.1.0, 2.1.1 or 2.1.2
 helper directory, policy or sudoers file exists, and while the Phase B policy or production
 database credentials exist. It refuses a partial installation (any target or a leftover private
-inbox) and never repairs or overwrites it; a complete exact installation is verified read-only
-(`INSTALL=NO_OP`). Publication is temp-file + `fsync` + hard link (no overwrite) per file; on any
+inbox) and never repairs or overwrites it; the hold classifies the recorded leftovers read-only as
+`partial_installation_detected;RECOVERY=<code>` where the code is one of `REMOVE_STALE_INBOX`,
+`REINSTALL_AFTER_MANUAL_CLEANUP`, `MANUAL_QUARANTINE` or `MANUAL_REVIEW`. A complete exact
+installation is verified read-only (`INSTALL=NO_OP`). Publication is temp-file + `fsync` + hard link (no overwrite) per file; on any
 failure it removes only the inodes and empty directories it created (`ROLLBACK=PASS`), otherwise
 `ROLLBACK=HOLD` means stop and keep state for review.
 
@@ -287,7 +294,7 @@ Expected: `INSTALL=PASS`, `PRODUCTION_PROFILE=DISABLED`, `PRODUCTION_SUDOERS=ABS
 `DEPLOY_STAGING_SUDO=UNCHANGED` and a JSON receipt. Re-check later with the same command plus
 `--verify`. The installer never runs a helper operation.
 
-### Release (after the pin, an approved schema-2 policy and recovery evidence exist)
+### Release (after an approved schema-2 production policy and recovery evidence exist)
 
 1. Root console: `env -i /usr/bin/python3 -I .../2.1.3/production_deploy_controller.py preflight`
    — prints the active `application_sha` (the base).
@@ -304,8 +311,8 @@ by `deploy` is only a claim the helper re-verifies.
 
 ## Gates that remain (none satisfied by this change)
 
-1. Workstream B package corrected, reviewed and approved; `CONFINEMENT_PIN` set and the helper
-   re-pinned (the only remaining source change for 2.1.3).
+1. ~~Workstream B package corrected, reviewed and approved; `CONFINEMENT_PIN` set.~~ Package
+   1.0.5 is merged and pinned by schema-3 contract, manifest, controller, installer and this runbook.
 2. Independent exact-head QA and AppSec V3 records for this pull request; merge and exact
    merge-SHA CI by the Owner's process.
 3. Owner GO for installation on a named host; Owner decision on any installed 2.0.0–2.1.2 paths.
@@ -327,7 +334,7 @@ by `deploy` is only a claim the helper re-verifies.
 * Any transient www-data child outside the class table (for example PHP `mail()` running
   `sendmail` from a legacy pool) makes preflight hold until it exits; retry, do not widen.
 * Contract convergence: this `scripts/deployment_environment_contract_2_1_3.py` (schema-3
-  observation, production only) is the **canonical single shared module** for the combined
-  GO-13 source integration. Workstream B's same-path file (`97b8a4b`: schema-1 observation,
-  `deploy_user = "deploy-production"`) is superseded by it; B keeps the package, profiles and
-  acceptance tooling and supplies only the final `ConfinementPin`.
+  observation, schema-3 confinement binding, production only) is the **canonical single shared
+  module** for the combined integration. Workstream B's same-path file (`97b8a4b`: schema-1
+  observation, `deploy_user = "deploy-production"`) is superseded by it; B keeps the merged 1.0.5
+  package, profiles and acceptance tooling.
