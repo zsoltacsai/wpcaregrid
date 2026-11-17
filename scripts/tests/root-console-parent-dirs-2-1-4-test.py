@@ -420,7 +420,7 @@ class RefusalTests(SandboxCase):
     def test_state_dir_mode_must_be_0700(self) -> None:
         os.chmod(self.sandbox.state, 0o755)
         self.assertProvisionError(
-            "DIRECTORY_MODE_INVALID", lambda: self.sandbox.provision())
+            "STATE_DIRECTORY_UNSAFE", lambda: self.sandbox.provision())
 
     def test_state_dir_symlink_refused(self) -> None:
         link = self.sandbox.tmp / "state-link"
@@ -428,6 +428,19 @@ class RefusalTests(SandboxCase):
         self.assertProvisionError(
             "STATE_DIRECTORY_UNSAFE",
             lambda: self.sandbox.provision(state_dir=link))
+
+    def test_state_dir_symlinked_ancestor_refused(self) -> None:
+        parent = self.sandbox.tmp / "state-parent"
+        parent.mkdir()
+        os.chmod(parent, 0o700)
+        link = self.sandbox.tmp / "parent-link"
+        link.symlink_to(parent, target_is_directory=True)
+        nested = link / "state"
+        (parent / "state").mkdir()
+        os.chmod(parent / "state", 0o700)
+        self.assertProvisionError(
+            "STATE_DIRECTORY_UNSAFE",
+            lambda: self.sandbox.provision(state_dir=nested))
 
     def test_state_dir_inside_target_refused(self) -> None:
         target = self.sandbox.physical("/etc/wpcaregrid-deploy")
@@ -552,6 +565,34 @@ class RaceTests(SandboxCase):
 
 
 class InterruptionTests(SandboxCase):
+    def test_real_sigterm_is_handled_and_rolls_back(self) -> None:
+        previous_handlers = {
+            sig: PROVISION.signal.getsignal(sig)
+            for sig in (PROVISION.signal.SIGINT, PROVISION.signal.SIGTERM,
+                        PROVISION.signal.SIGHUP)
+        }
+        previous_interrupted = PROVISION._INTERRUPTED
+        previous_signal = PROVISION._INTERRUPT_SIGNAL
+        try:
+            PROVISION._INTERRUPTED = False
+            PROVISION._INTERRUPT_SIGNAL = ""
+            PROVISION._install_signal_handlers()
+
+            def checkpoint(label: str) -> None:
+                if label == f"after_create:{PROVISION.TARGETS[0]}":
+                    os.kill(os.getpid(), PROVISION.signal.SIGTERM)
+
+            outcome = self.sandbox.provision(run_id="8" * 32, checkpoint=checkpoint)
+            self.assertOutcome(outcome, "ROLLBACK", "interrupted")
+            self.assertEqual(outcome.removed, ("/var/lib/wpcaregrid-deploy",))
+            self.assertTargetStatus("/var/lib/wpcaregrid-deploy", "absent")
+            self.assertEqual(PROVISION._INTERRUPT_SIGNAL, "SIGTERM")
+        finally:
+            for sig, handler in previous_handlers.items():
+                PROVISION.signal.signal(sig, handler)
+            PROVISION._INTERRUPTED = previous_interrupted
+            PROVISION._INTERRUPT_SIGNAL = previous_signal
+
     def test_keyboard_interrupt_rolls_back_this_run_only(self) -> None:
         def checkpoint(label: str) -> None:
             if label == f"before_mkdir:{PROVISION.TARGETS[2]}":
@@ -625,6 +666,27 @@ class InterruptionTests(SandboxCase):
 
         plan = self.sandbox.provision(mode="plan")
         self.assertOutcome(plan, "PLAN", "preflight_ok")
+
+    def test_unrecorded_crash_window_holds_and_preserves_unknown_directory(self) -> None:
+        def checkpoint(label: str) -> None:
+            if label == f"created_pending:{PROVISION.TARGETS[0]}":
+                raise SimulatedKill
+
+        with self.assertRaises(SimulatedKill):
+            self.sandbox.provision(run_id="9" * 32, checkpoint=checkpoint)
+        path = self.sandbox.physical(PROVISION.TARGETS[0])
+        self.assertTrue(path.is_dir())
+        journal = self.sandbox.state / f"journal-{'9' * 32}.jsonl"
+        self.assertNotIn('"record":"created"', journal.read_text())
+
+        # Replace the inode after the crash. Even an empty, correctly-moded
+        # directory with a recent ctime is not attributable to the journal.
+        path.rmdir()
+        path.mkdir()
+        os.chmod(path, 0o755)
+        outcome = self.sandbox.recover()
+        self.assertOutcome(outcome, "HOLD", "UNEXPLAINED_STATE")
+        self.assertTrue(path.is_dir())
 
     def test_recovery_refuses_unexplained_replacement(self) -> None:
         def checkpoint(label: str) -> None:

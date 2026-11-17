@@ -432,25 +432,75 @@ def _check_interrupt() -> None:
 
 def _open_state_dir(layout: Layout, state_dir: Path) -> tuple[int, Path]:
     """Open the operator-provided journal/receipt directory without creating it."""
-    if not state_dir.is_absolute():
+    if not state_dir.is_absolute() or Path(os.path.normpath(str(state_dir))) != state_dir:
         _fail("STATE_DIRECTORY_INVALID")
     try:
-        info = os.lstat(state_dir)
-    except OSError:
-        _fail("STATE_DIRECTORY_UNAVAILABLE")
-    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        _fail("STATE_DIRECTORY_UNSAFE")
-    try:
-        fd = os.open(str(state_dir), O_DIR)
+        current_fd = os.open("/", O_DIR)
     except OSError:
         _fail("STATE_DIRECTORY_UNSAFE")
+    state_fd = -1
     try:
-        opened = _verify_fd(fd, str(state_dir), layout, exact_mode=STATE_MODE)
-        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-            _fail("STATE_DIRECTORY_IDENTITY_CHANGED")
-    except BaseException:
-        os.close(fd)
-        raise
+        root_info = os.fstat(current_fd)
+        if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0
+                or root_info.st_gid != 0 or _mode(root_info) & 0o022
+                or _special_bits(root_info.st_mode)):
+            _fail("STATE_DIRECTORY_UNSAFE")
+        parts = state_dir.parts[1:]
+        if not parts:
+            _fail("STATE_DIRECTORY_UNSAFE")
+        logical = ""
+        for index, component in enumerate(parts):
+            logical += "/" + component
+            final = index == len(parts) - 1
+            try:
+                entry = os.stat(component, dir_fd=current_fd, follow_symlinks=False)
+            except OSError:
+                _fail("STATE_DIRECTORY_UNAVAILABLE")
+            if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+                _fail("STATE_DIRECTORY_UNSAFE")
+            if final:
+                if (entry.st_uid != layout.owner_uid or entry.st_gid != layout.owner_gid
+                        or _mode(entry) != STATE_MODE or _special_bits(entry.st_mode)):
+                    _fail("STATE_DIRECTORY_UNSAFE")
+            elif layout == Layout():
+                # A real privileged state path must be rooted only through
+                # root-owned, non-writable ancestors; the final directory is
+                # checked separately as root:root 0700.
+                if (entry.st_uid != 0 or entry.st_gid != 0 or _mode(entry) & 0o022
+                        or _special_bits(entry.st_mode)):
+                    _fail("STATE_DIRECTORY_UNSAFE")
+            else:
+                # Synthetic tests use a private tempfile parent and the real
+                # sticky /tmp ancestor. Do not weaken the production rule.
+                safe_sticky_tmp = (entry.st_uid == 0 and bool(_mode(entry) & stat.S_ISVTX))
+                if (entry.st_uid not in (0, layout.owner_uid)
+                        or entry.st_gid not in (0, layout.owner_gid)
+                        or (_mode(entry) & 0o022 and not safe_sticky_tmp)
+                        or (_special_bits(entry.st_mode) & ~stat.S_ISVTX)):
+                    _fail("STATE_DIRECTORY_UNSAFE")
+            try:
+                child_fd = os.open(component, O_DIR, dir_fd=current_fd)
+            except OSError:
+                _fail("STATE_DIRECTORY_UNSAFE")
+            opened = os.fstat(child_fd)
+            if ((opened.st_dev, opened.st_ino) != (entry.st_dev, entry.st_ino)
+                    or not stat.S_ISDIR(opened.st_mode)
+                    or opened.st_uid != entry.st_uid or opened.st_gid != entry.st_gid
+                    or _mode(opened) != _mode(entry)):
+                os.close(child_fd)
+                _fail("STATE_DIRECTORY_IDENTITY_CHANGED")
+            os.close(current_fd)
+            current_fd = child_fd
+            if final:
+                state_fd = current_fd
+                current_fd = -1
+        fd = state_fd
+        state_fd = -1
+    finally:
+        if current_fd >= 0:
+            os.close(current_fd)
+        if state_fd >= 0:
+            os.close(state_fd)
     real = Path(os.path.realpath(state_dir))
     for target in TARGETS:
         physical = Path(os.path.realpath(layout.physical(target)))
@@ -1199,7 +1249,7 @@ def _recovery_identity(
     journal: dict,
     expected: dict[str, dict],
 ) -> tuple[str, dict | None]:
-    """Return (action, identity) for one target: keep, remove-record, remove-candidate."""
+    """Return an action only for identities explicitly recorded by this run."""
     with _open_verified_parent(layout, state.path, expected) as (parent_fd, _parent):
         current = _inspect_target(layout, parent_fd, state.path)
         if current is None:
@@ -1224,23 +1274,9 @@ def _recovery_identity(
             if info.st_ctime_ns < journal["prepared"]["created_ns"]:
                 _fail("UNEXPLAINED_STATE")
             return "remove", current
-        # Crash window: mkdir succeeded but the created record did not. The
-        # prepared journal proves absence, the parent identity proves location,
-        # and the creation time proves this run made the empty inode.
-        if current["mode"] != f"{TARGET_MODE:04o}":
-            _fail("UNEXPLAINED_STATE")
-        try:
-            fd = _open_at(parent_fd, Path(state.path).name)
-        except OSError:
-            _fail("UNEXPLAINED_STATE")
-        try:
-            info = _verify_fd(fd, state.path, layout, exact_mode=TARGET_MODE,
-                              require_empty=True)
-        finally:
-            os.close(fd)
-        if info.st_ctime_ns < journal["prepared"]["created_ns"]:
-            _fail("UNEXPLAINED_STATE")
-        return "remove-candidate", current
+        # A prepared record proves only that the path was absent at planning
+        # time. It cannot prove who created an inode in the mkdir/journal gap.
+        _fail("UNEXPLAINED_STATE")
 
 
 def recover(
@@ -1300,7 +1336,7 @@ def recover(
                         and _parent_target_absent(state.path, states)):
                     continue
                 raise
-            if action in ("remove", "remove-candidate"):
+            if action == "remove":
                 with _open_verified_parent(layout, state.path, expected) as (
                         parent_fd, _parent):
                     current = _inspect_target(layout, parent_fd, state.path)
@@ -1522,6 +1558,7 @@ def main(argv: list[str] | None = None) -> int:
         enforce_root_console(
             os.getuid(), os.geteuid(), os.getgid(), os.getegid(), os.environ)
         verify_script(Path(os.path.abspath(__file__)), args.expected_sha256)
+        _install_signal_handlers()
         mode = "plan" if args.plan or not (args.apply or args.recover) else (
             "apply" if args.apply else None)
         if args.recover:

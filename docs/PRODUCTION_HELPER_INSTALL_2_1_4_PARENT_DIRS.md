@@ -50,8 +50,8 @@ refuse with `RECOVERY_REQUIRED` until `--recover` proves and removes those exact
 
 | File | SHA-256 |
 | --- | --- |
-| `scripts/provision_wpcaregrid_deploy_parent_dirs_2_1_4.py` | `fbc53ae6a420bae25723a53a54c53629171bebd6706fddcc12c5f9b4d463d470` |
-| `scripts/tests/root-console-parent-dirs-2-1-4-test.py` | `cbe289c1693bff1e1aa9568dff3875e8eb544b92f0871f6f9faacc84a0094956` |
+| `scripts/provision_wpcaregrid_deploy_parent_dirs_2_1_4.py` | `694ecad268108655e2d82582ca838a43be5f01f6987b6ac08b68a969eea7c57d` |
+| `scripts/tests/root-console-parent-dirs-2-1-4-test.py` | `48e4c133bf3999f2bed4bed2c9ceca32b618f3fa07910a18925dbcd2933e2a6a` |
 
 Recompute both after any merge that changes either file; the operator must use the hash of the
 reviewed, merged commit, not this document's snapshot. The tool hashes itself, so a stale
@@ -158,9 +158,13 @@ REMOVED=<paths this run proved it created>
 ```
 
 Recovery is identity-bound: it removes only empty directories whose inode matches the
-journal's `created` record, or the unique crash window where the journal proves the path was
-absent, the parent identity is unchanged and the empty directory's creation time is after the
-journal's `prepared` record. Anything else fails closed:
+journal's `created` record. If interruption occurs after `mkdir` but before that identity is
+durably journaled, the next recovery refuses with `UNEXPLAINED_STATE` and preserves the
+directory. Creation time is not proof of ownership or provenance. That narrow window requires
+Owner-led identity adjudication; do not delete or adopt the directory automatically. Catchable
+SIGINT/SIGTERM/SIGHUP is handled by the provisioner and rolls back journaled identities; an
+uncatchable SIGKILL or power loss may leave the narrow unrecorded window on HOLD. Anything
+unrecognized fails closed:
 
 ```text
 PROVISION=HOLD code=UNEXPLAINED_STATE
