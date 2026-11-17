@@ -21,7 +21,6 @@ def load(name, filename):
 
 BACKEND = load("go15_backend_214", "deployment_backend_v2_1_4.py")
 REVIEW = load("go15_review_v31", "release_review_policy_v3_1.py")
-ADMISSION = load("go15_admission_v31", "release_admission_v3_1.py")
 FIXTURE = ROOT / "tests/fixtures/go15-malformed-v3-ledger.json"
 OWNER = "zsoltacsai"
 HEAD = "3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f"
@@ -46,10 +45,7 @@ def correction(target, cid, kind):
             target_head_sha=HEAD, target_role=role,
             reason_code="owner_authorized_exact_record_invalidation")
     else:
-        body = ADMISSION.render_artifact_correction(
-            target_comment_id=target["id"], target_body_sha256=digest, target_pr=417,
-            target_head_sha=HEAD, target_base_sha=BASE, target_role=role,
-            reason_code="owner_authorized_exact_artifact_invalidation")
+        body = BACKEND.render_exact_artifact_invalidation(target["id"])
     return comment(cid, body, "2030-01-01T00:00:00Z")
 
 
@@ -80,6 +76,10 @@ class AppendOnlyCorrectionTests(unittest.TestCase):
         corrected = data + [correction(x, 8000000000 + x["id"], "artifact") for x in targets]
         actual = BACKEND._authorized_artifact_corrections(corrected, owner=OWNER)
         self.assertEqual(set(actual), {6945646697, 6945647897})
+        for invalid_id in (6945647262, 1234567890):
+            with self.subTest(invalid_id=invalid_id), self.assertRaisesRegex(
+                    BACKEND.DeployRefused, "artifact_correction_target_invalid"):
+                BACKEND.render_exact_artifact_invalidation(invalid_id)
 
     def test_unrelated_malformed_artifact_and_reason_remain_refused(self):
         data = originals()
@@ -94,8 +94,39 @@ class AppendOnlyCorrectionTests(unittest.TestCase):
         bad = correction(targets[0], 8300000001, "artifact")
         bad["body"] = bad["body"].replace(
             "owner_authorized_exact_artifact_invalidation", "legacy_artifact_schema_invalid")
-        with self.assertRaises(BACKEND.DeployRefused):
+        with self.assertRaisesRegex(BACKEND.DeployRefused,
+                                    "artifact_correction_subject_mismatch"):
             BACKEND._authorized_artifact_corrections(data + [bad], owner=OWNER)
+
+    def test_artifact_invalidation_rejects_each_wrong_bound_field(self):
+        target = next(x for x in originals() if x["id"] == 6945646697)
+        valid = correction(target, 8300001001, "artifact")
+        mutations = [
+            ("target_comment_id=6945646697", "target_comment_id=6945646698",
+             "artifact_correction_target_invalid"),
+            ("target_body_sha256=f21e60bcc35288d3b2501a5afb99f19f996e82e1bac22bfa7c6e264834af8b27",
+             "target_body_sha256=" + "0" * 64, "artifact_correction_target_invalid"),
+            ("target_pr=417", "target_pr=418", "artifact_correction_subject_mismatch"),
+            ("target_head_sha=" + HEAD, "target_head_sha=" + "f" * 40,
+             "artifact_correction_subject_mismatch"),
+            ("target_base_sha=" + BASE, "target_base_sha=" + "e" * 40,
+             "artifact_correction_subject_mismatch"),
+            ("target_role=integration_qa", "target_role=appsec",
+             "artifact_correction_subject_mismatch"),
+            ("owner_authorized_exact_artifact_invalidation", "legacy_artifact_schema_invalid",
+             "artifact_correction_subject_mismatch"),
+        ]
+        for old, new, reason in mutations:
+            altered = dict(valid, body=valid["body"].replace(old, new))
+            with self.subTest(field=old.split("=", 1)[0]), self.assertRaisesRegex(
+                    BACKEND.DeployRefused, reason):
+                BACKEND._authorized_artifact_corrections([target, altered], owner=OWNER)
+        non_owner = dict(valid, user={"login": "not-owner"})
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "artifact_correction_invalid"):
+            BACKEND._authorized_artifact_corrections([target, non_owner], owner=OWNER)
+        backdated = dict(valid, created_at="2026-11-16T00:00:00Z")
+        with self.assertRaisesRegex(BACKEND.DeployRefused, "artifact_correction_not_append_only"):
+            BACKEND._authorized_artifact_corrections([target, backdated], owner=OWNER)
 
     def test_review_invalidation_never_counts_as_pass_without_fresh_records(self):
         data = originals()

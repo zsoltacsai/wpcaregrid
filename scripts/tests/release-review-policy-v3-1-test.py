@@ -84,20 +84,26 @@ class ExactOwnerInvalidationTests(unittest.TestCase):
 
     def test_wrong_id_hash_subject_author_or_time_cannot_invalidate(self):
         target = next(x for x in records() if x["id"] == 6945647262)
-        bad = [
-            correction(target, 9000000001, target_id=target["id"] + 1),
-            correction(target, 9000000002, digest="0" * 64),
-            correction(target, 9000000003, pr=418),
-            correction(target, 9000000004, head="f" * 40),
-            correction(target, 9000000005, role="appsec"),
-            correction(target, 9000000006, login="not-owner"),
-            correction(target, 9000000007, created_at="2026-11-16T00:00:00Z"),
+        cases = [
+            (correction(target, 9000000001, target_id=target["id"] + 1),
+             "review_correction_target_invalid"),
+            (correction(target, 9000000002, digest="0" * 64),
+             "review_correction_target_invalid"),
+            (correction(target, 9000000003, pr=418),
+             "review_correction_subject_mismatch"),
+            (correction(target, 9000000004, head="f" * 40),
+             "review_correction_subject_mismatch"),
+            (correction(target, 9000000005, role="appsec"),
+             "review_correction_subject_mismatch"),
+            (correction(target, 9000000006, created_at="2026-11-16T00:00:00Z"),
+             "review_correction_not_append_only"),
         ]
-        for item in bad:
-            with self.subTest(id=item["id"]), self.assertRaises(policy.ReviewRefused):
-                policy.verify_agent_release_reviews(
-                    [target, item], pr_number=417, head_sha=HEAD,
-                    repository_owner=OWNER)
+        for item, reason in cases:
+            with self.subTest(id=item["id"]), self.assertRaisesRegex(policy.ReviewRefused, reason):
+                policy._authorized_corrections([target, item], owner=OWNER)
+        non_owner = correction(target, 9000000007, login="not-owner")
+        self.assertNotIn(target["id"], policy._authorized_corrections(
+            [target, non_owner], owner=OWNER))
 
     def test_unrelated_malformed_owner_review_remains_fail_closed(self):
         items = records()

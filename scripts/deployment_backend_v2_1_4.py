@@ -1234,6 +1234,24 @@ def _artifact_body_fields(body: object) -> dict[str, str] | None:
     return fields
 
 
+def render_exact_artifact_invalidation(target_comment_id: int) -> str:
+    """Render only one of the two Owner-authorized exact artifact invalidations."""
+    allowed = EXACT_OWNER_ARTIFACT_INVALIDATION_ALLOWLIST.get(target_comment_id)
+    _require(allowed is not None, "artifact_correction_target_invalid")
+    body = (f"{ARTIFACT_CORRECTION_PREFIX}\n"
+            f"target_comment_id={target_comment_id}\n"
+            f"target_body_sha256={allowed['body_sha256']}\n"
+            f"target_pr={allowed['pr']}\n"
+            f"target_head_sha={allowed['head_sha']}\n"
+            f"target_base_sha={allowed['base_sha']}\n"
+            f"target_role={allowed['role']}\n"
+            "disposition=INVALIDATED\n"
+            "reason_code=owner_authorized_exact_artifact_invalidation\n")
+    _require(ARTIFACT_CORRECTION_RE.fullmatch(body) is not None,
+             "artifact_correction_invalid")
+    return body
+
+
 def _authorized_artifact_corrections(comments: list[object], *, owner: str
                                      ) -> dict[int, dict[str, object]]:
     by_id: dict[int, object] = {}

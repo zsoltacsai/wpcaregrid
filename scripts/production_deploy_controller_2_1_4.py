@@ -44,7 +44,7 @@ TRANSFER_USER = "deploy"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/production/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/production/2.1.4/wpcaregrid-deploy-production-priv")
-HELPER_ARTIFACT_SHA256 = "262a38837356d0719d3ced1704332466fef94b6767c07fcf73fa4deea450d565"
+HELPER_ARTIFACT_SHA256 = "9bcb516f3ffd73b9ce69533b7d5ecf7703d4ef2566e7429fbc1401b9fa59a348"
 HELPER_VERSION = "2.1.4"
 HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
 # Exact merged Workstream B package 1.0.5 binding, as compiled by the helper's

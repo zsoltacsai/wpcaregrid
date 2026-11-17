@@ -56,12 +56,12 @@ REVIEW_POLICY_SOURCE = "release_review_policy_v3_1.py"
 CONTROLLER_SOURCE = "production_deploy_controller_2_1_4.py"
 
 ENTRY_SHA256 = "fe25f28a5cdc85eff17961e7893d72c17015ff318c353909fad77f1ddfefe9d0"
-BACKEND_SHA256 = "db431b6bbd4e99822cd8a5cf73f3587cfe43303b92a52a1703aa215da7df78ac"
+BACKEND_SHA256 = "1aaacf5c194d59d5d623aaffab4b960e386ad5fbcb9ae9ab5cc20d8693fad519"
 TRANSACTION_SHA256 = "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00"
 ENVIRONMENT_SHA256 = "65b06392f26fe8fc3104b67c82b2b56d59d3dc3698661e658dec7f96725a46b7"
 REVIEW_POLICY_SHA256 = "5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f"
-HELPER_ARTIFACT_SHA256 = "262a38837356d0719d3ced1704332466fef94b6767c07fcf73fa4deea450d565"
-CONTROLLER_SHA256 = "7503b15a15f7277d5ee98499c1cc17358ce7750e5de331a8f3552733efad8fce"
+HELPER_ARTIFACT_SHA256 = "9bcb516f3ffd73b9ce69533b7d5ecf7703d4ef2566e7429fbc1401b9fa59a348"
+CONTROLLER_SHA256 = "58070256654714b2f7830890794ff4971e1095ae435804c7fc5f88e5a3dd7c62"
 
 # Exact merged Workstream B package 1.0.5 binding, as compiled by
 # deployment_environment_contract_2_1_4.py (schema 3). The binding digest covers
@@ -707,7 +707,7 @@ def _receipt(result: str, files, snapshot, rules) -> dict[str, object]:
         "php_fpm_confinement": _confinement_receipt(),
         "helper_artifact_sha256": HELPER_ARTIFACT_SHA256, "controller_sha256": CONTROLLER_SHA256,
         "environment_contract_sha256": ENVIRONMENT_SHA256,
-        "release_review_policy_sha256": REVIEW_POLICY_SHA256, "release_review_policy": "V3",
+        "release_review_policy_sha256": REVIEW_POLICY_SHA256, "release_review_policy": "V3.1",
         "profile": "production", "profile_enabled": False, "phase_b_policy": "DISABLED",
         "privileged_invocation": "root-console-direct", "production_sudoers": "ABSENT",
         "deploy_sudo_rules_unchanged": list(rules), "sudoers_sha256_unchanged": dict(snapshot),
