@@ -24,6 +24,10 @@ spec.loader.exec_module(gate)
 POLICY = json.loads((ROOT / "config/security/npm-audit-exceptions.json").read_text(encoding="utf-8"))
 TODAY = dt.date(2026, 11, 17)
 GHSA_URL = "https://github.com/advisories/GHSA-fc5q-39xc-vjpf"
+KNOWN_STABLE = ['1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.1.2', '1.2.0', '2.0.0', '2.0.1', '2.0.2', '2.0.3',
+                '2.0.4', '2.0.5', '2.0.6', '2.0.7', '2.1.0', '2.1.1', '2.2.0', '2.2.1', '2.2.2', '2.2.3', '2.3.0',
+                '2.3.1', '2.3.2', '3.0.0', '3.0.1', '3.0.2', '4.0.0', '4.0.1', '4.0.2', '4.0.3', '4.0.4', '4.0.5',
+                '4.0.6', '4.0.7']
 OTHER_URL = "https://github.com/advisories/GHSA-aaaa-bbbb-cccc"
 
 
@@ -127,9 +131,40 @@ class GateTest(unittest.TestCase):
         self.assertTrue(self.run_gate(report).passed)
 
     def test_no_high_vulnerabilities_marks_exception_unused(self):
-        result = self.run_gate(baseline_report() | {"vulnerabilities": {}, "metadata": counts({})}, exit_code=0)
+        fixed = lock(**{"node_modules/picomatch": {"version": "4.1.0", "dev": True},
+                        "node_modules/vite-plugin-full-reload/node_modules/picomatch": {"version": "4.1.0", "dev": True}})
+        result = self.run_gate(baseline_report() | {"vulnerabilities": {}, "metadata": counts({})}, exit_code=0, lock_data=fixed)
         self.assertTrue(result.passed, result.failures)
         self.assertIn("exception unused — remove it (docs/SECURITY_EXCEPTIONS.md)", result.notes)
+
+    def real_npm_prod_report(self):
+        # Shape of the real `NODE_ENV=production npm audit --json` output: dev=95 reported, nothing audited.
+        report = baseline_report() | {"vulnerabilities": {}, "metadata": counts({})}
+        report["metadata"]["dependencies"] = {"prod": 10, "dev": 95, "optional": 85, "peer": 0, "peerOptional": 0, "total": 144}
+        return report
+
+    def test_no_advisory_but_vulnerable_picomatch_in_lockfile_fails_scope_incomplete(self):
+        result = self.run_gate(self.real_npm_prod_report(), exit_code=0)
+        self.assertFails(result, "advisory not reported although the lockfile contains vulnerable picomatch: audit scope incomplete")
+        self.assertNotIn("exception unused — remove it (docs/SECURITY_EXCEPTIONS.md)", result.notes)
+
+    def test_no_advisory_and_only_fixed_picomatch_in_lockfile_is_unused_pass(self):
+        fixed = lock(**{"node_modules/picomatch": {"version": "4.1.0", "dev": True},
+                        "node_modules/vite-plugin-full-reload/node_modules/picomatch": {"version": "4.1.0", "dev": True}})
+        result = self.run_gate(self.real_npm_prod_report(), exit_code=0, lock_data=fixed)
+        self.assertTrue(result.passed, result.failures)
+        self.assertIn("exception unused — remove it (docs/SECURITY_EXCEPTIONS.md)", result.notes)
+
+    # ---- severity follows string via references
+    def test_unlisted_package_labelled_moderate_via_high_entry_is_rated_high_and_fails(self):
+        report = with_entries(baseline_report(), sneaky=entry("sneaky", ["picomatch"], "moderate"))
+        self.assertFails(self.run_gate(report), "sneaky")
+
+    def test_effective_severity_follows_chain_recursively(self):
+        vulns = {"a": entry("a", ["b"], "low"), "b": entry("b", ["c"], "moderate"), "c": entry("c", [advisory()], "low")}
+        self.assertEqual(gate.effective_severity(vulns["a"], vulns), "high")
+        loop = {"a": entry("a", ["b"], "low"), "b": entry("b", ["a"], "moderate")}
+        self.assertEqual(gate.effective_severity(loop["a"], loop), "moderate")
 
     # ---- unrelated / expanded advisories
     def test_unrelated_high_advisory_on_unrelated_package_fails(self):
@@ -366,8 +401,21 @@ class GateTest(unittest.TestCase):
                     {"name": "vite", "version": "8.4.0"}):
             with self.subTest(fix):
                 report = baseline_report()
-                report["vulnerabilities"]["vite"]["fixAvailable"] = fix
+                report["vulnerabilities"]["picomatch"]["fixAvailable"] = fix
                 self.assertFails(self.run_gate(report), "real (non-major) fix")
+
+    def test_npm10_shaped_report_passes(self):
+        # npm 10: fdir (propagation-only) reports fixAvailable=true; others are semver-major downgrade hints.
+        report = baseline_report()
+        major = {"name": "vite", "version": "6.2.7", "isSemVerMajor": True}
+        for item in report["vulnerabilities"].values():
+            item["fixAvailable"] = dict(major)
+        report["vulnerabilities"]["fdir"]["fixAvailable"] = True
+        result = self.run_gate(report)
+        self.assertTrue(result.passed, result.failures)
+        for name in ("tinyglobby", "vite", "vite-plugin-full-reload", "laravel-vite-plugin"):
+            report["vulnerabilities"][name]["fixAvailable"] = True  # propagation-only: never consulted
+        self.assertTrue(self.run_gate(report).passed)
 
     def test_major_downgrade_suggestion_is_not_a_fix(self):
         report = baseline_report()
@@ -389,7 +437,10 @@ class GateTest(unittest.TestCase):
             with self.subTest(severity):
                 report = baseline_report()
                 report["vulnerabilities"]["picomatch"]["via"] = [advisory(severity=severity)]
-                self.assertFails(self.run_gate(report), "advisory not covered")
+                result = self.run_gate(report)
+                # critical/unknown now propagates along the via chain to every dependent entry
+                self.assertFalse(result.passed)
+                self.assertTrue(any("advisory not covered" in f or "critical vulnerability" in f for f in result.failures), result.failures)
 
     def test_covered_entry_without_nodes_fails(self):
         report = baseline_report()
@@ -405,6 +456,7 @@ class GateTest(unittest.TestCase):
             "source_id": 1247710, "url": GHSA_URL, "package": "picomatch", "vulnerable_range": "<=4.0.7",
             "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs", "severity": "high"})
         self.assertEqual(POLICY["fixed_version_gate"], {"package": "picomatch", "max_vulnerable_version": "4.0.7"})
+        self.assertEqual(POLICY["known_stable_versions"], KNOWN_STABLE)
 
     def test_expiry_is_capped_by_hard_limit(self):
         self.assertEqual(gate.MAX_EXPIRY, dt.date(2026, 12, 1))
@@ -451,6 +503,27 @@ class CliTest(unittest.TestCase):
                                today=TODAY, registry_lookup=registry(), audit_runner=lambda _root: ("", 2))
             self.assertEqual(status, 1)
 
+    def test_abbreviated_offline_flags_are_refused_in_ci(self):
+        os.environ["CI"] = "true"
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "x.json"
+            report.write_text(json.dumps(baseline_report()), encoding="utf-8")
+            for argv in (["--audit-j", str(report), "--audit-e", "0"], ["--audit-json=" + str(report)],
+                         ["--root", tmp], ["--ro", tmp], ["--pol", str(ROOT / "config/security/npm-audit-exceptions.json")],
+                         ["--registry-j", str(report)], ["--audit-exit-code", "1"]):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        status = gate.main(argv, today=TODAY, registry_lookup=registry(), audit_runner=lambda _r: ("", 2))
+                    except SystemExit as error:  # argparse rejects abbreviations (allow_abbrev=False)
+                        status = error.code
+                self.assertNotEqual(status, 0, argv)
+
+    def test_default_root_without_flags_is_allowed_in_ci(self):
+        os.environ["CI"] = "true"
+        status = gate.main([], today=TODAY, registry_lookup=registry(), audit_runner=lambda _r: ("", 2))
+        self.assertEqual(status, 1)  # runs (npm exit 2 fails closed) instead of being refused
+        self.assertFalse(hasattr(gate, "POLICY_PATH"))
+
     def test_policy_validation_rejects_broken_policy(self):
         for mutate in (lambda p: p.pop("expires"), lambda p: p.update(allowed_packages=[]),
                        lambda p: p["advisory"].update(source_id="1247710"), lambda p: p.update(id="GHSA-other")):
@@ -494,7 +567,7 @@ class CliTest(unittest.TestCase):
             for flag in gate.OFFLINE_FLAGS:
                 self.assertNotIn(flag, step)
             self.assertRegex(invocations[0], r'^(- )?python3 scripts/npm_audit_gate\.py --report-out "[^" ]+" \|\| status=\$\?$')
-            self.assertIn('exit "$status"', step)
+            self.assertRegex(step, r'(?m)if \[ "\$status" -ne 0 \]; then exit "\$status"; fi|^\s*exit "\$status"\s*$' if step is github_step else r'if \[ "\$status" -ne 0 \]; then exit "\$status"; fi')
             self.assertIn("sha256sum", step)
             self.assertIn("npm --version", step)
             self.assertIn("py_compile scripts/npm_audit_gate.py scripts/tests/npm-audit-gate-test.py", step)
@@ -502,6 +575,42 @@ class CliTest(unittest.TestCase):
         self.assertIn('--report-out "$report"', gitlab_step)
         self.assertIn('report="$CI_PROJECT_DIR/npm-audit-report.json"', gitlab_step)
         self.assertIn('if [[ -s "$report" ]]; then cat -- "$report"; else echo "no report written"; fi', github_step)
+
+    def test_github_report_is_printed_between_stop_commands_markers(self):
+        step = self.npm_gate_steps()[0]
+        self.assertIn('tok="$(cat /proc/sys/kernel/random/uuid)"', step)
+        stop, cat, resume = (step.index(x) for x in ('echo "::stop-commands::$tok"', 'cat -- "$report"', 'echo "::$tok::"'))
+        self.assertLess(stop, cat)
+        self.assertLess(cat, resume)
+        self.assertLess(resume, step.index('echo "::endgroup::"'))
+
+    def gitlab_quality_entries(self):
+        text = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+        start = text.index("python3 scripts/tests/npm-audit-gate-test.py")
+        end = text.index("/tmp/gitleaks detect", start)
+        return text[start:end]
+
+    def test_gitlab_has_no_bare_top_level_exit_before_gitleaks(self):
+        # GitLab runs all script entries of a job in ONE shell: a bare exit would skip the Gitleaks scan.
+        span = self.gitlab_quality_entries()
+        self.assertNotRegex(span, r"(?m)^      exit\b")
+        self.assertNotRegex(span, r"(?m)^    - exit\b")
+
+    def test_gitlab_single_shell_gate_pass_reaches_gitleaks_and_failure_fails_job(self):
+        span = self.gitlab_quality_entries()
+        start = span.index("    - |\n      set -eu\n      report=")
+        end = span.index("    - |\n", start + 5)
+        block = "\n".join(line[6:] for line in span[start:end].splitlines()[1:])
+        for status, expect_marker in ((0, True), (1, False)):
+            script = (
+                'CI_PROJECT_DIR="$(mktemp -d)"\n'
+                f'python3() {{ echo "{{}}" > "$CI_PROJECT_DIR/npm-audit-report.json"; return {status}; }}\n'
+                'npm() { echo 11.0.0; }\n'
+                + block + "\necho GITLEAKS_MARKER\n"
+            )
+            done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+            self.assertEqual("GITLEAKS_MARKER" in done.stdout, expect_marker, done.stdout + done.stderr)
+            self.assertEqual(done.returncode, 0 if expect_marker else status, done.stderr)
 
 
 if __name__ == "__main__":

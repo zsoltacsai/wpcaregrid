@@ -293,8 +293,11 @@ jobs:
           python3 scripts/npm_audit_gate.py --report-out "$report" || status=$?
           echo "::group::raw npm audit --json report (evidence; no artifact upload, see docs/SECURITY_EXCEPTIONS.md)"
           npm --version
+          tok="$(cat /proc/sys/kernel/random/uuid)"
+          echo "::stop-commands::$tok"
           if [[ -s "$report" ]]; then cat -- "$report"; else echo "no report written"; fi
           echo
+          echo "::$tok::"
           if [[ -s "$report" ]]; then sha256sum -- "$report"; fi
           echo "::endgroup::"
           exit "$status"

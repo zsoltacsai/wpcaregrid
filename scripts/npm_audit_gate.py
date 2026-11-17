@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY_PATH = ROOT / "config/security/npm-audit-exceptions.json"
 EVALUATED_SEVERITIES = ("high", "critical")
 ALL_SEVERITIES = ("info", "low", "moderate", "high", "critical")
 STABLE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
@@ -34,7 +33,7 @@ SEVERITY_RANK = {name: rank for rank, name in enumerate(ALL_SEVERITIES)}
 MAX_EXPIRY = dt.date(2026, 12, 1)
 # Overrides NODE_ENV=production and npm_config_omit=dev so dev dependencies are always audited.
 NPM_AUDIT_ARGV = ["npm", "audit", "--json", "--include=dev", "--include=optional", "--include=peer"]
-OFFLINE_FLAGS = ("--audit-json", "--audit-exit-code", "--registry-json", "--policy")
+OFFLINE_FLAGS = ("--audit-json", "--audit-exit-code", "--registry-json", "--policy", "--root")
 CI_ENV_VARS = ("CI", "GITHUB_ACTIONS", "GITLAB_CI")
 REGISTRY_ATTEMPTS = 3
 REGISTRY_RETRY_DELAY_SECONDS = 5
@@ -200,6 +199,27 @@ def check_dev_scope(report: dict, root: Path, result: GateResult) -> bool:
     return True
 
 
+def lockfile_vulnerable_entries(root: Path, policy: dict, result: GateResult) -> list[str]:
+    """Lock entries of the advisory package whose version is within the vulnerable bound."""
+    try:
+        packages = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))["packages"]
+        if not isinstance(packages, dict):
+            raise ValueError("packages is not an object")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        result.fail(f"package-lock.json unreadable, audit scope cannot be verified: {error}")
+        return []
+    package = policy["advisory"]["package"]
+    limit = parse_stable(policy["fixed_version_gate"]["max_vulnerable_version"])
+    found = []
+    for path in sorted(packages):
+        item = packages[path]
+        if path and lock_package_name(path) == package and isinstance(item, dict):
+            version = parse_stable(str(item.get("version")))
+            if version is None or version <= limit:  # unparseable: cannot be proven fixed
+                found.append(f"{path}@{item.get('version')}")
+    return found
+
+
 def check_report_consistency(report: dict, npm_exit_code: int, result: GateResult) -> bool:
     vulnerabilities = report["vulnerabilities"]
     counts = report["metadata"]["vulnerabilities"]
@@ -241,14 +261,36 @@ def check_report_consistency(report: dict, npm_exit_code: int, result: GateResul
     return ok
 
 
-def effective_severity(entry: dict) -> str:
-    """Highest of the entry's own severity and the severities of its advisory (dict) via items."""
+def effective_severity(entry: dict, vulnerabilities: Optional[dict] = None) -> str:
+    """Highest severity along the entry's whole via chain.
+
+    Considers the entry's own severity, the severities of its advisory (dict) via items and,
+    recursively, the severities of every reported entry named by a string via item.
+    """
+    vulnerabilities = vulnerabilities or {}
     best = entry["severity"]
-    for via in entry["via"]:
-        if isinstance(via, dict):
-            severity = via.get("severity")
-            if severity not in SEVERITY_RANK:
-                return "critical"  # unknown/missing advisory severity: never downgrade
+    seen: set[int] = {id(entry)}
+    pending = [entry]
+    while pending:
+        current = pending.pop()
+        for via in current["via"]:
+            if isinstance(via, dict):
+                severity = via.get("severity")
+                if severity not in SEVERITY_RANK:
+                    return "critical"  # unknown/missing advisory severity: never downgrade
+            elif isinstance(via, str):
+                target = vulnerabilities.get(via)
+                if not isinstance(target, dict) or id(target) in seen:
+                    continue  # unknown names are rejected by explain_entry when relevant
+                seen.add(id(target))
+                severity = target.get("severity")
+                if severity not in SEVERITY_RANK:
+                    return "critical"
+                if not isinstance(target.get("via"), list):
+                    return "critical"
+                pending.append(target)
+            else:
+                return "critical"
             if SEVERITY_RANK[severity] > SEVERITY_RANK[best]:
                 best = severity
     return best
@@ -314,7 +356,7 @@ def evaluate_audit(report: dict, policy: dict, result: GateResult) -> list[str]:
     covered: list[str] = []
     for name in sorted(vulnerabilities):
         entry = vulnerabilities[name]
-        severity = effective_severity(entry)
+        severity = effective_severity(entry, vulnerabilities)
         if severity not in EVALUATED_SEVERITIES:
             continue
         if severity == "critical":
@@ -323,7 +365,9 @@ def evaluate_audit(report: dict, policy: dict, result: GateResult) -> list[str]:
         if not entry["nodes"] or not all(isinstance(node, str) and node for node in entry["nodes"]):
             result.fail(f"{name}: covered entry has no installed node to verify")
             continue
-        if has_real_fix(entry):
+        # fixAvailable is meaningful only where the advisory is owned directly (npm 10 reports fixAvailable=true
+        # for propagation-only entries such as fdir); registry known_stable_versions covers the rest.
+        if any(isinstance(via, dict) for via in entry["via"]) and has_real_fix(entry):
             result.fail(
                 f"{name}: npm reports a real (non-major) fix: fixAvailable={entry.get('fixAvailable')!r}; "
                 "the exception no longer applies. Upgrade, then remove it (docs/SECURITY_EXCEPTIONS.md)."
@@ -499,6 +543,11 @@ def run_gate(
         f"high/critical covered by {policy['id']}: {', '.join(covered) or 'none'}"
     )
     if not covered:
+        if result.passed and lockfile_vulnerable_entries(root, policy, result):
+            result.fail(
+                f"advisory not reported although the lockfile contains vulnerable {policy['advisory']['package']}: "
+                "audit scope incomplete"
+            )
         if result.passed:
             result.note("exception unused — remove it (docs/SECURITY_EXCEPTIONS.md)")
         return result
@@ -540,17 +589,22 @@ def main(
     registry_lookup: Optional[RegistryLookup] = None,
     audit_runner: Optional[Callable[[Path], tuple[str, int]]] = None,
 ) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], allow_abbrev=False)
     parser.add_argument("--root", type=Path, default=ROOT, help="directory holding package.json and package-lock.json")
     parser.add_argument("--policy", type=Path, default=None)
     parser.add_argument("--report-out", type=Path, default=None, help="where to save the raw npm audit JSON")
     parser.add_argument("--audit-json", type=Path, default=None, help="consume a saved report instead of running npm audit")
-    parser.add_argument("--audit-exit-code", type=int, default=1, help="npm exit code that belongs to --audit-json")
+    parser.add_argument("--audit-exit-code", type=int, default=None, help="npm exit code that belongs to --audit-json")
     parser.add_argument("--registry-json", type=Path, default=None,
                         help="offline registry data {versions:[...],dist_tags:{...}} instead of querying npm (rehearsal only)")
     args = parser.parse_args(argv)
     if any(os.environ.get(name) for name in CI_ENV_VARS):
-        used = [flag for flag in OFFLINE_FLAGS if any(a == flag or a.startswith(flag + "=") for a in (argv if argv is not None else sys.argv[1:]))]
+        used = [flag for flag, value in (
+            ("--audit-json", args.audit_json), ("--audit-exit-code", args.audit_exit_code),
+            ("--registry-json", args.registry_json), ("--policy", args.policy),
+        ) if value is not None]
+        if args.root.resolve() != ROOT:
+            used.append("--root")
         if used:
             print(f"FAIL: offline/rehearsal flags are refused in CI: {', '.join(used)}")
             return 1
@@ -561,7 +615,7 @@ def main(
         print(f"FAIL: {safe_text(str(error))}")
         return 1
     if args.audit_json is not None:
-        audit_text, exit_code = args.audit_json.read_text(encoding="utf-8", errors="replace"), args.audit_exit_code
+        audit_text, exit_code = args.audit_json.read_text(encoding="utf-8", errors="replace"), (1 if args.audit_exit_code is None else args.audit_exit_code)
     else:
         try:
             audit_text, exit_code = (audit_runner or run_npm_audit)(root)
