@@ -1271,8 +1271,9 @@ def _recovery_identity(
                                   require_empty=True)
             finally:
                 os.close(fd)
-            if info.st_ctime_ns < journal["prepared"]["created_ns"]:
-                _fail("UNEXPLAINED_STATE")
+            # The durable created record binds the inode. Filesystem ctime
+            # may have coarser resolution than time.time_ns() and is not a
+            # reliable ordering signal for an otherwise exact identity.
             return "remove", current
         # A prepared record proves only that the path was absent at planning
         # time. It cannot prove who created an inode in the mkdir/journal gap.

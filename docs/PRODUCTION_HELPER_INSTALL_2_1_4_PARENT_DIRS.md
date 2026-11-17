@@ -50,7 +50,7 @@ refuse with `RECOVERY_REQUIRED` until `--recover` proves and removes those exact
 
 | File | SHA-256 |
 | --- | --- |
-| `scripts/provision_wpcaregrid_deploy_parent_dirs_2_1_4.py` | `694ecad268108655e2d82582ca838a43be5f01f6987b6ac08b68a969eea7c57d` |
+| `scripts/provision_wpcaregrid_deploy_parent_dirs_2_1_4.py` | `936dd92c6a68a5df84966d43e8d19c925e51252ba2292f1e54fbda0dfb9fabd1` |
 | `scripts/tests/root-console-parent-dirs-2-1-4-test.py` | `48e4c133bf3999f2bed4bed2c9ceca32b618f3fa07910a18925dbcd2933e2a6a` |
 
 Recompute both after any merge that changes either file; the operator must use the hash of the
