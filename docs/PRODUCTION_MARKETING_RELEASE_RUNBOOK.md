@@ -47,7 +47,7 @@ repository deliberately does not guess them:
 | Application paths | Fixed contract paths: `/var/www/wpcaregrid-production`, `/var/www/wpcaregrid-production/current`, `/var/www/wpcaregrid-production/releases`. |
 | State paths | Fixed, disjoint roots under `/var/lib/wpcaregrid-deploy/production`: `incoming`, `inbox`, `state`, `database-backups`, and `shared/{.env,storage,vendor}`. Maintenance, worker-disabled, and scheduler-paused markers are exact children of `state`. |
 | Database | Production DB name begins `wpcg_prod_`; isolated restore DB begins `wpcg_prod_restore_`; both use `127.0.0.1`, distinct ports and independently verified, different MySQL server UUID SHA-256 fingerprints. MySQL version must be 8.4. |
-| Host and PHP | Host is exactly `wpcaregrid.com` or `www.wpcaregrid.com`. Server PHP minimum is 8.4. Use PHP 8.4 as the approved baseline; PHP 8.5 requires separate cutover approval. PHP-FPM socket/unit must match the selected version and dedicated production naming contract. |
+| Host and PHP | Host is exactly `wpcaregrid.com` or `www.wpcaregrid.com`. Server-side compatibility coverage remains PHP 8.4 and 8.5. Per the current Owner decision, Production G1 targets PHP 8.5; no separate PHP version cutover approval is required for that G1 target. PHP-FPM socket/unit must match the selected version and dedicated production naming contract. |
 | Unix identities | Dedicated `deploy-production` UID and dedicated PHP-FPM UID/GID, all positive and distinct from staging-next identities and from one another as required by the validator. No identity may be inferred from staging. |
 | Consumers | Exactly two unique `wpcaregrid-production-*` worker program names and a `wpcaregrid-production-*` scheduler unit. Workers remain fenced for a marketing-only release unless a separately authorized profile explicitly defines otherwise. |
 
@@ -220,7 +220,8 @@ smoke checks using the approved authenticated probe path:
   production `APP_DEBUG=false` are correct. No secrets are printed in evidence.
 * Registration, customer/operator APIs, checkout, Stripe/webhook provisioning,
   Connector onboarding and SaaS background jobs remain denied or disabled.
-* Verify runtime PHP-FPM unit/socket matches the profile (PHP 8.4 baseline),
+* Verify runtime PHP-FPM unit/socket matches the Production G1 PHP 8.5 target;
+  PHP 8.4 remains in compatibility CI coverage and is not the G1 runtime target.
   logs have no new application errors, and worker/scheduler fences remain
   active.
 * Confirm receipt outcome and HTTP/function checks before any separately
