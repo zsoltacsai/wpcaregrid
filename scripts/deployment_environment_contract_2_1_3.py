@@ -254,7 +254,11 @@ CLASS_EXECUTABLES: Mapping[str, frozenset] = MappingProxyType({
     "production-build-cli": frozenset({BUILD_CLI_EXECUTABLE}),
 })
 # Descriptor targets a peer of each side may never hold (other environment's secrets/state).
-_PRODUCTION_PRIVATE = ("/var/lib/wpcaregrid-deploy/production/",)
+_PRODUCTION_RELEASES = "/var/www/wpcaregrid-production/releases/"
+_PRODUCTION_PRIVATE = ("/var/lib/wpcaregrid-deploy/production/",
+                       "/var/www/wpcaregrid-production/shared/",
+                       _PRODUCTION_RELEASES,
+                       "/var/log/wpcaregrid-production/")
 _STAGING_PRIVATE = ("/var/lib/wpcaregrid-deploy/staging-next/", "/var/www/wpcaregrid-staging-new/",
                     "/var/www/wpcaregrid/")
 
@@ -796,10 +800,18 @@ def _peer_valid(peer: object) -> bool:
             and isinstance(peer["fds"], (list, tuple)) and all(isinstance(fd, str) for fd in peer["fds"]))
 
 
-def _forbidden_descriptor(peer: Mapping, production_side: bool) -> None:
+def _forbidden_descriptor(peer: Mapping, production_side: bool, role: str | None = None) -> None:
     forbidden = _STAGING_PRIVATE if production_side else _PRODUCTION_PRIVATE
     for target in peer["fds"]:
         path = target.removesuffix(" (deleted)")
+        if not production_side and role == "nginx" and path.startswith(_PRODUCTION_RELEASES):
+            # Nginx may hold descriptors only to the public assets of a pinned release.
+            # Resolved /proc fd links use the real releases/<sha>/public path, not current/.
+            tail = path[len(_PRODUCTION_RELEASES):]
+            release, separator, public_path = tail.partition("/")
+            if separator and re.fullmatch(r"[0-9a-f]{40}", release) and public_path.startswith("public/") \
+                    and not public_path.startswith("public/storage/"):
+                continue
         if path.startswith(forbidden) or path + "/" in forbidden:
             raise EnvironmentRefused("confinement_peer_foreign_descriptor")
 
@@ -844,7 +856,7 @@ def _classify_peer(peer: Mapping, helper: Mapping) -> str:
         raise EnvironmentRefused("confinement_peer_label_outside_unit")
     if exe not in CLASS_EXECUTABLES[role]:
         raise EnvironmentRefused("confinement_peer_executable_unexpected")
-    _forbidden_descriptor(peer, production_side=role == "production")
+    _forbidden_descriptor(peer, production_side=role == "production", role=role)
     return role
 
 
@@ -858,6 +870,7 @@ def _verify_peers(peers: object, services: Mapping, helper: Mapping) -> None:
         raise EnvironmentRefused("confinement_peer_inventory_incomplete")
     seen: set[int] = set()
     roles_seen: set[str] = set()
+    roles_by_pid: dict[int, str] = {}
     for peer in peers["processes"]:
         if not _peer_valid(peer) or peer["pid"] in seen:
             raise EnvironmentRefused("confinement_observation_invalid")
@@ -865,12 +878,20 @@ def _verify_peers(peers: object, services: Mapping, helper: Mapping) -> None:
         if WWW_DATA_UID not in peer["uids"] and WWW_DATA_GID not in peer["gids"] \
                 and WWW_DATA_GID not in peer["groups"]:
             raise EnvironmentRefused("confinement_observation_invalid")  # collector must list only www-data peers
-        roles_seen.add(_classify_peer(peer, helper))
+        classified = _classify_peer(peer, helper)
+        roles_seen.add(classified)
+        roles_by_pid[peer["pid"]] = classified
     for role in SERVING_ROLES:
         if role not in roles_seen:
             raise EnvironmentRefused("confinement_worker_labels_missing")
-        if services[role]["main_pid"] in seen:
-            raise EnvironmentRefused("confinement_observation_invalid")  # masters are root, never www-data
+        main_pid = services[role]["main_pid"]
+        if role == "production":
+            # The immutable production unit deliberately runs its FPM master as www-data.
+            # It must be in the complete peer inventory and classify as production.
+            if main_pid not in seen or roles_by_pid.get(main_pid) != "production":
+                raise EnvironmentRefused("confinement_worker_labels_missing")
+        elif main_pid in seen:
+            raise EnvironmentRefused("confinement_observation_invalid")
 
 
 def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object, services: object) -> None:

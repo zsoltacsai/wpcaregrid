@@ -15,14 +15,14 @@
   "transaction_module": "scripts/deployment_transaction_v2.py",
   "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
   "environment_contract": "scripts/deployment_environment_contract_2_1_3.py",
-  "environment_contract_sha256": "53a12565ac6d7abf5636e1ebf416d319dc16cfbfa188b2789791454b47967765",
+  "environment_contract_sha256": "088772ca2de9184d3aaf9a4047e130a4e9fed29768199d30036e852f27a823b0",
   "release_review_policy_module": "scripts/release_review_policy_v3.py",
   "release_review_policy_sha256": "e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db",
-  "helper_artifact_sha256": "d8580587ecb74ab99513acd13e965dc0f3ed9e5f5d2c041d386826430b7f5076",
+  "helper_artifact_sha256": "685faab84239131a3ed00c94622ec791c48209d30ddc987a7f24d8cf10bae0c7",
   "controller": "scripts/production_deploy_controller_2_1_3.py",
-  "controller_sha256": "c483e8017e25961006973a42670420d574bce1bd9307be17130d6374506da2be",
+  "controller_sha256": "2f3258d3d69f7b62e753b30d147551d85452f1692dea50272343d49916f3a2eb",
   "root_installer": "scripts/install_production_helper_2_1_3.py",
-  "root_installer_sha256": "8ec48c8ce95305967dc3c9486dcfed3bf7232c2ab04554b628f9df468a9bd004",
+  "root_installer_sha256": "84df18bec8c01f34f36001ec0da1cd5dc97c7158caa643ecf05de2601969612e",
   "policy_schema": 2,
   "php_fpm_confinement_pin": {
     "schema": 3,
@@ -30,9 +30,19 @@
     "sha256sums_sha256": "b1ce309cd58c0b19f25091365e875f01b45853762bad4ca3458726c0662f469c",
     "package_tree": "e8e59b769ed6c6acd85a3bf259364bace5ec374b",
     "files": 17,
-    "services": ["production", "staging-next", "staging-legacy", "nginx", "jobs-supervisor",
-                 "jobs-scheduler", "jobs-legacy-scheduler"],
-    "transients": ["production-deploy-cli", "production-build-cli"],
+    "services": [
+      "production",
+      "staging-next",
+      "staging-legacy",
+      "nginx",
+      "jobs-supervisor",
+      "jobs-scheduler",
+      "jobs-legacy-scheduler"
+    ],
+    "transients": [
+      "production-deploy-cli",
+      "production-build-cli"
+    ],
     "binding_sha256": "0c189479fca557e8b47a7bfdeddaf753d96a75c24c3a58321cdf81ac2507cee0"
   },
   "phase_b_default": "DISABLED",

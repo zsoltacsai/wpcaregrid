@@ -123,7 +123,9 @@ Refusal codes: `confinement_production_jobs_not_fenced`, `confinement_production
 
 **Same-UID peer inventory.** Every `/proc/<pid>` is read; a process is a peer when any of its
 real, effective, saved or filesystem UID **or GID**, or any supplementary group, is 33, whatever
-its command name (a `deploy` login in group `www-data` is a peer and holds preflight). For each
+its command name (a `deploy` login in group `www-data` is a peer and holds preflight). The
+production FPM unit's `MainPID` runs as `www-data` and must appear as a correctly classified
+production peer; root-owned masters for the other units are checked by their service label. For each
 peer the collector records UIDs/GIDs/groups, start time, state, parent, `comm`, the kernel `exe` link,
 `argv0` and a SHA-256 of the command line (never the raw arguments), the unified cgroup and the
 systemd unit derived from it, the AppArmor label and every descriptor target. Start time is read
@@ -156,9 +158,10 @@ queue/scheduler worker, shell, renamed FPM, a cron/`at` shell or a GID-33-only p
 `confinement_process_not_confined` (complain/kill/other modes), `confinement_same_uid_peer_unknown`
 (unknown unit and profile), `confinement_peer_label_outside_unit`,
 `confinement_peer_executable_unexpected`, `confinement_peer_cgroup_unexpected`,
-`confinement_peer_foreign_descriptor` (a staging/nginx/job peer holding a descriptor under
-`/var/lib/wpcaregrid-deploy/production/`, or a production or deploy-CLI peer under a staging
-tree), `confinement_peer_inventory_incomplete`, `confinement_worker_labels_missing` (a serving role
+`confinement_peer_foreign_descriptor` (a staging/job peer holding a descriptor under production
+state, `shared/`, `releases/` or `/var/log/wpcaregrid-production/`; nginx may hold only non-storage
+files beneath a pinned release's `public/`; a production or deploy-CLI peer may hold no descriptor
+under a staging tree), `confinement_peer_inventory_incomplete`, `confinement_worker_labels_missing` (a serving role
 with no www-data worker), `confinement_master_not_confined` (an active unit's main process not in
 its enforce label), `confinement_www_data_scheduled_job_present`,
 `confinement_www_data_jobs_unverifiable`, and for the transient CLI classes
@@ -235,11 +238,11 @@ sibling PHP that runs `sendmail`, `proc_open` or `exec`, then complain-mode soak
 | `scripts/wpcaregrid-deploy-production-priv-2_1_3.py` | `357b0e5715ed86e144a55ac50e0291159116872b266a81f66c5aa3330bbe73c3` |
 | `scripts/deployment_backend_v2_1_3.py` | `b586d4bf8aca330339f86e435290b1812e789d8e101d7097ce8e841825572cb0` |
 | `scripts/deployment_transaction_v2.py` (shared, unchanged) | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_3.py` | `53a12565ac6d7abf5636e1ebf416d319dc16cfbfa188b2789791454b47967765` |
+| `scripts/deployment_environment_contract_2_1_3.py` | `088772ca2de9184d3aaf9a4047e130a4e9fed29768199d30036e852f27a823b0` |
 | `scripts/release_review_policy_v3.py` (shared, unchanged) | `e50785233d46d7d03e3f734a15fc64764ab85196482789db0c0157cb4307c9db` |
-| helper artifact digest | `d8580587ecb74ab99513acd13e965dc0f3ed9e5f5d2c041d386826430b7f5076` |
-| `scripts/production_deploy_controller_2_1_3.py` | `c483e8017e25961006973a42670420d574bce1bd9307be17130d6374506da2be` |
-| `scripts/install_production_helper_2_1_3.py` | `8ec48c8ce95305967dc3c9486dcfed3bf7232c2ab04554b628f9df468a9bd004` |
+| helper artifact digest | `685faab84239131a3ed00c94622ec791c48209d30ddc987a7f24d8cf10bae0c7` |
+| `scripts/production_deploy_controller_2_1_3.py` | `2f3258d3d69f7b62e753b30d147551d85452f1692dea50272343d49916f3a2eb` |
+| `scripts/install_production_helper_2_1_3.py` | `84df18bec8c01f34f36001ec0da1cd5dc97c7158caa643ecf05de2601969612e` |
 <!-- PINS:END -->
 
 Manifest: `deploy/release-manifests/production-deployment-helper-2.1.3.json`.

@@ -183,6 +183,9 @@ def observation(pin=PIN):
             "apparmor_profile_property": b.apparmor_profile, "loaded_profile_mode": "enforce"}
         exe = FPM_EXE.get(role, "/usr/bin/php8.5")
         if active:
+            if role == "production":
+                # The pinned production FPM unit runs its master as www-data.
+                processes.append(peer(master, unit=b.unit, label=label, exe=exe, comm="master"))
             processes += [peer(master + 1, unit=b.unit, label=label, exe=exe),
                           peer(master + 2, unit=b.unit, label=label, exe=exe)]
     return {"schema": 3, "apparmor_enabled": True, "production_jobs_fence": fence(),
@@ -450,6 +453,41 @@ class ContractTests(unittest.TestCase):
 
     def test_exact_observation_passes(self):
         self._passes(observation())
+
+    def test_production_master_is_in_the_www_data_peer_inventory(self):
+        data = observation()
+        master = data["services"]["production"]["main_pid"]
+        process = next(item for item in data["same_uid_peers"]["processes"] if item["pid"] == master)
+        self.assertEqual(process["uids"], [33] * 4)
+        self._passes(data)
+        self.assertEqual(self._refusal(lambda d: d["same_uid_peers"]["processes"].__setitem__(
+            slice(None), [item for item in d["same_uid_peers"]["processes"] if item["pid"] != master])),
+                         "confinement_worker_labels_missing")
+
+    def test_production_release_secrets_and_logs_are_forbidden_descriptors(self):
+        paths = (
+            "/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/bootstrap/cache/config.php",
+            "/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/bootstrap/cache/config.php (deleted)",
+            "/var/log/wpcaregrid-production/php-fpm.log",
+            "/var/log/wpcaregrid-production/php-fpm.log (deleted)",
+            "/var/www/wpcaregrid-production/shared/.env",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                def set_staging_fd(data, value=path):
+                    peer_item = next(item for item in data["same_uid_peers"]["processes"]
+                                     if item["unit"] == "php8.4-fpm.service")
+                    peer_item["fds"] = [value]
+                self.assertEqual(self._refusal(set_staging_fd),
+                                 "confinement_peer_foreign_descriptor")
+        data = observation()
+        nginx = next(item for item in data["same_uid_peers"]["processes"] if item["unit"] == "nginx.service")
+        nginx["fds"] = ["/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/public/build/app.js"]
+        self._passes(data)
+        self.assertEqual(self._refusal(lambda d: next(
+            item for item in d["same_uid_peers"]["processes"] if item["unit"] == "nginx.service").update(
+                fds=["/var/www/wpcaregrid-production/releases/" + "a" * 40 + "/bootstrap/cache/config.php"])),
+            "confinement_peer_foreign_descriptor")
 
     def test_missing_mismatched_and_unconfined_observations_refuse(self):
         first = CONTRACT.CONFINEMENT_FILES[0]
@@ -1411,7 +1449,8 @@ class ConfinementCollectorTests(unittest.TestCase):
             if not active:
                 continue
             exe = FPM_EXE.get(role, "/usr/bin/php8.5")
-            self.process(master, uid=0, unit=binding.unit, label=label, exe=exe, comm="master")
+            self.process(master, uid=33 if role == "production" else 0, unit=binding.unit,
+                         label=label, exe=exe, comm="master")
             for worker in (master + 1, master + 2):
                 self.process(worker, unit=binding.unit, label=label, exe=exe, ppid=master)
         self.process(1, uid=0, unit="", label="unconfined", exe="/usr/lib/systemd/systemd", comm="systemd")
@@ -1525,8 +1564,8 @@ class ConfinementCollectorTests(unittest.TestCase):
                              ("regular", 0o644, 1, self.pin.file_sha256[path]))
         peers = data["same_uid_peers"]
         self.assertTrue(peers["complete"])
-        # Root masters and root/system processes are not www-data peers; every www-data worker is.
-        self.assertEqual(len(peers["processes"]), 2 * 5)
+        # The production master runs as www-data; other unit masters are root.
+        self.assertEqual(len(peers["processes"]), 2 * 5 + 1)
         first = peers["processes"][0]
         self.assertEqual((first["uids"], first["gids"], first["unit"], first["exe"], first["fds"]),
                          ([33] * 4, [33] * 4, first["cgroup"].rsplit("/", 1)[1], first["exe"], ["/dev/null"]))
