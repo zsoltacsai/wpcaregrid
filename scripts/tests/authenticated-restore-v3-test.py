@@ -1259,26 +1259,35 @@ def test_definer_table_grants_are_exactly_allowlisted():
 
 def test_grant_schema_identifier_case_is_not_folded():
     schema = CLONE_SCHEMA
-    escaped = V2._grant_pattern_identifier(schema).upper()
+    escaped = V2._grant_pattern_identifier(schema)
     account = "restore_owner@localhost"
-    raw_lines = [
-        "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
-        f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
-    ]
+    substitutions = (
+        (f"GRANT TRIGGER ON `{escaped.upper()}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{schema}`.`migrations` TO `restore_owner`@`localhost`"),
+        (f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{schema.upper()}`.`migrations` TO `restore_owner`@`localhost`"),
+        (f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{schema}`.`MIGRATIONS` TO `restore_owner`@`localhost`"),
+    )
+    for trigger_grant, select_grant in substitutions:
+        raw_lines = ["GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
+                     trigger_grant, select_grant]
 
-    def query(_policy, sql, *, database=None, **_kwargs):
-        if sql.startswith("SELECT account_locked"):
-            return b"Y\n"
-        if sql.startswith("SHOW GRANTS FOR"):
-            return ("\n".join(raw_lines) + "\n").encode()
-        raise AssertionError(f"unexpected query: {sql}")
+        def query(_policy, sql, *, database=None, **_kwargs):
+            if sql.startswith("SELECT account_locked"):
+                return b"Y\n"
+            if sql.startswith("SHOW GRANTS FOR"):
+                return ("\n".join(raw_lines) + "\n").encode()
+            raise AssertionError(f"unexpected query: {sql}")
 
-    # The old v2 normalization folds identifier case; v3 must still reject a
-    # grant to the distinct uppercase schema on case-sensitive MySQL.
-    with mock.patch.object(V2, "mysql_query", side_effect=query):
-        V2.verify_definer_lifecycle(object(), schema, account, [])
-        expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
-               allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES)
+        # Both validators must reject schema/table substitutions on a
+        # case-sensitive MySQL installation.
+        with mock.patch.object(V2, "mysql_query", side_effect=query):
+            expect("DEFINER_GRANTS_NOT_MINIMAL", V2.verify_definer_lifecycle,
+                   object(), schema, account, ["migrations"])
+            expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
+                   allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
+                   allowed_table_privileges={"migrations": {"select"}})
 
 
 def test_holds_survive_interruptions_publication_errors_and_output_changes():

@@ -582,6 +582,31 @@ def test_table_grant_uses_literal_schema_identifier_not_pattern_escape():
             raise AssertionError("Pattern-escaped table grant was accepted")
 
 
+def test_definer_scope_identifiers_are_case_sensitive():
+    policy = {"mysql": {"server_uuid": "server"}}
+    definer = "restore_owner@localhost"
+    escaped = RESTORE._grant_pattern_identifier(SCHEMA)
+    upper_escaped = RESTORE._grant_pattern_identifier(SCHEMA.upper())
+    cases = (
+        (f"GRANT TRIGGER ON `{upper_escaped}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{SCHEMA}`.`migrations` TO `restore_owner`@`localhost`"),
+        (f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{SCHEMA.upper()}`.`migrations` TO `restore_owner`@`localhost`"),
+        (f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+         f"GRANT SELECT ON `{SCHEMA}`.`MIGRATIONS` TO `restore_owner`@`localhost`"),
+    )
+    for trigger_grant, select_grant in cases:
+        grants = ("GRANT USAGE ON *.* TO `restore_owner`@`localhost`\n" + trigger_grant + "\n"
+                  + select_grant + "\n").encode()
+        with mock.patch.object(RESTORE, "mysql_query", side_effect=[b"Y\n", grants]):
+            try:
+                RESTORE.verify_definer_lifecycle(policy, SCHEMA, definer, ["migrations"])
+            except RESTORE.RestoreRefused as error:
+                assert str(error) == "DEFINER_GRANTS_NOT_MINIMAL"
+            else:
+                raise AssertionError("Case-substituted schema/table grant was accepted")
+
+
 def test_production_entrypoint_requires_root():
     if os.geteuid() != 0:
         try:
@@ -724,6 +749,7 @@ def main():
         test_mysql_import_pins_utf8mb4_and_initial_sql_mode,
         test_definer_grants_preserve_literal_underscore_escaping,
         test_table_grant_uses_literal_schema_identifier_not_pattern_escape,
+        test_definer_scope_identifiers_are_case_sensitive,
         test_ambiguous_create_is_left_as_explicit_hold_and_not_dropped,
         test_target_name_and_dump_format_fail_closed,
         test_sql_resource_budgets_fail_closed,

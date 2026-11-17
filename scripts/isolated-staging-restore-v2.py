@@ -1177,8 +1177,21 @@ def _inventory(policy, schema, manifest, plan):
 def _normalized_grant(line):
     if not isinstance(line, str) or any(ord(c) < 32 for c in line):
         refuse("DEFINER_GRANT_INVENTORY_INVALID")
-    return " ".join(line.replace("`", "").replace("'", "")
-                     .replace('"', "").split()).casefold()
+    match = re.fullmatch(
+        r"\s*GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+(.+?)(\s+WITH\s+GRANT\s+OPTION)?\s*",
+        line, re.IGNORECASE)
+    if not match:
+        refuse("DEFINER_GRANT_INVENTORY_INVALID")
+    privileges = sorted(" ".join(item.split()).casefold()
+                        for item in match.group(1).split(","))
+    # Normalize SQL keywords and whitespace, but retain object identifier case:
+    # MySQL may distinguish schema/table names by case on the target host.
+    object_name = " ".join(match.group(2).replace("`", "").replace("'", "")
+                            .replace('"', "").split())
+    recipient = " ".join(match.group(3).replace("`", "").replace("'", "")
+                         .replace('"', "").split())
+    suffix = " with grant option" if match.group(4) else ""
+    return f"grant {', '.join(privileges)} on {object_name} to {recipient}{suffix}"
 
 
 def _grant_pattern_identifier(name):
