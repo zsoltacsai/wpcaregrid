@@ -50,6 +50,24 @@ TABLES = ["migrations", "synthetic"]
 BASE_LEDGER = ["2026_11_02_000001_create_deployment_transition_fences_table"]
 PENDING = ["2026_11_16_000001_add_synthetic_a", "2026_11_16_000002_add_synthetic_b"]
 OBJECTS = b"events\t0\nroutines\t0\nviews\t0\n"
+MYSQL84_DUMP_BODY_FIXTURE = b"""-- MySQL dump 10.13  Distrib 8.4.11, for Linux (x86_64)
+-- Host: 127.0.0.1    Database: wpcaregrid
+-- Server version 8.4.11
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+CREATE TABLE `migrations` (`id` int NOT NULL);
+CREATE TABLE `synthetic` (`id` int NOT NULL);
+INSERT INTO `synthetic` VALUES (1);
+/*!50003 SET @saved_sql_mode = @@sql_mode */ ;
+/*!50003 SET sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`restore_owner`@`localhost`*/ /*!50003 TRIGGER `synthetic_bi` BEFORE INSERT ON `synthetic` FOR EACH ROW SET NEW.`id`=COALESCE(NEW.`id`,1) */ ;;
+DELIMITER ;
+/*!50003 SET sql_mode = @saved_sql_mode */ ;
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+"""
 
 
 def expect(code, function, *args, **kwargs):
@@ -130,14 +148,9 @@ class World:
         os.utime(self.archive_path, (stamp, stamp))
 
     def capture(self, observe=observe_ok, dump_sql=None):
-        original_sql = gzip.decompress(self.archive_path.read_bytes())
-        # mysqldump without --databases emits the selected schema's objects,
-        # not CREATE DATABASE/USE selectors. The production capture adds those
-        # from the independently observed schema metadata.
-        sql = dump_sql if dump_sql is not None else b"\n".join(
-            line for line in original_sql.splitlines()
-            if not line.lstrip().upper().startswith((b"CREATE DATABASE", b"USE `WPCAREGRID`"))
-        ) + b"\n"
+        # A no-selector MySQL 8.4 mysqldump body with the normal header,
+        # session wrappers, table definitions/data and a versioned trigger.
+        sql = dump_sql if dump_sql is not None else MYSQL84_DUMP_BODY_FIXTURE
         self.archive_path.unlink()
         observations = iter((observe_ok(), observe(self.source_policy)))
         def dump(argv, consume, **kw):
@@ -264,6 +277,19 @@ def test_capture_refuses_identity_drift_and_wrong_identity():
         assert not world.record_path.exists()
 
 
+def test_source_identity_uses_information_schema_default_collation_column():
+    with tempfile.TemporaryDirectory() as directory:
+        world = World(directory)
+        raw = (f"{BACKUP_ACCOUNT}\twpcaregrid\t{SOURCE_UUID}\t8.4.11\t1\tROW\t0\t"
+               "utf8mb4\tutf8mb4_unicode_ci\n").encode()
+        with mock.patch.object(V2, "mysql_query", return_value=raw) as query:
+            observation = V3.observe_source_identity(world.source_policy)
+        assert observation["database_charset"] == "utf8mb4"
+        assert observation["database_collation"] == "utf8mb4_unicode_ci"
+        assert "DEFAULT_COLLATION_NAME" in query.call_args.args[1]
+        assert ",COLLATION_NAME FROM information_schema.SCHEMATA" not in query.call_args.args[1]
+
+
 def test_capture_adds_audited_mysql84_selector_and_audits_before_signing():
     with tempfile.TemporaryDirectory() as directory:
         world = World(directory)
@@ -275,6 +301,8 @@ def test_capture_adds_audited_mysql84_selector_and_audits_before_signing():
             b"/*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */;\n"
             b"USE `wpcaregrid`;\n"
         )
+        assert b"STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION" in captured
+        assert b"DEFINER=`restore_owner`@`localhost`" in captured
         V2.audit_sql(captured, V3.CAPTURE_AUDIT_TARGET, world.manifest["approved_definer"])
     with tempfile.TemporaryDirectory() as directory:
         world = World(directory)
@@ -1111,6 +1139,9 @@ def test_defaults_metadata_and_deployment_identity_are_observed():
         expect("MYSQL_DEFAULTS_UNAVAILABLE", V3._validate_defaults, policy, OWNER)
         defaults.write_text("!include /untrusted\n")
         expect("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        defaults.write_text("[client]\nuser=synthetic\n[mysqldump]\nset-gtid-purged=ON\n")
+        expect("MYSQLDUMP_DEFAULTS_GROUP_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        defaults.write_text("[client]\nuser=synthetic\n")
         V3.observe_deployment(world.source_policy, owner_uid=OWNER)
         receipt = read_json(world.dir / "deployment.json")
         write_json(world.dir / "deployment.json", receipt | {"application_sha": "e" * 40})
@@ -1176,6 +1207,7 @@ def main():
         test_signature_binds_body_purpose_and_key,
         test_capture_record_binds_identity_without_raw_uuid_or_secrets,
         test_capture_refuses_identity_drift_and_wrong_identity,
+        test_source_identity_uses_information_schema_default_collation_column,
         test_capture_adds_audited_mysql84_selector_and_audits_before_signing,
         test_capture_refuses_stale_oversized_or_untrusted_archives_and_begin_records,
         test_verify_capture_rejects_stale_expired_incomplete_and_oversized_records,

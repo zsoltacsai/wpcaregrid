@@ -46,9 +46,10 @@ deterministic `CREATE DATABASE`/`USE` header using the authenticated schema
 charset/collation. Before signing, it decompresses the exact written archive and
 runs the same v2 SQL audit used by restore, including the root-policy-approved
 DEFINER. Invalid charset changes, selectors, or other unsafe dump SQL therefore
-cannot receive a capture record. The regression fixture models the MySQL 8.4
-single-schema dump body; a real mysqldump binary and real MySQL import remain
-unverified host gates.
+cannot receive a capture record. The synthetic regression fixture models the
+MySQL 8.4 single-schema body and versioned trigger session wrappers, including
+the project's strict trigger SQL mode. It is not output captured from a real
+mysqldump binary; a real binary and MySQL import remain unverified host gates.
 Partial archives remain unsigned and cannot be reused. Older capture records
 without controlled-process/deployment evidence are rejected and require a fresh
 controlled capture. External `capture-begin`
@@ -72,7 +73,9 @@ The receipt environment/host/SHA must match policy. Receipt hash and current
 active identity are checked before and after the dump. The record retains the
 receipt hash and successful dump exit status. Defaults files must be root-owned,
 single-link regular `0600` files with protected ancestors; symlinks and include
-directives are refused before client use. Policy/defaults drift also stops signing.
+directives are refused before client use. A `[mysqldump]` defaults group is
+also refused so the fixed command remains the sole authority for dump-format
+options. Policy/defaults drift also stops signing.
 
 This observes the deployment receipt and active release identity. **The source
 application SHA is attested by the trusted successful-deployment publisher**;

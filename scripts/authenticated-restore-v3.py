@@ -460,7 +460,7 @@ def observe_source_identity(policy):
         _source_mysql_policy(policy),
         "SELECT CURRENT_USER(),DATABASE(),@@server_uuid,VERSION(),@@GLOBAL.log_bin,"
         "@@GLOBAL.binlog_format,@@GLOBAL.log_bin_trust_function_creators,"
-        "DEFAULT_CHARACTER_SET_NAME,COLLATION_NAME FROM information_schema.SCHEMATA "
+        "DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA "
         "WHERE SCHEMA_NAME=DATABASE()",
         database=policy["schema"], maximum=2048)
     try:
@@ -530,6 +530,11 @@ def _validate_defaults(policy, owner_uid):
     # Included files would escape the metadata validation boundary.
     if any(line.lstrip().startswith(b"!") for line in raw.splitlines()):
         refuse("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN")
+    # mysqldump reads both [client] and [mysqldump]. Keep its option group out
+    # of the trusted defaults file so the fixed command determines dump shape.
+    if any(re.fullmatch(rb"\s*\[mysqldump\]\s*(?:[#;].*)?", line, re.IGNORECASE)
+           for line in raw.splitlines()):
+        refuse("MYSQLDUMP_DEFAULTS_GROUP_FORBIDDEN")
     return _sha(raw)
 
 

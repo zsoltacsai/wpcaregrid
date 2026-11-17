@@ -304,6 +304,15 @@ def remove_safe_mysqldump_trigger_session_wrappers(sql):
 
 
 def validate_lexical_sql_mode(tokens):
+    # These modes do not alter SQL tokenization/quoting, so preserving common
+    # server modes on dumped triggers is safe for the fixed UTF-8 parser.
+    # Quoting-related modes such as ANSI_QUOTES and NO_BACKSLASH_ESCAPES are
+    # intentionally absent and remain fail-closed.
+    safe_modes = {
+        "ALLOW_INVALID_DATES", "ERROR_FOR_DIVISION_BY_ZERO", "NO_AUTO_VALUE_ON_ZERO",
+        "NO_ENGINE_SUBSTITUTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY",
+        "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES",
+    }
     for i, token in enumerate(tokens):
         if _id(token) != "sql_mode" or i + 1 >= len(tokens):
             continue
@@ -312,7 +321,13 @@ def validate_lexical_sql_mode(tokens):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
             continue
         if tokens[i + 1].kind == "SYMBOL" and tokens[i + 1].value == "=":
-            if i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING" or tokens[i + 2].value != "'NO_AUTO_VALUE_ON_ZERO'":
+            if i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING":
+                refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
+            literal = tokens[i + 2].value
+            if not re.fullmatch(r"'[A-Za-z0-9_, ]*'", literal):
+                refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
+            modes = [part.strip().upper() for part in literal[1:-1].split(",") if part.strip()]
+            if len(modes) != len(set(modes)) or any(mode not in safe_modes for mode in modes):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
 
 
