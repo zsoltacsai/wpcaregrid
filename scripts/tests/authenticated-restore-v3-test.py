@@ -1203,6 +1203,74 @@ def test_application_grant_scope_requires_exact_schema_object():
         expect("ACCOUNT_SCOPE_EXCESSIVE", rehearsal.create)
 
 
+def test_definer_grant_validators_accept_the_same_exact_phase2b_grants():
+    schema = CLONE_SCHEMA
+    escaped = V2._grant_pattern_identifier(schema)
+    account = "restore_owner@localhost"
+    raw_lines = [
+        "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
+        f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+        f"GRANT SELECT ON `{escaped}`.`migrations` TO `restore_owner`@`localhost`",
+    ]
+
+    def query(_policy, sql, *, database=None, **_kwargs):
+        if sql.startswith("SELECT account_locked"):
+            return b"Y\n"
+        if sql.startswith("SHOW GRANTS FOR"):
+            return ("\n".join(raw_lines) + "\n").encode()
+        raise AssertionError(f"unexpected query: {sql}")
+
+    with mock.patch.object(V2, "mysql_query", side_effect=query):
+        lifecycle = V2.verify_definer_lifecycle(object(), schema, account, ["migrations"])
+        report = V3.account_privilege_report(
+            object(), schema, account, allow_schema_privileges=True,
+            allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
+            allowed_table_privileges={"migrations": {"select"}})
+
+    assert report["schema_privileges"] == ["trigger"]
+    assert lifecycle["schema_privileges"] == ["TRIGGER"]
+    assert lifecycle["select_tables"] == ["migrations"]
+
+
+def test_definer_table_grants_are_exactly_allowlisted():
+    schema = CLONE_SCHEMA
+    escaped = V2._grant_pattern_identifier(schema)
+    account = "restore_owner@localhost"
+    raw_lines = [
+        "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
+        f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+        f"GRANT SELECT, INSERT ON `{escaped}`.`migrations` TO `restore_owner`@`localhost`",
+    ]
+    with mock.patch.object(V2, "mysql_query", return_value=("\n".join(raw_lines) + "\n").encode()):
+        expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
+               allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES,
+               allowed_table_privileges={"migrations": {"select"}})
+
+
+def test_grant_schema_identifier_case_is_not_folded():
+    schema = CLONE_SCHEMA
+    escaped = V2._grant_pattern_identifier(schema).upper()
+    account = "restore_owner@localhost"
+    raw_lines = [
+        "GRANT USAGE ON *.* TO `restore_owner`@`localhost`",
+        f"GRANT TRIGGER ON `{escaped}`.* TO `restore_owner`@`localhost`",
+    ]
+
+    def query(_policy, sql, *, database=None, **_kwargs):
+        if sql.startswith("SELECT account_locked"):
+            return b"Y\n"
+        if sql.startswith("SHOW GRANTS FOR"):
+            return ("\n".join(raw_lines) + "\n").encode()
+        raise AssertionError(f"unexpected query: {sql}")
+
+    # The old v2 normalization folds identifier case; v3 must still reject a
+    # grant to the distinct uppercase schema on case-sensitive MySQL.
+    with mock.patch.object(V2, "mysql_query", side_effect=query):
+        V2.verify_definer_lifecycle(object(), schema, account, [])
+        expect("ACCOUNT_SCOPE_EXCESSIVE", V3.account_privilege_report, object(), schema, account,
+               allow_schema_privileges=True, allowed_privileges=V3.DEFINER_SCHEMA_PRIVILEGES)
+
+
 def test_holds_survive_interruptions_publication_errors_and_output_changes():
     for error in (KeyboardInterrupt(), RuntimeError("failure"), OSError("publication")):
         with tempfile.TemporaryDirectory() as directory:
@@ -1360,6 +1428,9 @@ def main():
         test_source_has_no_shell_execution_secret_argv_or_remote_code_surface,
         test_candidate_store_rejects_lazy_fetch_config_hardlinks_and_corrupt_objects,
         test_application_grant_scope_requires_exact_schema_object,
+        test_definer_grant_validators_accept_the_same_exact_phase2b_grants,
+        test_definer_table_grants_are_exactly_allowlisted,
+        test_grant_schema_identifier_case_is_not_folded,
     )
     for test in tests:
         test()

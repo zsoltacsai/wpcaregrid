@@ -961,17 +961,31 @@ FORBIDDEN_PRIVILEGES = frozenset({
 
 
 def _split_grant(line):
-    normalized = V2._normalized_grant(line)
-    match = re.fullmatch(r"grant (.+?) on (.+?) to (\S+?)( with grant option)?", normalized)
+    # Parse the privilege keywords case-insensitively, but preserve the object
+    # identifier's case. MySQL schema names can be case-sensitive; applying
+    # V2._normalized_grant() to the whole statement would blur two distinct
+    # schemas on case-sensitive servers.
+    if not isinstance(line, str) or any(ord(c) < 32 for c in line):
+        refuse("ACCOUNT_GRANT_UNPARSEABLE")
+    match = re.fullmatch(
+        r"\s*GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO\s+(.+?)(\s+WITH\s+GRANT\s+OPTION)?\s*",
+        line, re.IGNORECASE)
     if not match:
         refuse("ACCOUNT_GRANT_UNPARSEABLE")  # includes role grants and unknown shapes
-    privileges = tuple(sorted(part.strip() for part in match.group(1).split(",")))
-    return privileges, match.group(2), bool(match.group(4))
+    privileges = tuple(sorted(part.strip().casefold() for part in match.group(1).split(",")))
+    # SHOW GRANTS quotes identifiers. Remove quoting and normalize whitespace,
+    # but deliberately do not case-fold this value.
+    obj = " ".join(match.group(2).replace("`", "").replace("'", "")
+                   .replace('"', "").split())
+    return privileges, obj, bool(match.group(4))
 
 
-def account_privilege_report(policy, schema, account, *, allow_schema_privileges, allowed_privileges=APP_SCHEMA_PRIVILEGES):
+def account_privilege_report(policy, schema, account, *, allow_schema_privileges,
+                             allowed_privileges=APP_SCHEMA_PRIVILEGES,
+                             allowed_table_privileges=None):
     """Observe an account's grants. Global privileges must be exactly USAGE; any
-    schema-level grant must stay inside ``schema`` and avoid forbidden privileges."""
+    schema-level grant must stay inside ``schema``. Optional table grants must
+    match the exact allowlisted table and privilege set."""
     if not V2.DEFINER_RE.fullmatch(account) or not V2.TARGET_RE.fullmatch(schema):
         refuse("ACCOUNT_CONTRACT_INVALID")
     user, host = account.split("@", 1)
@@ -982,7 +996,7 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
         refuse("ACCOUNT_GRANT_UNPARSEABLE")
     if not lines or len(lines) > 128:
         refuse("ACCOUNT_GRANT_INVENTORY_INVALID")
-    scoped = V2._normalized_grant(V2._grant_pattern_identifier(schema))
+    scoped = V2._grant_pattern_identifier(schema)
     schema_privileges, globals_seen, normalized_lines = set(), False, []
     for line in lines:
         privileges, obj, grant_option = _split_grant(line)
@@ -999,6 +1013,11 @@ def account_privilege_report(policy, schema, account, *, allow_schema_privileges
             if not set(privileges) <= allowed_privileges:
                 refuse("ACCOUNT_PRIVILEGE_EXCESSIVE")
             schema_privileges.update(privileges)
+        elif allowed_table_privileges is not None:
+            table_name = next((name for name, table_privileges in allowed_table_privileges.items()
+                               if obj == scoped + "." + V2._grant_pattern_identifier(name)), None)
+            if table_name is None or not set(privileges) <= set(allowed_table_privileges[table_name]):
+                refuse("ACCOUNT_SCOPE_EXCESSIVE")
         else:
             refuse("ACCOUNT_SCOPE_EXCESSIVE")
     if not globals_seen or (schema_privileges and not allow_schema_privileges):
@@ -1405,7 +1424,8 @@ def create_migration_receipt(baseline_receipt_path, clone_receipt_path, clone_ma
             refuse("TRIGGER_DEFINER_UNEXPECTED")
         definer_lifecycle = V2.verify_definer_lifecycle(policy, clone_schema, accounts["definer"], selected)
         definer_report = account_privilege_report(policy, clone_schema, accounts["definer"], allow_schema_privileges=True,
-                                                   allowed_privileges=DEFINER_SCHEMA_PRIVILEGES)
+                                                   allowed_privileges=DEFINER_SCHEMA_PRIVILEGES,
+                                                   allowed_table_privileges={name: {"select"} for name in selected})
         app_report = account_privilege_report(policy, clone_schema, accounts["app"], allow_schema_privileges=True)
         if not app_report["schema_privileges"]:
             refuse("APP_ACCOUNT_GRANTS_MISSING")
