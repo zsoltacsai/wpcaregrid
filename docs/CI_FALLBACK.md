@@ -22,7 +22,7 @@ If the source tree or CI configuration differs, stop and synchronize the exact c
 
 Fallback CI must preserve the mandatory jobs in `.github/workflows/ci.yml`:
 
-1. Quality: tracked-secret/local-file guard, Composer validation, PHP syntax, M8 fixture contract, Connector release-version gate, Pint, Composer audits, Node 22 build, npm audit, and full-history Gitleaks scan.
+1. Quality: tracked-secret/local-file guard, Composer validation, PHP syntax, M8 fixture contract, Connector release-version gate, Pint, Composer audits, Node 22 build, npm advisory gate (`scripts/npm_audit_gate.py`, run with `--report-out`; the fallback prints `npm --version`, the raw report and its sha256, then exits with the gate's status, mirroring the GitHub step; docs/SECURITY_EXCEPTIONS.md), and full-history Gitleaks scan.
 2. Server SQLite: migrations, application caches, complete PHPUnit suite, system check, HTTP smoke test, and required S3/SFTP test services. Only the database-engine concurrency tests that GitHub intentionally defers to MySQL may be skipped on SQLite.
 3. Server MySQL 8.4: the same server checks, zero skipped tests, and every required process/concurrency test.
 4. Connector SQLite: build the reviewed connector package and run the complete real-WordPress Connector suite with strict tests enabled.
