@@ -22,6 +22,14 @@ tool itself performs. Backup restore evidence is NOT verifiable by a host read
 and is reported as UNKNOWN with a pointer to the Rackforest checklist; a
 backup's existence alone never produces BACKUP_VERIFIED=PASS.
 
+This tool lives in scripts/production-g1-diagnostics/ with its own SHA256SUMS.
+The scripts/production-g1-ops/ transaction toolkit is a frozen, GO-0-anchored
+directory and is never modified or extended by this change. When both
+directories are staged together, the toolkit companions beside this tool (the
+upgrader, the fetch script and the ops SHA256SUMS) are verified against their
+reviewed pins; a mismatched or partial companion set is a HOLD, and nothing
+unrecognized is accepted implicitly.
+
 Classification is fail-closed: every incomplete evidence item is HOLD or
 UNKNOWN, the verdict is the LAST line, and HOLD/UNKNOWN exit non-zero. Local
 synthetic test passes do NOT make this tool approved; independent Integration
@@ -96,6 +104,7 @@ EXPECTED_OPS_SUMS_SHA = "70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b
 UPGRADER_NAME = "go54a-upgrade-apparmor.py"
 FETCH_NAME = "go54a-fetch-package.sh"
 OPS_SUMS_NAME = "SHA256SUMS"
+TOOLKIT_DIR_NAME = "production-g1-ops"
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_LOG_BYTES = 64 * 1024 * 1024
@@ -488,23 +497,46 @@ def check_package_intake(host, package_dir, emit):
     return "PASS", "staged_packages_recognized_and_validated"
 
 
-def check_toolkit_companions(host, emit):
-    directory = host.script_dir()
-    companions = (
+def toolkit_candidate_dirs(host):
+    """Fixed, caller-independent lookup: the frozen ops toolkit staged as a sibling
+    directory (the repository layout), or this tool's own directory (flat staging)."""
+    base = host.script_dir().rstrip("/")
+    candidates = []
+    for path in (os.path.join(os.path.dirname(base), TOOLKIT_DIR_NAME), base):
+        if path and path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def companion_pins():
+    """Built at call time so the module-attribute pins stay the single seam."""
+    return (
         (UPGRADER_NAME, EXPECTED_UPGRADER_SHA),
         (FETCH_NAME, EXPECTED_FETCH_SHA),
         (OPS_SUMS_NAME, EXPECTED_OPS_SUMS_SHA),
     )
-    present = [name for name, _ in companions if host.lexists(os.path.join(directory, name))]
-    if not present:
+
+
+def check_toolkit_companions(host, emit):
+    found = []
+    for directory in toolkit_candidate_dirs(host):
+        present = [name for name, _ in companion_pins() if host.lexists(os.path.join(directory, name))]
+        if present:
+            found.append((directory, present))
+    if not found:
         emit("NOTE toolkit_companions_absent_standalone_run_verify_this_tool_by_its_pr_pinned_hash")
         return "PASS", "companions_absent"
-    if len(present) != len(companions):
-        return "HOLD", "toolkit_companions_incomplete:" + ",".join(present)
-    for name, expected in companions:
-        digest = sha256(host.read_regular(os.path.join(directory, name), MAX_FILE_BYTES))
-        if digest != expected:
-            return "HOLD", "toolkit_companion_mismatch:" + name
+    pins = companion_pins()
+    for directory, present in found:
+        if len(present) != len(pins):
+            return "HOLD", ("toolkit_companions_incomplete:" + os.path.basename(directory)
+                            + ":" + ",".join(present))
+        for name, expected in pins:
+            digest = sha256(host.read_regular(os.path.join(directory, name), MAX_FILE_BYTES))
+            if digest != expected:
+                return "HOLD", ("toolkit_companion_mismatch:" + os.path.basename(directory)
+                                + "/" + name)
+        emit("NOTE toolkit_companions_verified:" + directory)
     return "PASS", "companions_match_reviewed_pins"
 
 

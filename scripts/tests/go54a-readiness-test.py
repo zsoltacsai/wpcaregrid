@@ -15,10 +15,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-OPS = Path(__file__).parents[1] / "production-g1-ops"
+OPS = Path(__file__).parents[1] / "production-g1-diagnostics"
 SPEC = importlib.util.spec_from_file_location("go54a_readiness", OPS / "go54a-readiness.py")
 rd = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(rd)
+
+TOOLKIT_SIBLING = "production-g1-ops"
 
 
 def fake_stat(kind, mode, uid, gid, size=0, mtime_ns=1000):
@@ -482,10 +484,10 @@ class ReadinessTestCase(unittest.TestCase):
     # -- toolkit companions ----------------------------------------------------
 
     def test_companions_matching_pins_pass(self):
-        files, dirs = {}, {"companions": {"mode": 0o755, "uid": 0, "gid": 0}}
-        files["companions/" + rd.UPGRADER_NAME] = {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0}
-        files["companions/" + rd.FETCH_NAME] = {"content": b"fetch", "mode": 0o755, "uid": 0, "gid": 0}
-        files["companions/" + rd.OPS_SUMS_NAME] = {"content": b"sums", "mode": 0o644, "uid": 0, "gid": 0}
+        files = {}
+        files[TOOLKIT_SIBLING + "/" + rd.UPGRADER_NAME] = {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0}
+        files[TOOLKIT_SIBLING + "/" + rd.FETCH_NAME] = {"content": b"fetch", "mode": 0o755, "uid": 0, "gid": 0}
+        files[TOOLKIT_SIBLING + "/" + rd.OPS_SUMS_NAME] = {"content": b"sums", "mode": 0o644, "uid": 0, "gid": 0}
         saved = (rd.EXPECTED_UPGRADER_SHA, rd.EXPECTED_FETCH_SHA, rd.EXPECTED_OPS_SUMS_SHA)
         rd.EXPECTED_UPGRADER_SHA = rd.sha256(b"upgrader")
         rd.EXPECTED_FETCH_SHA = rd.sha256(b"fetch")
@@ -493,17 +495,16 @@ class ReadinessTestCase(unittest.TestCase):
         self.addCleanup(lambda: (setattr(rd, "EXPECTED_UPGRADER_SHA", saved[0]),
                                  setattr(rd, "EXPECTED_FETCH_SHA", saved[1]),
                                  setattr(rd, "EXPECTED_OPS_SUMS_SHA", saved[2])))
-        host = self.healthy_host(files={**self.host.files, **files},
-                                 dirs={**self.host.dirs, **dirs}, script_dir="companions")
-        self.host = host
+        self.host = self.healthy_host(files={**self.host.files, **files}, script_dir="companions")
         self.assertEqual(self.run_main(), 0)
         self.assertIn("CHECK toolkit_companions PASS companions_match_reviewed_pins", self.output())
+        self.assertIn("NOTE toolkit_companions_verified:" + TOOLKIT_SIBLING, self.output())
 
     def test_companion_hash_mismatch_holds(self):
-        files, dirs = {}, {"companions": {"mode": 0o755, "uid": 0, "gid": 0}}
-        files["companions/" + rd.UPGRADER_NAME] = {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0}
-        files["companions/" + rd.FETCH_NAME] = {"content": b"fetch", "mode": 0o755, "uid": 0, "gid": 0}
-        files["companions/" + rd.OPS_SUMS_NAME] = {"content": b"sums", "mode": 0o644, "uid": 0, "gid": 0}
+        files = {}
+        files[TOOLKIT_SIBLING + "/" + rd.UPGRADER_NAME] = {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0}
+        files[TOOLKIT_SIBLING + "/" + rd.FETCH_NAME] = {"content": b"fetch", "mode": 0o755, "uid": 0, "gid": 0}
+        files[TOOLKIT_SIBLING + "/" + rd.OPS_SUMS_NAME] = {"content": b"sums", "mode": 0o644, "uid": 0, "gid": 0}
         saved = (rd.EXPECTED_UPGRADER_SHA, rd.EXPECTED_FETCH_SHA, rd.EXPECTED_OPS_SUMS_SHA)
         rd.EXPECTED_UPGRADER_SHA = rd.sha256(b"different")
         rd.EXPECTED_FETCH_SHA = rd.sha256(b"fetch")
@@ -511,10 +512,30 @@ class ReadinessTestCase(unittest.TestCase):
         self.addCleanup(lambda: (setattr(rd, "EXPECTED_UPGRADER_SHA", saved[0]),
                                  setattr(rd, "EXPECTED_FETCH_SHA", saved[1]),
                                  setattr(rd, "EXPECTED_OPS_SUMS_SHA", saved[2])))
-        self.host = self.healthy_host(files={**self.host.files, **files},
-                                      dirs={**self.host.dirs, **dirs}, script_dir="companions")
+        self.host = self.healthy_host(files={**self.host.files, **files}, script_dir="companions")
         self.assertEqual(self.run_main(), 3)
-        self.assertIn("HOLD toolkit_companion_mismatch:" + rd.UPGRADER_NAME, self.output())
+        self.assertIn("HOLD toolkit_companion_mismatch:" + TOOLKIT_SIBLING + "/" + rd.UPGRADER_NAME,
+                      self.output())
+
+    def test_partial_companion_set_holds(self):
+        files = {TOOLKIT_SIBLING + "/" + rd.UPGRADER_NAME:
+                 {"content": b"upgrader", "mode": 0o755, "uid": 0, "gid": 0}}
+        self.host = self.healthy_host(files={**self.host.files, **files}, script_dir="companions")
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD toolkit_companions_incomplete:" + TOOLKIT_SIBLING, self.output())
+
+    def test_diagnostics_sums_file_pins_exactly_both_tools(self):
+        sums = (OPS / "SHA256SUMS").read_text(encoding="ascii")
+        listed = {}
+        for line in sums.splitlines():
+            digest, name = line.split("  ", 1)
+            listed[name] = digest
+        self.assertEqual(listed, {
+            "go54a-readiness.py": rd.sha256((OPS / "go54a-readiness.py").read_bytes()),
+            "g1-notify-evidence.py": rd.sha256((OPS / "g1-notify-evidence.py").read_bytes()),
+        })
+        self.assertEqual(sorted(p.name for p in OPS.iterdir() if p.is_file()),
+                         ["SHA256SUMS", "g1-notify-evidence.py", "go54a-readiness.py"])
 
     # -- fail-closed identity -------------------------------------------------
 

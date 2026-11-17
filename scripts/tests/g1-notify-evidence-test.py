@@ -12,7 +12,7 @@ import io
 import unittest
 from pathlib import Path
 
-OPS = Path(__file__).parents[1] / "production-g1-ops"
+OPS = Path(__file__).parents[1] / "production-g1-diagnostics"
 SPEC = importlib.util.spec_from_file_location("g1_notify_evidence", OPS / "g1-notify-evidence.py")
 ne = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ne)

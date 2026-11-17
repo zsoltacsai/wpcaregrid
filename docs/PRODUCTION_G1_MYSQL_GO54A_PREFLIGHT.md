@@ -22,14 +22,18 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
 - Payloads pinned by `scripts/SHA256SUMS` (digest
   `0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85`) equal the
   NEW `/usr/local/libexec` targets in the hotfix document.
-- New read-only diagnostics (this change, review pending):
-  - `scripts/production-g1-ops/go54a-readiness.py`
-    (SHA-256 `31056d190d00a49ed338069267c7f1538f34d387e08ba0fa7e03636eda8be604`)
-  - `scripts/production-g1-ops/g1-notify-evidence.py`
+- New read-only diagnostics (this change, review pending) live in their own toolkit
+  directory `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
+  `production-g1-inventory` precedent). The frozen, GO-0-anchored
+  `scripts/production-g1-ops/` transaction toolkit and its `SHA256SUMS`
+  (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
+  23 entries) remain byte-identical and untouched:
+  - `scripts/production-g1-diagnostics/go54a-readiness.py`
+    (SHA-256 `ad5a9ab3a0982773a506f5aaa389ad0073c1d99c010ead5ba672224eda6c0e56`)
+  - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `7b3807923e83282962219827c4b1647bac03b9e29e4ab0ffedf2f4758188806c`)
-  - Both are pinned by the updated `scripts/production-g1-ops/SHA256SUMS`
-    (new file digest
-    `bacd8a62172420fac0dd80b56705ec888b8fb8fbdedd5fb0d2cea18f86f9cfeb`).
+  - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
+    `73efd7d41e520dafdee43fbb90b56a1662651d6783cb1d709757df3b24c72775`)
   - Neither is approved by its local synthetic tests; independent Integration QA
     and AppSec PASS records are required before their output is used in a GO
     decision.
@@ -39,7 +43,7 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
 Run from the approved root console, read-only:
 
 ```
-python3 -I -B /path/to/scripts/production-g1-ops/go54a-readiness.py [--package DIR]
+python3 -I -B /path/to/scripts/production-g1-diagnostics/go54a-readiness.py [--package DIR]
 ```
 
 `--package DIR` additionally validates an already staged GO-5.4a package
