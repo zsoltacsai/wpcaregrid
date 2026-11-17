@@ -51,6 +51,9 @@ class StagingNextControllerTests(unittest.TestCase):
             "package-lock.json": b'{"name":"wpcg-test","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"wpcg-test","version":"1.0.0"}}}\n',
             "bootstrap/app.php": b"<?php return new stdClass();\n",
             "public/index.php": b"<?php // entry\n",
+            "public/build/assets/app-test.js": b"synthetic",
+            "public/build/manifest.json": b'{"resources/js/app.js":{"file":"assets/app-test.js","isEntry":true}}',
+            "storage/logs/.gitignore": b"*\n!.gitignore\n",
             "routes/web.php": b"<?php // routes\n",
             "resources/views/marketing/home.blade.php": b"<h1>synthetic</h1>\n",
             "scripts/build.js": (b"const fs=require('fs');fs.mkdirSync('public/build/assets',{recursive:true});"
@@ -79,12 +82,36 @@ class StagingNextControllerTests(unittest.TestCase):
         self._git("commit", "--quiet", "--allow-empty", "-m", "synthetic release")
 
     def test_package_manifest_is_visible_and_content_matches_git_tree(self):
-        artifact_path, artifact_sha = CONTROLLER._package_release(self.app_sha, self.base_sha, test_only=True)
+        real_run = subprocess.run
+        def fake_run(argv, **kwargs):
+            if len(argv) >= 3 and argv[0] == "/usr/bin/npm" and argv[1:3] == ["run", "build"]:
+                build = Path(kwargs["cwd"]) / "public/build"
+                build.mkdir(parents=True, exist_ok=True)
+                (build / "assets").mkdir(exist_ok=True)
+                (build / "assets/app-test.js").write_bytes(b"synthetic")
+                (build / "manifest.json").write_bytes(
+                    b'{"resources/js/app.js":{"file":"assets/app-test.js","isEntry":true}}')
+                return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+            if argv and argv[0] == "/usr/bin/npm":
+                return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+            return real_run(argv, **kwargs)
+        with mock.patch.object(CONTROLLER.shutil, "which", side_effect=lambda name, **_kw:
+                               "/usr/bin/node" if name == "node" else "/usr/bin/npm"), \
+                mock.patch.object(CONTROLLER, "_run", side_effect=lambda argv, **_kw:
+                                  b"v22.12.0\n" if argv[0].endswith("node") else b"10.9.0\n"), \
+                mock.patch.object(CONTROLLER, "_database_migrations_between", return_value=[]), \
+                mock.patch.object(CONTROLLER.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(CONTROLLER.os, "geteuid", return_value=1000), \
+                mock.patch.object(CONTROLLER.os, "getuid", return_value=1000):
+            artifact_path, artifact_sha = CONTROLLER._package_release(self.app_sha, self.base_sha, test_only=True)
         self.assertEqual(hashlib.sha256(artifact_path.read_bytes()).hexdigest(), artifact_sha)
         with tarfile.open(artifact_path, "r:") as archive:
             members = archive.getmembers()
             names = [member.name for member in members]
             self.assertEqual(names.count("release-manifest.json"), 1)
+            self.assertEqual(names.count("public/build/manifest.json"), 1)
+            self.assertEqual(names.count("public/build/assets/app-test.js"), 1)
+            self.assertNotIn("storage/logs/.gitignore", names)
             manifest = BACKEND._strict_json(archive.extractfile("release-manifest.json").read())
             self.assertEqual(manifest["application_sha"], self.app_sha)
             self.assertEqual(manifest["base_application_sha"], self.base_sha)
@@ -100,7 +127,9 @@ class StagingNextControllerTests(unittest.TestCase):
             helper_artifact_sha256=CONTROLLER.HELPER_ARTIFACT_SHA256)
         excluded = {".github/workflows/ci.yml", "CHANGELOG.md", ".styleci.yml"}
         self.assertEqual(set(name for name in files if not name.startswith("public/build/")),
-                         set(self.entries) - excluded)
+                         set(self.entries) - excluded - {"storage/logs/.gitignore",
+                                                         "public/build/manifest.json",
+                                                         "public/build/assets/app-test.js"})
         self.assertIn("public/build/manifest.json", files)
         self.assertTrue(BACKEND._git_archive_excludes(".github/workflows/ci.yml"))
         self.assertTrue(BACKEND._git_archive_excludes("CHANGELOG.md"))

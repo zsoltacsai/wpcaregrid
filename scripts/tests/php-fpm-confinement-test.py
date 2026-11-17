@@ -3119,6 +3119,7 @@ class PackageImmutability(unittest.TestCase):
     # version -> (git tree id of deploy/php-fpm-confinement/<version> at its reviewed commit, provenance commit)
     # The tree id is the durable pin: protected squash merges need not preserve the source PR commit as an ancestor.
     FROZEN = {
+        "1.0.5": ("e8e59b769ed6c6acd85a3bf259364bace5ec374b", "37eefe29e694be434dff2dc70d80cfb221c9903b"),
         "1.0.4": ("71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912", "9a54ca6581ea0fe173667236dcd6555f10ccdc12"),
         "1.0.1": ("202e548782e0071d55fd9efc369b790e556ef43c", "547212372efb80e8acf7ff2cd55951950cf94ea8"),
         "1.0.2": ("90502b788a660347c52a83ccbe2c99c965fba2ef", "f478c8a70f91078e828ed89403cb9f890457c195"),
@@ -3185,6 +3186,9 @@ class PackageImmutability(unittest.TestCase):
     def test_1_0_5_is_a_distinct_package_with_split_cli_profiles_and_pinned_sibling_canary(self) -> None:
         new = ARTIFACTS
         for version in self.FROZEN:
+            if version == "1.0.5":
+                # ARTIFACTS *is* 1.0.5: distinctness is asserted against the frozen predecessors below instead.
+                continue
             old = ROOT / "deploy" / "php-fpm-confinement" / version
             old_files = {str(p.relative_to(old)) for p in old.rglob("*") if p.is_file()}
             new_files = {str(p.relative_to(new)) for p in new.rglob("*") if p.is_file()}
@@ -3343,12 +3347,14 @@ class BindingManifest(unittest.TestCase):
         self.assertIn("Phase B stays disabled", deploy["phase_b_interpreter"])
         self.assertEqual(self.binding["schema"], 1)
 
-    def test_contract_module_is_not_carried_in_this_branch(self) -> None:
-        self.assertFalse((ROOT / "scripts/deployment_environment_contract_2_1_3.py").exists())
-        self.assertFalse((ROOT / "scripts/tests/deployment-environment-contract-2-1-3-test.py").exists())
+    def test_contract_module_is_carried_and_ci_covers_the_integration(self) -> None:
+        # GO-14 Workstream A carries the contract that pins this package. The
+        # confinement suite still owns the package bytes; the helper suite owns
+        # the schema-3 binding, and both run in CI.
+        self.assertTrue((ROOT / "scripts/deployment_environment_contract_2_1_3.py").exists())
         ci = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertNotIn("deployment-environment-contract-2-1-3-test", ci)
         self.assertIn("php-fpm-confinement-test.py", ci)
+        self.assertIn("production-helper-2-1-3-test.py", ci)
 
 
 class AbstractSocketDenial(unittest.TestCase):
