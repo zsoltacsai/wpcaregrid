@@ -321,7 +321,14 @@ def validate_lexical_sql_mode(tokens):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
             continue
         if tokens[i + 1].kind == "SYMBOL" and tokens[i + 1].value == "=":
-            if i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING":
+            statement_end = next((j for j in range(i + 2, len(tokens))
+                                  if tokens[j].kind == "SYMBOL" and tokens[j].value == ";"), len(tokens))
+            # MySQL concatenates adjacent string literals. Accept exactly one
+            # complete literal through the statement terminator; validating
+            # only the first STRING would let a second literal append a
+            # lexer-changing mode such as ANSI_QUOTES.
+            if (i + 2 >= len(tokens) or tokens[i + 2].kind != "STRING"
+                    or statement_end != i + 3):
                 refuse("SQL_LEXICAL_MODE_UNSUPPORTED")
             literal = tokens[i + 2].value
             if not re.fullmatch(r"'[A-Za-z0-9_, ]*'", literal):

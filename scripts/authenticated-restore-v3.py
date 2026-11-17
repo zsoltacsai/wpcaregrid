@@ -532,9 +532,15 @@ def _validate_defaults(policy, owner_uid):
         refuse("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN")
     # mysqldump reads both [client] and [mysqldump]. Keep its option group out
     # of the trusted defaults file so the fixed command determines dump shape.
-    if any(re.fullmatch(rb"\s*\[mysqldump\]\s*(?:[#;].*)?", line, re.IGNORECASE)
-           for line in raw.splitlines()):
-        refuse("MYSQLDUMP_DEFAULTS_GROUP_FORBIDDEN")
+    for line in raw.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(b"["):
+            closing = stripped.find(b"]")
+            if closing < 0:
+                refuse("MYSQL_DEFAULTS_GROUP_INVALID")
+            group = stripped[1:closing].strip().lower()
+            if group in {b"mysql", b"mysqldump"}:
+                refuse("MYSQL_TOOL_DEFAULTS_GROUP_FORBIDDEN")
     return _sha(raw)
 
 

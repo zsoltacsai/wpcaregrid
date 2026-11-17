@@ -304,12 +304,27 @@ def test_capture_adds_audited_mysql84_selector_and_audits_before_signing():
         assert b"STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION" in captured
         assert b"DEFINER=`restore_owner`@`localhost`" in captured
         V2.audit_sql(captured, V3.CAPTURE_AUDIT_TARGET, world.manifest["approved_definer"])
-    with tempfile.TemporaryDirectory() as directory:
-        world = World(directory)
-        unsafe_dump = b"SET NAMES gbk;\nCREATE TABLE `migrations` (`id` int NOT NULL);\n"
-        expect("DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED", world.capture,
-               dump_sql=unsafe_dump)
-        assert not world.record_path.exists()
+    unsafe_cases = (
+        (b"SET NAMES gbk;\nCREATE TABLE `migrations` (`id` int NOT NULL);\n",
+         "DUMP_UNSAFE_STATEMENT_MYSQL_CHARSET_CHANGE_UNSUPPORTED"),
+        (MYSQL84_DUMP_BODY_FIXTURE.replace(
+            b"STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION", b"ANSI_QUOTES"), "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (MYSQL84_DUMP_BODY_FIXTURE.replace(
+            b"STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION", b"' 'ANSI_QUOTES"),
+         "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (MYSQL84_DUMP_BODY_FIXTURE.replace(
+            b"SET sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
+            b"SET sql_mode = 'STRICT_TRANS_TABLES,' 'NO_BACKSLASH_ESCAPES'"),
+         "SQL_LEXICAL_MODE_UNSUPPORTED"),
+        (MYSQL84_DUMP_BODY_FIXTURE.replace(
+            b"SET sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'",
+            b"SET sql_mode = 'STRICT_TRANS_TABLES' | 4"), "SQL_LEXICAL_MODE_UNSUPPORTED"),
+    )
+    for unsafe_dump, code in unsafe_cases:
+        with tempfile.TemporaryDirectory() as directory:
+            world = World(directory)
+            expect(code, world.capture, dump_sql=unsafe_dump)
+            assert not world.record_path.exists()
 
 
 def test_capture_refuses_stale_oversized_or_untrusted_archives_and_begin_records():
@@ -1139,8 +1154,11 @@ def test_defaults_metadata_and_deployment_identity_are_observed():
         expect("MYSQL_DEFAULTS_UNAVAILABLE", V3._validate_defaults, policy, OWNER)
         defaults.write_text("!include /untrusted\n")
         expect("MYSQL_DEFAULTS_INCLUDE_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
-        defaults.write_text("[client]\nuser=synthetic\n[mysqldump]\nset-gtid-purged=ON\n")
-        expect("MYSQLDUMP_DEFAULTS_GROUP_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        for group in ("[mysqldump]", "[mysqldump ]arbitrary-tail", "[mysql ] trailing"):
+            defaults.write_text(f"[client]\nuser=synthetic\n{group}\nuser=other\n")
+            expect("MYSQL_TOOL_DEFAULTS_GROUP_FORBIDDEN", V3._validate_defaults, world.source_policy, OWNER)
+        defaults.write_text("[broken\nuser=synthetic\n")
+        expect("MYSQL_DEFAULTS_GROUP_INVALID", V3._validate_defaults, world.source_policy, OWNER)
         defaults.write_text("[client]\nuser=synthetic\n")
         V3.observe_deployment(world.source_policy, owner_uid=OWNER)
         receipt = read_json(world.dir / "deployment.json")

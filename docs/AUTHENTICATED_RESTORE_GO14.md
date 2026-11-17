@@ -73,9 +73,9 @@ The receipt environment/host/SHA must match policy. Receipt hash and current
 active identity are checked before and after the dump. The record retains the
 receipt hash and successful dump exit status. Defaults files must be root-owned,
 single-link regular `0600` files with protected ancestors; symlinks and include
-directives are refused before client use. A `[mysqldump]` defaults group is
-also refused so the fixed command remains the sole authority for dump-format
-options. Policy/defaults drift also stops signing.
+directives are refused before client use. `[mysql]` and `[mysqldump]` defaults
+groups are refused so both identity observation and the fixed dump command use
+the same shared `[client]` credentials. Policy/defaults drift also stops signing.
 
 This observes the deployment receipt and active release identity. **The source
 application SHA is attested by the trusted successful-deployment publisher**;
