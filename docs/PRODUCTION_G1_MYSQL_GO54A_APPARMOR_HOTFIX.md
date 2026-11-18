@@ -48,20 +48,32 @@ remediated; nothing else in the transaction changes.
      the php-fpm precedent ships in its shared abstraction
      (`deploy/php-fpm-confinement/1.0.6/apparmor/abstractions/wpcaregrid-php-fpm-common`,
      enforced by its `AbstractSocketDenial` tests). mysqld's own socket and
-     systemd notify are path sockets; no `unix` allow rule of any kind
-     exists in the generated profiles.
+     systemd notify are path sockets; the generated profiles carry NO
+     `unix` allow rule — their only `unix` rules are these two denies,
+     while unix-family socket creation is granted only by the generic
+     `network unix stream,` / `network unix dgram,` rules above, whose
+     endpoint reach is bounded by the profile's path rules plus these
+     denies.
 
-   Production precedent: the php-fpm confinement 1.0.6 profiles — confined
-   `Type=notify` services, deployed on the production host per the
-   GO-13/GO-20 release records (this document cites rule-set equivalence;
-   the deployment itself is evidenced by those records and the #174
-   ledger) — grant exactly this pair and nothing more for notification:
-   `/run/systemd/notify w,` and `network unix dgram,`
-   (`deploy/php-fpm-confinement/1.0.6/apparmor/wpcaregrid-php-fpm-production`
-   lines 45 and 60), and their shared abstraction carries the same
-   abstract-namespace denies now adopted inline by the G1 profiles. The G1
-   permission set is therefore the precedent's rule set in full: pair plus
-   boundary denies, with path rules the only unix socket reach.
+   Production precedent: the repository's production environment contract
+   binds the production php-fpm confinement to package **1.0.5** —
+   `scripts/deployment_environment_contract_2_1_4.py` pins it
+   (`package_version="1.0.5"`, its immutable Git tree object and
+   `SHA256SUMS` digest), and GO-20 keeps helper 2.1.4 bound to 1.0.5 while
+   1.0.6 remains source-preparation-only and unbound
+   (`docs/PHP_FPM_CONFINEMENT_GO20_PHP85.md`). The bound 1.0.5 production
+   profile is a confined `Type=notify` service
+   (`deploy/php-fpm-confinement/1.0.5/systemd/wpcaregrid-production-php8.4-fpm.service:12`)
+   that grants exactly this pair and nothing more for notification:
+   `/run/systemd/notify w,` at line 40 and `network unix dgram,` at line
+   55, with its shared abstraction carrying the same abstract-namespace
+   denies at lines 32-33 — each rule byte-identical to the corresponding
+   1.0.6 rule (lines 45, 60 and 32-33 of the source-only successor). The
+   G1 permission set is therefore the production-bound precedent's rule
+   set in full: pair plus boundary denies, with path rules the only unix
+   socket reach. The deployment's host-stage execution is evidenced by the
+   GO-13 records and the #174 release ledger; this document cites the
+   in-repo contract binding and the byte-identical rule block.
 
    The earlier gate in this document — no notify widening before the complete
    audit records and a demonstrated necessity — is closed by the GO-20.29

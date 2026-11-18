@@ -423,6 +423,10 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
+    # Content anchor, not a pre-change baseline: each digest pins the CURRENT
+    # generated profile text minus the exact socket-lock rules. The add-only
+    # property relative to the reviewed base is established by the
+    # base-vs-HEAD profile diff and the exact-rule tests, not by this digest.
     PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "7993e652c3474d6885fe61c2444405e02b0c54fca13785237ee4ae9048b419b0",
                                  "wpcaregrid-mysql-production-restore": "3f33002e7c433e89b73b298d4159ae93b5bcb83d87610b0f53f3afb8ad2f47f7"}
 
@@ -490,8 +494,16 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 lines = CONTRACT.apparmor_profile(instance).splitlines()
                 self.assertEqual(lines.count("  audit deny unix (connect, send, receive) peer=(addr=@**),"), 1)
                 self.assertEqual(lines.count("  audit deny unix (bind, listen, accept) addr=@**,"), 1)
-                unix_lines = [l for l in lines if l.lstrip().startswith("unix") or "deny unix" in l]
+                # Exhaustive unix surface (QA/AppSec round 3): every
+                # non-comment line mentioning "unix" is collected — network
+                # family rules, unix rules, allow or deny, audit or not — so
+                # adding e.g. "network unix seqpacket," or any
+                # "audit allow unix ..." rule fails here unconditionally,
+                # not only via the hash pins.
+                unix_lines = [l for l in lines if "unix" in l and not l.lstrip().startswith("#")]
                 self.assertEqual(sorted(unix_lines), sorted([
+                    "  network unix stream,",
+                    "  network unix dgram,",
                     "  audit deny unix (connect, send, receive) peer=(addr=@**),",
                     "  audit deny unix (bind, listen, accept) addr=@**,",
                 ]))
