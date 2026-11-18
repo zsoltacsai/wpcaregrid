@@ -330,12 +330,14 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
         unclear.append("marker_sequence_invalid:end_without_start")
     elif starts and ends and ends[0][0] < starts[0][0]:
         unclear.append("marker_sequence_invalid:end_before_start")
-    if (len(starts) == 1 and len(ends) == 1
-            and starts[0][2] is not None and ends[0][2] is not None
-            and ends[0][2] < starts[0][2]):
-        # Round-2 (AppSec F-1): a byte-ordered but chronologically reversed
-        # marker pair is a contradictory event sequence, and its reversed END
-        # timestamp must never back a PROVEN_COMPLETE or the touch evidence.
+    # Round-2/3 (AppSec F-1): a byte-ordered but chronologically reversed
+    # marker pair is a contradictory event sequence. Its reversed END
+    # timestamp must neither back a PROVEN_COMPLETE nor drive the
+    # timestamp-derived POST_INIT touch evidence.
+    timestamps_contradictory = (len(starts) == 1 and len(ends) == 1
+                                and starts[0][2] is not None and ends[0][2] is not None
+                                and ends[0][2] < starts[0][2])
+    if timestamps_contradictory:
         unclear.append("marker_sequence_invalid:end_timestamp_before_start_timestamp")
     if any(item[2] is None for item in events):
         unclear.append("marker_timestamp_unparseable")
@@ -352,7 +354,7 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
                  innodb_started=INNODB_STARTED in log, innodb_ended=INNODB_ENDED in log,
                  errors=init_errors, post_errors=post_errors,
                  log_truncated=facts["log_size"] is not None and facts["log_size"] > LOG_LIMIT)
-    if ordered_section:
+    if ordered_section and not timestamps_contradictory:
         facts["end_ts"] = ends[0][3] or "-"
         if ends[0][2] is not None:
             facts["post_touched"] = "yes" if newest_mtime > ends[0][2] + TOUCH_GRACE_SECONDS else "no"

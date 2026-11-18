@@ -302,15 +302,25 @@ class InitStateTests(unittest.TestCase):
         self.assertIn("datadir_too_large_to_scan", reasons)
 
     def test_end_timestamp_before_start_timestamp_is_unclear(self):
-        # Round-2 fix (AppSec F-1): a byte-ordered but chronologically
-        # reversed marker pair contradicts the event sequence; the reversed
-        # END timestamp must never back a PROVEN_COMPLETE or touch evidence.
-        log = (line("2026-11-09T20:34:16.000000Z", "[Server] [MY-015017] [Server] MySQL Server Initialization - start.") +
-               line("2026-11-09T20:00:00.000000Z", "[Server] [MY-015018] [Server] MySQL Server Initialization - end."))
-        box = self.sandbox(log=log)
-        state, reasons, facts = box.classify()
-        self.assertEqual(state, "UNCLEAR")
-        self.assertIn("marker_sequence_invalid:end_timestamp_before_start_timestamp", reasons)
+        # Round-2/3 fix (AppSec F-1): a byte-ordered but chronologically
+        # reversed marker pair contradicts the event sequence. The reversed
+        # END timestamp must neither back a PROVEN_COMPLETE nor drive the
+        # POST_INIT touch evidence (end_ts/touched/newest_mtime stay "-"),
+        # in facts AND in the report output.
+        for end_ts in ("2026-11-09T20:00:00.000000Z", "2026-11-09T20:27:08.099999Z"):
+            with self.subTest(end_ts=end_ts):
+                log = (line("2026-11-09T20:27:08.100000Z", "[Server] [MY-015017] [Server] MySQL Server Initialization - start.") +
+                       line(end_ts, "[Server] [MY-015018] [Server] MySQL Server Initialization - end."))
+                box = self.sandbox(log=log)
+                state, reasons, facts = box.classify()
+                self.assertEqual(state, "UNCLEAR")
+                self.assertIn("marker_sequence_invalid:end_timestamp_before_start_timestamp", reasons)
+                self.assertEqual(facts["end_ts"], "-")
+                self.assertEqual(facts["post_touched"], "-")
+                self.assertEqual(facts["post_newest_mtime"], "-")
+                collected = []
+                go53.report({box.name: (state, reasons)}, {box.name: facts}, {}, out=collected.append)
+                self.assertIn("POST_INIT end_ts=- touched=- newest_mtime=- truncated=no", "\n".join(collected))
 
     def test_error_token_after_end_token_on_the_same_line_is_post_init(self):
         end_line = (T_END.encode() + b" [Server] [MY-015018] [Server] MySQL Server Initialization - end."

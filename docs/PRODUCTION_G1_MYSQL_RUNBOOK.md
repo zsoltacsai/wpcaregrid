@@ -37,7 +37,7 @@ directory in place for read-only investigation; reruns get a new path.
 ```bash
 ( set -euo pipefail; umask 077
   OPS_SHA=0951d9e829364296796a1d4acd303feef698cbc7
-  SUMS_SHA256=6a486cff56120c4862b76c06f9c867932ea28520b5817ade5b7799c83998da21
+  SUMS_SHA256=df03747b8bc75567b74573fd5aa965e3df653f8561bb10a5a825470303e74c03
   [[ $OPS_SHA =~ ^[0-9a-f]{40}$ && $SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: pins malformed"; exit 1; }
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')"
   [[ $RUN_ID =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || { echo "STOP: run id malformed"; exit 1; }

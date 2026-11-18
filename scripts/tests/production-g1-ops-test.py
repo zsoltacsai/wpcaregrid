@@ -170,7 +170,7 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
         toolkit_commit = "0951d9e829364296796a1d4acd303feef698cbc7"
-        manifest_pin = "6a486cff56120c4862b76c06f9c867932ea28520b5817ade5b7799c83998da21"
+        manifest_pin = "df03747b8bc75567b74573fd5aa965e3df653f8561bb10a5a825470303e74c03"
         # Read the exact toolkit manifest shipped with this source snapshot.
         # The pinned digest below anchors its full byte content and filename list.
         manifest = (OPS / "SHA256SUMS").read_bytes()
