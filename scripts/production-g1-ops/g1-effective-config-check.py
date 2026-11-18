@@ -25,7 +25,7 @@ import sys
 import types
 
 CONTRACT_PATH = "/usr/local/libexec/production_g1_mysql_contract.py"
-CONTRACT_SHA256 = "0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8"  # G1 socket-lock AppArmor hotfix
+CONTRACT_SHA256 = "cdebda049cb1412e656882fe02d50f7bfaed1226e7439023d37a43beb8cbc2dc"  # G1 socket-lock + notify AppArmor hotfix
 MY_PRINT_DEFAULTS = "/usr/bin/my_print_defaults"
 MYSQLD = "/usr/sbin/mysqld"
 BASE_CONFIG = "/etc/mysql/my.cnf"

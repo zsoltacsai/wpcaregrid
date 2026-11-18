@@ -423,8 +423,8 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
-    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d",
-                            "wpcaregrid-mysql-production-restore": "ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e"}
+    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "e579cda816c7e40d942b94da8632b02d9a6d93084c49194cd80a3cd623cbf5af",
+                                 "wpcaregrid-mysql-production-restore": "51b537924907737ba67f5862075be1e6bf0ca3bc5c6a972ce41619bf9fa62b0a"}
 
     def test_profiles_add_only_exact_socket_lock_rules_to_the_previous_profile(self):
         for instance in CONTRACT.INSTANCES.values():
@@ -984,13 +984,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-            "production_g1_mysql_contract.py": "0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8",
-            "production-g1-mysql-manifest.json": "eef752c71e15c3a41f1cf5948305b699a5eba6a91b66aeae243787ba9e4e5f9b",
+            "production_g1_mysql_contract.py": "cdebda049cb1412e656882fe02d50f7bfaed1226e7439023d37a43beb8cbc2dc",
+            "production-g1-mysql-manifest.json": "cfc07bfd6970f12deedc4dcee244b7fca9af9b3acb8def8e829aaac2c12aceec",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85")
+                         "c6d2783825f247afd0f7c8749d570646d65344a9fc99126f6d5627d1fc423f9e")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

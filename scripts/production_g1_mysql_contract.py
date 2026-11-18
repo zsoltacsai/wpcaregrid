@@ -478,6 +478,7 @@ profile {instance.apparmor_profile} {{
   deny {other.datadir}/** rwklm,
   deny {other.datadir}/** x,
   /run/mysqld/ r,
+  /run/systemd/notify w,
   {instance.socket} rwk,
   {instance.socket}.lock rwk,
   {instance.pid_file} rwk,
