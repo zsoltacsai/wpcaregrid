@@ -274,7 +274,7 @@ These remain mandatory before any state-changing staging or production release, 
 | Quarantine write, undo, permissions, deny rules | READY | WordPress tests (Linux CI checks permissions) |
 | Who may hold `security.remediate` | NOT READY | operator procedure written |
 | Secret scanning | READY | gitleaks in CI over the full history: clean (CI run #2); the allowlist holds only named dummy test values |
-| Dependency advisories | READY | `composer audit` (app and connector tests) clean; npm: `scripts/npm_audit_gate.py` passes with the single expiring GHSA-fc5q-39xc-vjpf exception (docs/SECURITY_EXCEPTIONS.md, expires 2026-12-01) |
+| Dependency advisories | READY | `composer audit` (app and connector tests) clean; npm: plain `npm audit --audit-level=high` clean (the GHSA-fc5q-39xc-vjpf exception CLOSED 2026-11-18 — advisory withdrawn upstream; docs/SECURITY_EXCEPTIONS.md) |
 | Role isolation (customer / operator / owner) | READY | AuthorizationMatrixTest covers every route of every area |
 
 ## Admin Access
