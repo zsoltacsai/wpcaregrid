@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `98aa0ee66cac4c6219bca96bca924fa6f0448db54548e12345fbed95dc80348c`)
+    (SHA-256 `3fe28be8ad558d524bc2a881dd55407b9fa1339931fe2ee6217a62b3b13c219a`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `a81f57cc3d13d3606808294fdcd898d600d63446a2b3c1a7a176ae489feeb2f8`)
+    `3cfd93556296c818ec2a949ca17cd3c20c878d218292eac277b08cda8d133a09`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -114,6 +114,14 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     preflight (where the serialization requirement lives); the root check
     label states exactly what it proves (`not_root_euid`, with a note that
     console authorization is a separate operator record).
+  - Reviewer corrections included in v1.10.0 (AppSec round 10, GPT Medium
+    via T3): all remaining operator-facing documentation about the vendor
+    MySQL check is observation-scoped — the tool docstring says the initial
+    and closing observations must match (never "MainPID stable"), the
+    preflight item 4 names the actual emitted result
+    (`vendor_mysql_revalidation`), and the post-transaction instruction
+    references the pre-transaction `vendor_mysql_observations_match_at_close`
+    record for the PID comparison. No code logic changed in this round.
   - Reviewer corrections included in v1.7.0 (AppSec round 7, readiness tool):
     the verdict semantics are stated honestly everywhere — ADVISORY,
     NON-ATOMIC evidence: the closing re-observation narrows but cannot
@@ -184,7 +192,7 @@ Every item is required before the Owner may issue a GO-5.4a execution GO.
 | 1 | Both G1 systemd units | `mysql@wpcaregrid-production.service` and `mysql@wpcaregrid-production-restore.service` exactly `LoadState=loaded`, `ActiveState=inactive` (masked, not-found, active or failed are HOLD) | readiness `g1_units_inactive` |
 | 2 | Five installed artifacts | Each of the five pinned paths exists as a regular root:root file with the exact mode and the exact OLD SHA-256; any NEW hash is reported as already-upgraded (HOLD for this transaction), anything else is a mismatch | readiness `installed_baseline` (`baseline=old`) |
 | 3 | Both G1 AppArmor profiles | `wpcaregrid-mysql-production` and `wpcaregrid-mysql-production-restore` each loaded exactly once and `(enforce)`; the vendor `/usr/sbin/mysqld` loaded line present exactly once | readiness `apparmor_enforced` |
-| 4 | Vendor MySQL identity | `mysql.service` active with a numeric MainPID whose `/proc/<pid>/comm` is `mysqld`, and the MainPID stable across the run | readiness `vendor_mysql_service` + `vendor_mysql_stability` |
+| 4 | Vendor MySQL identity | `mysql.service` active with a numeric MainPID whose `/proc/<pid>/comm` is `mysqld`; the closing re-observation must report the same ActiveState and MainPID (matching observations, never continuous stability) | readiness `vendor_mysql_service` + `vendor_mysql_revalidation` |
 | 5 | Vendor profile source | `/etc/apparmor.d/usr.sbin.mysqld` regular root:root, digest recorded for pre/post comparison | readiness `vendor_profile_source` |
 | 6 | Datadirs preserved | Both instance datadirs present, mysql:mysql, no group/other-write entries, no symlinks or special entries, bounded combined fingerprint recorded | readiness `datadirs_intact` |
 | 7 | Logs preserved | Both instance logs regular mysql:mysql 0600, bounded combined fingerprint recorded (no log content is printed) | readiness `mysql_logs_intact` |
@@ -235,7 +243,9 @@ by the transaction tool itself at execution time, and the readiness notes say so
 8. **Post-transaction verification.** Re-run `go54a-readiness.py`; the expected
    result is `installed_baseline HOLD already_upgraded_baseline=new` with every
    other check PASS, the five NEW hashes on disk, both profiles enforced, the
-   vendor PID unchanged and identical datadir/log fingerprints. Any other
+   the vendor MySQL `vendor_mysql_revalidation` result reporting
+   `vendor_mysql_observations_match_at_close` with the same MainPID as the
+   pre-transaction record, and identical datadir/log fingerprints. Any other
    result: stop and investigate; do not retry.
 9. **Separate follow-up decisions.** A later GO-5.4 start of the production G1
    instance is a separate Owner decision and must never be chained to this

@@ -11,7 +11,8 @@ preflight the upgrader itself will demand:
 
   both G1 units exactly inactive, the five installed artifacts exactly at the
   OLD pins (NEW is reported as already-upgraded, never as ready), both G1
-  AppArmor profiles enforced, vendor mysql.service identity and MainPID stable,
+  AppArmor profiles enforced, vendor mysql.service identity (initial and closing
+  observations must match on ActiveState and MainPID),
   both datadirs/logs preserved (combined fingerprints only, no raw content),
   no active or interrupted GO-5.4a transaction (journal, temporary files,
   transaction lock), and explicit validation of any staged GO-5.4a package.
@@ -60,7 +61,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
