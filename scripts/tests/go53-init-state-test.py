@@ -287,6 +287,58 @@ class InitStateTests(unittest.TestCase):
         self.assertTrue(facts["log_truncated"])
         self.assertEqual(facts["post_errors"], 3)
 
+    def test_walk_limit_returns_structured_unclear_not_crash(self):
+        # Round-2 fix (QA B-1): the WALK_LIMIT early return must keep the
+        # (size, newest) tuple contract so an oversized datadir yields the
+        # structured UNCLEAR reason instead of a TypeError.
+        box = self.sandbox(log=INIT_SECTION)
+        saved = go53.WALK_LIMIT
+        try:
+            go53.WALK_LIMIT = 3
+            state, reasons, facts = box.classify()
+        finally:
+            go53.WALK_LIMIT = saved
+        self.assertEqual(state, "UNCLEAR")
+        self.assertIn("datadir_too_large_to_scan", reasons)
+
+    def test_end_timestamp_before_start_timestamp_is_unclear(self):
+        # Round-2 fix (AppSec F-1): a byte-ordered but chronologically
+        # reversed marker pair contradicts the event sequence; the reversed
+        # END timestamp must never back a PROVEN_COMPLETE or touch evidence.
+        log = (line("2026-11-09T20:34:16.000000Z", "[Server] [MY-015017] [Server] MySQL Server Initialization - start.") +
+               line("2026-11-09T20:00:00.000000Z", "[Server] [MY-015018] [Server] MySQL Server Initialization - end."))
+        box = self.sandbox(log=log)
+        state, reasons, facts = box.classify()
+        self.assertEqual(state, "UNCLEAR")
+        self.assertIn("marker_sequence_invalid:end_timestamp_before_start_timestamp", reasons)
+
+    def test_error_token_after_end_token_on_the_same_line_is_post_init(self):
+        end_line = (T_END.encode() + b" [Server] [MY-015018] [Server] MySQL Server Initialization - end."
+                    b" [ERROR] [MY-000004] same-line trailing error\n")
+        box = self.sandbox(log=INIT_SECTION.replace(
+            line(T_END, "[Server] [MY-015018] [Server] MySQL Server Initialization - end."), end_line))
+        state, reasons, facts = box.classify()
+        self.assertEqual(state, "PROVEN_COMPLETE")
+        self.assertEqual(facts["errors"], 0)
+        self.assertEqual(facts["post_errors"], 1)
+
+    def test_end_marker_as_last_line_without_trailing_newline(self):
+        box = self.sandbox(log=INIT_SECTION[:-1])
+        state, reasons, facts = box.classify()
+        self.assertEqual(state, "PROVEN_COMPLETE")
+
+    def test_instance_process_present_is_unclear(self):
+        box = self.sandbox(log=INIT_SECTION)
+        fake_pid = box.root / "proc" / "4242"
+        fake_pid.mkdir()
+        (fake_pid / "stat").write_text(
+            "4242 (mysqld) S 1 1 1 0 -1 4194304 100 0 0 0 1 2 3 4 5 6 7 0 0 20 0 1 0 1000 2000 3000 4000 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n")
+        (fake_pid / "cmdline").write_bytes(
+            b"/usr/sbin/mysqld\0--defaults-group-suffix=@wpcaregrid-production\0")
+        state, reasons, facts = box.classify()
+        self.assertEqual(state, "UNCLEAR")
+        self.assertIn("instance_process_present", reasons)
+
     def test_generated_password_never_appears_in_facts_reasons_or_output(self):
         secret = "SECRETPW123"
         password_line = line("2026-11-09T20:34:10.000000Z",

@@ -141,7 +141,7 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                     seen += 1
                     if seen > WALK_LIMIT:
                         unclear.append("datadir_too_large_to_scan")
-                        return size
+                        return size, newest
                     try:
                         before = os.stat(entry, dir_fd=current_fd, follow_symlinks=False)
                     except OSError:
@@ -330,6 +330,13 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
         unclear.append("marker_sequence_invalid:end_without_start")
     elif starts and ends and ends[0][0] < starts[0][0]:
         unclear.append("marker_sequence_invalid:end_before_start")
+    if (len(starts) == 1 and len(ends) == 1
+            and starts[0][2] is not None and ends[0][2] is not None
+            and ends[0][2] < starts[0][2]):
+        # Round-2 (AppSec F-1): a byte-ordered but chronologically reversed
+        # marker pair is a contradictory event sequence, and its reversed END
+        # timestamp must never back a PROVEN_COMPLETE or the touch evidence.
+        unclear.append("marker_sequence_invalid:end_timestamp_before_start_timestamp")
     if any(item[2] is None for item in events):
         unclear.append("marker_timestamp_unparseable")
     start_pos = starts[0][0] if len(starts) == 1 else -1
