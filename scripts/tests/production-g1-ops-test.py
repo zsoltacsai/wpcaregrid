@@ -103,7 +103,7 @@ class ToolkitStaticTest(unittest.TestCase):
             self.assertIn(guard, source)
         for forbidden in ('"start"', "mysqld --initialize", "aa-complain", "aa-disable"):
             self.assertNotIn(forbidden, source)
-        for pin in ("ea04075234186c26e85f25b2dc08aa41366a701ca4258c31b1310a9353a69257",
+        for pin in ("c507e07575f845307c9c354ed830d34ce20c13f471644d9e4357fd070ee24bfd",
                     upgrade.NEW[upgrade.HELPER], upgrade.NEW[upgrade.CONTRACT], upgrade.NEW[upgrade.MANIFEST]):
             self.assertIn(pin, fetch)
         for forbidden in ("systemctl start", "mysqld --initialize", "aa-complain", "aa-disable"):
@@ -170,7 +170,7 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
         toolkit_commit = "0951d9e829364296796a1d4acd303feef698cbc7"
-        manifest_pin = "1d5b61767da7610657d418cbe711530715e52c90c7cfe6eb0b19c0c43b5fdd9f"
+        manifest_pin = "92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d"
         # Read the exact toolkit manifest shipped with this source snapshot.
         # The pinned digest below anchors its full byte content and filename list.
         manifest = (OPS / "SHA256SUMS").read_bytes()

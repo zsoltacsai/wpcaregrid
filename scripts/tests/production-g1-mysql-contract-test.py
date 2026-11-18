@@ -423,8 +423,8 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
-    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "eb042bb4a0d1d5a64c1cbef6fa29d204997d7ae9609856e7b13759976e8f6d50",
-                                 "wpcaregrid-mysql-production-restore": "39e076d4dc6a010d48d37dd64802a83f4839e29a92f6bcf5096d6f36e9332348"}
+    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "7993e652c3474d6885fe61c2444405e02b0c54fca13785237ee4ae9048b419b0",
+                                 "wpcaregrid-mysql-production-restore": "3f33002e7c433e89b73b298d4159ae93b5bcb83d87610b0f53f3afb8ad2f47f7"}
 
     def test_profiles_add_only_exact_socket_lock_rules_to_the_previous_profile(self):
         for instance in CONTRACT.INSTANCES.values():
@@ -477,6 +477,24 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 self.assertNotIn("  network inet dgram,", lines)
                 self.assertNotIn("  network inet6 dgram,", lines)
                 self.assertFalse([l for l in lines if l.startswith("  network netlink")])
+
+    def test_profiles_deny_abstract_namespace_unix_sockets_like_the_php_fpm_precedent(self):
+        # GO-20.31 AppSec round 2: abstract-namespace unix sockets bypass
+        # every path rule, so the stream/dgram family grants are bounded by
+        # denying abstract endpoints outright — the exact rule pair the
+        # php-fpm confinement precedent ships in its shared abstraction and
+        # enforces with its AbstractSocketDenial tests. mysqld's own socket
+        # and systemd notify are path sockets.
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                lines = CONTRACT.apparmor_profile(instance).splitlines()
+                self.assertEqual(lines.count("  audit deny unix (connect, send, receive) peer=(addr=@**),"), 1)
+                self.assertEqual(lines.count("  audit deny unix (bind, listen, accept) addr=@**,"), 1)
+                unix_lines = [l for l in lines if l.lstrip().startswith("unix") or "deny unix" in l]
+                self.assertEqual(sorted(unix_lines), sorted([
+                    "  audit deny unix (connect, send, receive) peer=(addr=@**),",
+                    "  audit deny unix (bind, listen, accept) addr=@**,",
+                ]))
 
     def test_vendor_percent_I_unescapes_the_instance_name_and_selects_a_missing_config_group(self):
         # The defect: the vendor template's @%I becomes @wpcaregrid/production, a group
@@ -1013,13 +1031,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-            "production_g1_mysql_contract.py": "4b8a6e56ac998b5866ef97143b0ba28e9afdd95a959dd7ac6debe516153171e4",
-            "production-g1-mysql-manifest.json": "0e91fc0320edf7a9dbc61e1819b6e3a272e7023c97d6796edb8f5ad88184a51f",
+            "production_g1_mysql_contract.py": "c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8",
+            "production-g1-mysql-manifest.json": "25d8446724740a0f8390b13d6e380b5d75425221a87b6438e25f588ecdf71b35",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "ea04075234186c26e85f25b2dc08aa41366a701ca4258c31b1310a9353a69257")
+                         "c507e07575f845307c9c354ed830d34ce20c13f471644d9e4357fd070ee24bfd")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

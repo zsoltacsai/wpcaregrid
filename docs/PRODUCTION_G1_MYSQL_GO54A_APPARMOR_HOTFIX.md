@@ -18,15 +18,19 @@ remediated; nothing else in the transaction changes.
 
 2. **Systemd notification** (GO-20.29 root cause; GO-20.30/GO-20.31
    remediation). The vendor MySQL 8.4 template runs `Type=notify`
-   (in-repo evidence: `scripts/tests/production-g1-mysql-contract-test.py`
-   builds and validates the vendor unit as `[Service] Type=notify`, and
-   `scripts/tests/g1-notify-evidence-test.py` asserts
-   `UNITPROP mysql.service Type=notify`). `mysqld` therefore calls
+   (the project's in-repo record of the vendor unit is fixture-based, not a
+   host observation: `scripts/tests/production-g1-mysql-contract-test.py`
+   pins the vendor unit template shape with `[Service] Type=notify`, and
+   `scripts/tests/g1-notify-evidence-test.py` asserts the collector's
+   `UNITPROP mysql.service Type=notify` classification; the live unit's
+   `Type` and `NotifyAccess` are re-observed host-side by
+   `g1-notify-evidence.py` during the separately approved preflight).
+   `mysqld` therefore calls
    `sd_notify(3)`, which opens an `AF_UNIX` `SOCK_DGRAM` socket and sends one
    datagram to `/run/systemd/notify`. The previous profile granted neither the
    path write nor the datagram socket family, so a confined G1 start would
    stay in `activating` until systemd's start timeout. The complete minimal
-   permission set, added to both generated profiles:
+   permission set and its boundary denies, added to both generated profiles:
 
    - `  /run/systemd/notify w,` — path mediation for the notify socket.
      Write only: `sd_notify` is one-way, so no read or lock permission is
@@ -37,22 +41,34 @@ remediated; nothing else in the transaction changes.
      `SOCK_DGRAM` socket; the project's own policy test asserts exactly this
      (`scripts/tests/php-fpm-confinement-test.py`). Without this rule the
      `socket()` call is denied before the path rule is ever reached.
+   - `  audit deny unix (connect, send, receive) peer=(addr=@**),` and
+     `  audit deny unix (bind, listen, accept) addr=@**,` — abstract-namespace
+     unix sockets bypass every path rule, so the stream/dgram family grants
+     are bounded by denying abstract endpoints outright: the exact rule pair
+     the php-fpm precedent ships in its shared abstraction
+     (`deploy/php-fpm-confinement/1.0.6/apparmor/abstractions/wpcaregrid-php-fpm-common`,
+     enforced by its `AbstractSocketDenial` tests). mysqld's own socket and
+     systemd notify are path sockets; no `unix` allow rule of any kind
+     exists in the generated profiles.
 
-   Production precedent (live, same kernel): the php-fpm confinement 1.0.6
-   profiles — confined `Type=notify` services running on the production host —
-   grant exactly this pair and nothing more for notification:
+   Production precedent: the php-fpm confinement 1.0.6 profiles — confined
+   `Type=notify` services, deployed on the production host per the
+   GO-13/GO-20 release records (this document cites rule-set equivalence;
+   the deployment itself is evidenced by those records and the #174
+   ledger) — grant exactly this pair and nothing more for notification:
    `/run/systemd/notify w,` and `network unix dgram,`
    (`deploy/php-fpm-confinement/1.0.6/apparmor/wpcaregrid-php-fpm-production`
-   lines 45 and 60). Their shared abstraction denies abstract-namespace unix
-   sockets, so path rules are the only unix socket reach. That deployed pair
-   is the runtime evidence that this permission set is sufficient and
-   operative for `sd_notify` under confinement on this kernel.
+   lines 45 and 60), and their shared abstraction carries the same
+   abstract-namespace denies now adopted inline by the G1 profiles. The G1
+   permission set is therefore the precedent's rule set in full: pair plus
+   boundary denies, with path rules the only unix socket reach.
 
    The earlier gate in this document — no notify widening before the complete
    audit records and a demonstrated necessity — is closed by the GO-20.29
    analysis and this evidence chain, enforced by a dedicated contract-test
-   regression
-   (`test_notify_permission_is_exact_write_only_with_dgram_family_and_nothing_broader`)
+   regressions
+   (`test_notify_permission_is_exact_write_only_with_dgram_family_and_nothing_broader`,
+   `test_profiles_deny_abstract_namespace_unix_sockets_like_the_php_fpm_precedent`)
    and subject to the mandatory exact-HEAD CI (including generated-profile
    parser compilation) and the three independent GO-20.31 reviews. The
    read-only collector
@@ -74,10 +90,10 @@ The transaction is deliberately bound to the reported installed five-file state:
 | Installed artifact | Required OLD SHA-256 | Target NEW SHA-256 |
 | --- | --- | --- |
 | `/usr/local/libexec/wpcaregrid-g1-mysql.py` | `27c7e1e6ba8536f7f64e9a4bd53ed31fe846678ff05b0a051ca2ca7abe705e1b` | `9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274` |
-| `/usr/local/libexec/production_g1_mysql_contract.py` | `270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f` | `4b8a6e56ac998b5866ef97143b0ba28e9afdd95a959dd7ac6debe516153171e4` |
-| `/usr/local/libexec/production_g1_mysql_manifest.json` | `0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911` | `0e91fc0320edf7a9dbc61e1819b6e3a272e7023c97d6796edb8f5ad88184a51f` |
-| `/etc/apparmor.d/wpcaregrid-mysql-production` | `9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d` | `42ad536d08d58e4346fc34138a138ebbf64fac1f1030a4eebae8790f45c01dc9` |
-| `/etc/apparmor.d/wpcaregrid-mysql-production-restore` | `ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e` | `5c477235af68b59b39ed1fa9c70ae0628aa901014706527bfb110c300fa5fcf5` |
+| `/usr/local/libexec/production_g1_mysql_contract.py` | `270a7f2ddc93a38bbabc94197e11fa078602004b39c18a2c86a34bf4c6f05f8f` | `c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8` |
+| `/usr/local/libexec/production_g1_mysql_manifest.json` | `0af365c9515e2eff34d552c185c8d46fff3a5d5f7cade6d1ab3c0de1809ef911` | `25d8446724740a0f8390b13d6e380b5d75425221a87b6438e25f588ecdf71b35` |
+| `/etc/apparmor.d/wpcaregrid-mysql-production` | `9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d` | `64f1bd60ba0b8626978d79951179bb9c2484df1ce79981e567a7a41e057ea73a` |
+| `/etc/apparmor.d/wpcaregrid-mysql-production-restore` | `ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e` | `b612b2d913d4d8a178707516d8581724f2c003c5e8076f12e7b6930930c4fc32` |
 
 The repository package `scripts/production-g1-ops/SHA256SUMS` pins both GO-5.4a
 tools. Its checksum file is pinned by the eventual reviewed merge commit.

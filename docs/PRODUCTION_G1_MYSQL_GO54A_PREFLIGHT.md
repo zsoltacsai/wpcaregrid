@@ -24,21 +24,21 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   `g1-effective-config-check.py` contract pin and the digests in this section
   were refreshed.
 - Payloads pinned by `scripts/SHA256SUMS` (digest
-  `ea04075234186c26e85f25b2dc08aa41366a701ca4258c31b1310a9353a69257`) equal the
+  `c507e07575f845307c9c354ed830d34ce20c13f471644d9e4357fd070ee24bfd`) equal the
   NEW `/usr/local/libexec` targets in the hotfix document.
 - Read-only diagnostics (correction rounds v1.1.0 through v1.10.0 after the
   independent reviews) live in their own toolkit directory
   `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
   `production-g1-inventory` precedent). The `scripts/production-g1-ops/`
   transaction toolkit keeps its reviewed GO-0 logic; its `SHA256SUMS`
-  (digest `1d5b61767da7610657d418cbe711530715e52c90c7cfe6eb0b19c0c43b5fdd9f`,
+  (digest `92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d`,
   23 entries) is regenerated for the refreshed GO-5.4a pins:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `23ea886d394c4a74fde594fb0babc55e57b2a4b06dc7d727c92e7f61f86c23d3`)
+    (SHA-256 `7e055299f84f4047084dac5c5271ce5aa2b69f0918a7fe6ac09dba6eab87c576`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `52a8ed2711c700b60d5b396c0a3552fc592bd31f759b201d3c3c1ed0752aef98`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `0e0f4d7723ed2ea48952d842e27f5104b385869d277c31a4e00bcee9a454ea8a`)
+    `98295b252ce6fe244f9f0870702c5ace38d01ee16057796e07eda69bc61cdb8e`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk

@@ -48,13 +48,13 @@ SOURCE_PINS = {
 INSTALLER = "/home/deploy/.private/wpcaregrid-staging-next-helper-installer-1.4.9.py"
 INSTALLER_SHA256 = "d26120cb4f8066aef8a754315c1cd5a5252e2f69fcc338578b44694fe09558e5"
 G1_ARTIFACTS = {
-    "/etc/apparmor.d/wpcaregrid-mysql-production": "42ad536d08d58e4346fc34138a138ebbf64fac1f1030a4eebae8790f45c01dc9",
-    "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "5c477235af68b59b39ed1fa9c70ae0628aa901014706527bfb110c300fa5fcf5",
+    "/etc/apparmor.d/wpcaregrid-mysql-production": "64f1bd60ba0b8626978d79951179bb9c2484df1ce79981e567a7a41e057ea73a",
+    "/etc/apparmor.d/wpcaregrid-mysql-production-restore": "b612b2d913d4d8a178707516d8581724f2c003c5e8076f12e7b6930930c4fc32",
     "/etc/mysql/mysql.conf.d/zz-wpcaregrid-production-restore.cnf": "14fb59069eb42c7d0a938799330595f195bc43265df60b385e073ba58bf80a7b",
     "/etc/mysql/mysql.conf.d/zz-wpcaregrid-production.cnf": "7de16da204b888e634ea46a61e00b592bcfa69b5426a02228534b627e9567ad9",
     "/etc/systemd/system/mysql@wpcaregrid-production-restore.service.d/90-wpcaregrid-g1.conf": "d5df1ab7132248defe4c529afedb7517d002da73295b98ad87aa50a6ffc9e8ad",
     "/etc/systemd/system/mysql@wpcaregrid-production.service.d/90-wpcaregrid-g1.conf": "644e98059d68462b66a575034b5fdfbb4dbc037569f2970ab7dfa7bdccecc017",
-    "/usr/local/libexec/production_g1_mysql_contract.py": "4b8a6e56ac998b5866ef97143b0ba28e9afdd95a959dd7ac6debe516153171e4",
+    "/usr/local/libexec/production_g1_mysql_contract.py": "c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8",
     "/usr/local/libexec/wpcaregrid-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
 }
 SUDOERS_LINE = re.compile(

@@ -500,5 +500,11 @@ profile {instance.apparmor_profile} {{
   network inet stream,
   network unix stream,
   network unix dgram,
+  # Abstract-namespace unix sockets bypass every path rule above. Deny them
+  # outright, matching the php-fpm confinement precedent's shared
+  # abstraction (wpcaregrid-php-fpm-common): mysqld's own socket and
+  # systemd notify are path sockets.
+  audit deny unix (connect, send, receive) peer=(addr=@**),
+  audit deny unix (bind, listen, accept) addr=@**,
 }}
 """
