@@ -499,5 +499,6 @@ profile {instance.apparmor_profile} {{
   deny {other.tmpdir}/** x,
   network inet stream,
   network unix stream,
+  network unix dgram,
 }}
 """

@@ -1,7 +1,8 @@
 # Production G1 MySQL — GO-5.4a preflight and installation readiness
 
 Status: **preparation only.** This document prepares and records the preflight
-for the GO-5.4a AppArmor socket-lock transaction. It authorizes nothing. No
+for the GO-5.4a AppArmor socket-lock and notify transaction. It authorizes
+nothing. No
 host execution, AppArmor load or reload, MySQL start or initialization, or
 GO-5.4a transaction may be performed from this document. A separate, exact-scope
 Owner GO is required, and per GO-20.8 the GO-5.4a installation itself remains
@@ -13,28 +14,31 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
 [Rackforest backup verification checklist](RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md)
 (backup evidence gate).
 
-## Verified toolkit baseline (2026-11-17, GLM-5.3 session)
+## Verified toolkit baseline (2026-11-17; GO-20.30/31 refresh 2026-11-18)
 
 - Transaction source of record: `scripts/production-g1-ops/go54a-upgrade-apparmor.py`
-  and `go54a-fetch-package.sh` at protected-primary ancestor commit
-  `0951d9e829364296796a1d4acd303feef698cbc7`; verified byte-identical at current
-  primary `ef4e1d1ea6f4bc928d52bf06137ca242312e23a7` (no drift).
+  and `go54a-fetch-package.sh` at the exact reviewed merge commit recorded for
+  this release. GO-20.30/31 refresh note: transaction and rollback logic is
+  unchanged from the reviewed 2026-11-17 baseline (ancestor
+  `0951d9e829364296796a1d4acd303feef698cbc7`); only the GO-5.4a NEW pins, the
+  `g1-effective-config-check.py` contract pin and the digests in this section
+  were refreshed.
 - Payloads pinned by `scripts/SHA256SUMS` (digest
-  `0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85`) equal the
+  `ea04075234186c26e85f25b2dc08aa41366a701ca4258c31b1310a9353a69257`) equal the
   NEW `/usr/local/libexec` targets in the hotfix document.
-- New read-only diagnostics (correction round v1.2.0 after the independent
-  reviews; review pending) live in their own toolkit directory
+- Read-only diagnostics (correction rounds v1.1.0 through v1.10.0 after the
+  independent reviews) live in their own toolkit directory
   `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
-  `production-g1-inventory` precedent). The frozen, GO-0-anchored
-  `scripts/production-g1-ops/` transaction toolkit and its `SHA256SUMS`
-  (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
-  23 entries) remain byte-identical and untouched:
+  `production-g1-inventory` precedent). The `scripts/production-g1-ops/`
+  transaction toolkit keeps its reviewed GO-0 logic; its `SHA256SUMS`
+  (digest `1d5b61767da7610657d418cbe711530715e52c90c7cfe6eb0b19c0c43b5fdd9f`,
+  23 entries) is regenerated for the refreshed GO-5.4a pins:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `3fe28be8ad558d524bc2a881dd55407b9fa1339931fe2ee6217a62b3b13c219a`)
+    (SHA-256 `23ea886d394c4a74fde594fb0babc55e57b2a4b06dc7d727c92e7f61f86c23d3`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
-    (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
+    (SHA-256 `52a8ed2711c700b60d5b396c0a3552fc592bd31f759b201d3c3c1ed0752aef98`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `3cfd93556296c818ec2a949ca17cd3c20c878d218292eac277b08cda8d133a09`)
+    `0e0f4d7723ed2ea48952d842e27f5104b385869d277c31a4e00bcee9a454ea8a`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -200,7 +204,7 @@ Every item is required before the Owner may issue a GO-5.4a execution GO.
 | 9 | Toolkit/package intake | Toolkit companions beside the tool match the reviewed pins (a mismatched companion is HOLD); any staged package validates exactly against the NEW pins; nothing unrecognized is accepted | readiness `toolkit_companions`, `package_intake` |
 | 10 | Backup evidence decision | The Owner records either verified restore evidence per the Rackforest checklist, or — for this GO-5.4a preparation scope only — the recorded Owner risk-acceptance waiver (`BACKUP_WAIVER_ACCEPTED`: existence OWNER-CONFIRMED, restore tested NO, requirement OWNER-WAIVED, residual risks documented, contents/recoverability NOT INDEPENDENTLY VERIFIED). Existence alone is not PASS, and the waiver is not `BACKUP_VERIFIED=PASS` | `BACKUP_EVIDENCE` + [checklist](RACKFOREST_BACKUP_VERIFICATION_CHECKLIST.md) |
 | 11 | Independent reviews | Current exact-artifact Integration QA and AppSec PASS records for the readiness/notify tools and the unchanged transaction toolkit | #174 ledger V3 records |
-| 12 | Notify investigation state | `/run/systemd/notify` denials collected and necessity decided; no profile widening without proof | `g1-notify-evidence.py` output + review |
+| 12 | Notify remediation state | The evidence-backed notify permission pair is part of the reviewed NEW profiles (hotfix document); the host-side OLD-state denial baseline is collected and archived; no further widening without new proof | `g1-notify-evidence.py` output + hotfix evidence chain + exact-HEAD reviews |
 
 The readiness tool deliberately does not perform `apparmor_parser` compilation,
 generated-profile hash regeneration, or package acceptance: those are executed
@@ -219,8 +223,11 @@ by the transaction tool itself at execution time, and the readiness notes say so
    Required verdict for the next step: `G1_GO54A_READINESS=PASS`
    (technical) with `installed_baseline PASS baseline=old`.
 3. **Notify evidence.** Run `g1-notify-evidence.py` and archive its output;
-   the GO-5.4a transaction does not depend on it, but the open investigation
-   must stay visible and no profile may be widened meanwhile.
+   the GO-5.4a transaction does not depend on it. The source-level
+   investigation is closed (GO-20.29/20.30/20.31; necessity evidence chain in
+   the hotfix document, exact-HEAD reviewed); this host-side run confirms the
+   OLD-state denial baseline, and no further profile widening may happen
+   without new proof.
 4. **Stage the package.** On the host, from the root console:
    `bash go54a-fetch-package.sh 0951d9e829364296796a1d4acd303feef698cbc7`
    (or the exact reviewed commit recorded for this release). The script
@@ -249,8 +256,10 @@ by the transaction tool itself at execution time, and the readiness notes say so
    result: stop and investigate; do not retry.
 9. **Separate follow-up decisions.** A later GO-5.4 start of the production G1
    instance is a separate Owner decision and must never be chained to this
-   transaction. The `/run/systemd/notify` investigation remains open until the
-   collected audit records prove or refute necessity.
+   transaction. The `/run/systemd/notify` necessity is established and
+   exact-HEAD reviewed at source level (hotfix document); the collected host
+   records remain advisory confirmation of the OLD-state baseline, and any
+   further widening is a separate, newly evidenced decision.
 
 ## Stop conditions
 

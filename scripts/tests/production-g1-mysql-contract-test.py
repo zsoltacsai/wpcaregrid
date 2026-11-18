@@ -423,8 +423,8 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
-    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "e579cda816c7e40d942b94da8632b02d9a6d93084c49194cd80a3cd623cbf5af",
-                                 "wpcaregrid-mysql-production-restore": "51b537924907737ba67f5862075be1e6bf0ca3bc5c6a972ce41619bf9fa62b0a"}
+    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "eb042bb4a0d1d5a64c1cbef6fa29d204997d7ae9609856e7b13759976e8f6d50",
+                                 "wpcaregrid-mysql-production-restore": "39e076d4dc6a010d48d37dd64802a83f4839e29a92f6bcf5096d6f36e9332348"}
 
     def test_profiles_add_only_exact_socket_lock_rules_to_the_previous_profile(self):
         for instance in CONTRACT.INSTANCES.values():
@@ -448,6 +448,35 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 if "/etc/mysql/mysql.cnf" in line or "/etc/alternatives" in line:
                     self.assertEqual(line, "  /etc/mysql/mysql.cnf r,")
             self.assertFalse([l for l in lines if l.startswith("  /etc/") and (" w" in l or " x" in l) and "mysql" in l and "systemd" not in l and "apparmor" not in l])
+
+    def test_notify_permission_is_exact_write_only_with_dgram_family_and_nothing_broader(self):
+        # GO-20.30/GO-20.31: systemd notification needs exactly two grants:
+        # the write-only path rule and the unix datagram family. sd_notify(3)
+        # opens an AF_UNIX SOCK_DGRAM socket; AppArmor network rules are
+        # default-deny per family and type, so "network unix stream," alone
+        # would leave the socket() call denied. The php-fpm confinement 1.0.6
+        # production profiles grant exactly this pair (lines 45 and 60).
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                lines = CONTRACT.apparmor_profile(instance).splitlines()
+                self.assertEqual(lines.count("  /run/systemd/notify w,"), 1)
+                self.assertEqual(lines.count("  network unix dgram,"), 1)
+                self.assertEqual(lines.count("  network unix stream,"), 1)
+                for line in lines:
+                    if "/run/systemd" in line:
+                        self.assertEqual(line, "  /run/systemd/notify w,")
+                for broader in ("  /run/systemd/notify rw,",
+                                "  /run/systemd/notify rwk,",
+                                "  /run/systemd/notify rwklm,",
+                                "  /run/systemd/notify a,",
+                                "  /run/systemd/ r,",
+                                "  /run/systemd/** w,"):
+                    self.assertNotIn(broader, lines)
+                # No gratuitous family widening: datagram is granted for the
+                # unix family only; no UDP (inet/inet6 dgram), no netlink.
+                self.assertNotIn("  network inet dgram,", lines)
+                self.assertNotIn("  network inet6 dgram,", lines)
+                self.assertFalse([l for l in lines if l.startswith("  network netlink")])
 
     def test_vendor_percent_I_unescapes_the_instance_name_and_selects_a_missing_config_group(self):
         # The defect: the vendor template's @%I becomes @wpcaregrid/production, a group
@@ -984,13 +1013,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-            "production_g1_mysql_contract.py": "cdebda049cb1412e656882fe02d50f7bfaed1226e7439023d37a43beb8cbc2dc",
-            "production-g1-mysql-manifest.json": "cfc07bfd6970f12deedc4dcee244b7fca9af9b3acb8def8e829aaac2c12aceec",
+            "production_g1_mysql_contract.py": "4b8a6e56ac998b5866ef97143b0ba28e9afdd95a959dd7ac6debe516153171e4",
+            "production-g1-mysql-manifest.json": "0e91fc0320edf7a9dbc61e1819b6e3a272e7023c97d6796edb8f5ad88184a51f",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "c6d2783825f247afd0f7c8749d570646d65344a9fc99126f6d5627d1fc423f9e")
+                         "ea04075234186c26e85f25b2dc08aa41366a701ca4258c31b1310a9353a69257")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):
