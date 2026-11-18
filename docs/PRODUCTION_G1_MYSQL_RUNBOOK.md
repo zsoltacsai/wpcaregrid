@@ -439,8 +439,10 @@ Before execution, require and record all of the following:
    and AppSec reviews are PASS.
 3. A fresh read-only host inventory confirms the target host, all five exact OLD hashes
    in `docs/PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md`, file owners/modes, both G1
-   units exactly `inactive`, both G1 profiles loaded in `enforce`, stable
-   `mysql.service` MainPID/vendor profile, and unchanged datadir/log fingerprints.
+   units exactly `inactive`, both G1 profiles loaded in `enforce`, vendor
+   `mysql.service` with matching initial/closing observations (ActiveState
+   and MainPID; matching observations, never continuous stability), and
+   unchanged datadir/log fingerprints.
    A unit state of `failed` is not `inactive`: STOP. Do not run `reset-failed`,
    start, reload, or retry as part of this gate.
 4. No transaction, lock, unknown journal, or unrecognized temporary file is present.

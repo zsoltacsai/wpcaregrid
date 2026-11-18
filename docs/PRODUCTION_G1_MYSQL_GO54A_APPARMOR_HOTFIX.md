@@ -72,9 +72,12 @@ as part of this source change.
 Before any future execution GO, require independent exact-HEAD QA and AppSec,
 successful required CI including generated-profile parser validation, a fresh
 read-only host inventory confirming all five OLD hashes, inactive G1 units,
-enforced profile state, stable `mysql.service`, and intact datadirs/logs. If any
+enforced profile state, vendor `mysql.service` with matching initial/closing
+observations (ActiveState and MainPID; matching observations, never continuous
+stability), and intact datadirs/logs. If any
 identity, hash, owner/mode, service state, parser result, or invariant differs,
 stop without retry. After a successful transaction, independently verify the
-five NEW hashes, profile enforce state, unchanged vendor profile and legacy MySQL
-PID, and unchanged datadir/log fingerprints. A later GO-5.4 start is a separate
+five NEW hashes, profile enforce state, unchanged vendor profile, the same
+vendor MySQL MainPID as the pre-transaction observation record, and unchanged
+datadir/log fingerprints. A later GO-5.4 start is a separate
 decision and must not be chained to this transaction.
