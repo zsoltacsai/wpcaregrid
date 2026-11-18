@@ -965,8 +965,13 @@ class ReadinessTestCase(unittest.TestCase):
 
     def test_state_revalidation_passes_in_healthy_run(self):
         self.assertEqual(self.run_main(), 0)
-        self.assertIn("CHECK state_revalidation PASS critical_state_stable_during_run",
+        self.assertIn("CHECK state_revalidation PASS critical_observations_match_at_close",
                       self.output())
+        # AppSec R8-F4a regression: the transcript must never assert a
+        # stronger guarantee than an advisory, non-atomic observation gives.
+        self.assertNotIn("critical_state_stable_during_run", self.output())
+        self.assertNotIn("no_transaction_in_progress", self.output())
+        self.assertNotIn("lock_file_present_and_free", self.output())
 
     def test_concurrent_upgrade_during_run_yields_stale_evidence_unknown(self):
         # R6-F1: a GO-5.4a transaction completing after the initial baseline

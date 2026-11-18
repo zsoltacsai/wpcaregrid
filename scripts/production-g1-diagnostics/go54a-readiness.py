@@ -38,7 +38,8 @@ transaction-relevant checks are re-observed at the end of the run and any
 deviation is reported as stale, but a read-only collector cannot serialize
 with a concurrent transaction. PASS never asserts that no transaction is
 active or will start — the Owner must serialize evidence collection against
-any transaction (the runbook requires this sequencing explicitly).
+any transaction (the GO-5.4a preflight procedure step 2 requires
+this sequencing explicitly).
 
 Local synthetic test passes do NOT make this tool approved; independent
 Integration QA and AppSec PASS records plus a separate Owner GO are
@@ -59,7 +60,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -320,7 +321,10 @@ class RealHost:
         return done.returncode, done.stdout
 
     def flock_shared_probe(self, path):
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # O_NONBLOCK (AppSec R8-F3a): a path replacement with a FIFO between
+        # the pre-checks and this open must never block the diagnostic.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise HostError("lock_not_regular", os.path.basename(path))
@@ -416,7 +420,7 @@ def check_lock_directory(host, emit):
 
 def check_lock_state(host, emit):
     if not host.lexists(LOCK):
-        return "PASS", "lock_file_absent_no_transaction_in_progress"
+        return "PASS", "lock_absent_at_observation"
     st = host.lstat(LOCK)
     if stat.S_ISLNK(st.st_mode):
         return "HOLD", "lock_file_symlink"
@@ -428,7 +432,7 @@ def check_lock_state(host, emit):
         return "HOLD", "lock_file_mode_invalid"
     if host.flock_shared_probe(LOCK) == "held":
         return "HOLD", "lock_held_by_other_process"
-    return "PASS", "lock_file_present_and_free"
+    return "PASS", "lock_unheld_at_observation"
 
 
 def check_parent_directories(host, emit):
@@ -868,7 +872,8 @@ def main(argv=None, host=None, stream=None):
     # window but cannot eliminate it: a read-only collector produces ADVISORY,
     # NON-ATOMIC evidence. PASS never asserts that no transaction is active
     # or will start — the Owner must serialize evidence collection against
-    # any transaction (the runbook requires this sequencing explicitly).
+    # any transaction (the GO-5.4a preflight procedure step 2 requires
+    # this sequencing explicitly).
     def revalidate_critical_state():
         def sink(_line):
             return None
@@ -882,7 +887,7 @@ def main(argv=None, host=None, stream=None):
         for name, observed in closing.items():
             if observed != initial_critical.get(name):
                 return "UNKNOWN", "evidence_stale:" + name + ":" + observed[0] + ":" + observed[1]
-        return "PASS", "critical_state_stable_during_run"
+        return "PASS", "critical_observations_match_at_close"
 
     status, detail = guard(revalidate_critical_state)
     results.append(("state_revalidation", status, detail))

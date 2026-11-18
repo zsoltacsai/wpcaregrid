@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `4d703a6f24133789f270104f7f6b553c949daaae5e8b2863c5bcabac92360cb9`)
+    (SHA-256 `1a1e5cfe0313a099e571170c9a156b2bb4d797e00f20a81ec1b3a8eac40d69f9`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `1a698e4a383f24fac955d71df68a3e221793caebda546c0da4f61b6537de3bf3`)
+    `4c586d95ca2511a77d03bc669cc6e89cb45e723aaf6fcf72c0819b4640fc39d5`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
