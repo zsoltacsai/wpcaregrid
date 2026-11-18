@@ -170,7 +170,7 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
         toolkit_commit = "0951d9e829364296796a1d4acd303feef698cbc7"
-        manifest_pin = "92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d"
+        manifest_pin = "b1cf490f5b4ab4030d3b873f1b092868ebe30931ecd9717cc9c63dfd6153a665"
         # Read the exact toolkit manifest shipped with this source snapshot.
         # The pinned digest below anchors its full byte content and filename list.
         manifest = (OPS / "SHA256SUMS").read_bytes()
@@ -442,7 +442,8 @@ class ToolkitStaticTest(unittest.TestCase):
                 return result
 
         reasons = []
-        self.assertEqual(run_race(lambda fd, uid, gid: diagnostic.scan_datadir_fd(fd, uid, gid, reasons)), 0)
+        scanned_size, _newest_mtime = run_race(lambda fd, uid, gid: diagnostic.scan_datadir_fd(fd, uid, gid, reasons))
+        self.assertEqual(scanned_size, 0)
         self.assertIn("entry_unreadable", reasons)
 
         class WalkRefused(Exception):
