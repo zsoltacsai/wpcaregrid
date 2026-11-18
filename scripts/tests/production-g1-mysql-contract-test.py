@@ -423,8 +423,12 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
         for name, digest in sums.items():
             self.assertIn(f"| `{name}` | `{digest}` |", docs)
 
-    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "9a40053158880f0e6baf0db06431587651701487910634015e712e878dcfe13d",
-                            "wpcaregrid-mysql-production-restore": "ce56847e98f23b45590aaf55ad069df89f97dc12b672c2a289bb0fa7fb923b3e"}
+    # Content anchor, not a pre-change baseline: each digest pins the CURRENT
+    # generated profile text minus the exact socket-lock rules. The add-only
+    # property relative to the reviewed base is established by the
+    # base-vs-HEAD profile diff and the exact-rule tests, not by this digest.
+    PRE_LOCK_PROFILE_SHA = {"wpcaregrid-mysql-production": "7993e652c3474d6885fe61c2444405e02b0c54fca13785237ee4ae9048b419b0",
+                                 "wpcaregrid-mysql-production-restore": "3f33002e7c433e89b73b298d4159ae93b5bcb83d87610b0f53f3afb8ad2f47f7"}
 
     def test_profiles_add_only_exact_socket_lock_rules_to_the_previous_profile(self):
         for instance in CONTRACT.INSTANCES.values():
@@ -448,6 +452,61 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
                 if "/etc/mysql/mysql.cnf" in line or "/etc/alternatives" in line:
                     self.assertEqual(line, "  /etc/mysql/mysql.cnf r,")
             self.assertFalse([l for l in lines if l.startswith("  /etc/") and (" w" in l or " x" in l) and "mysql" in l and "systemd" not in l and "apparmor" not in l])
+
+    def test_notify_permission_is_exact_write_only_with_dgram_family_and_nothing_broader(self):
+        # GO-20.30/GO-20.31: systemd notification needs exactly two grants:
+        # the write-only path rule and the unix datagram family. sd_notify(3)
+        # opens an AF_UNIX SOCK_DGRAM socket; AppArmor network rules are
+        # default-deny per family and type, so "network unix stream," alone
+        # would leave the socket() call denied. The php-fpm confinement 1.0.6
+        # production profiles grant exactly this pair (lines 45 and 60).
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                lines = CONTRACT.apparmor_profile(instance).splitlines()
+                self.assertEqual(lines.count("  /run/systemd/notify w,"), 1)
+                self.assertEqual(lines.count("  network unix dgram,"), 1)
+                self.assertEqual(lines.count("  network unix stream,"), 1)
+                for line in lines:
+                    if "/run/systemd" in line:
+                        self.assertEqual(line, "  /run/systemd/notify w,")
+                for broader in ("  /run/systemd/notify rw,",
+                                "  /run/systemd/notify rwk,",
+                                "  /run/systemd/notify rwklm,",
+                                "  /run/systemd/notify a,",
+                                "  /run/systemd/ r,",
+                                "  /run/systemd/** w,"):
+                    self.assertNotIn(broader, lines)
+                # No gratuitous family widening: datagram is granted for the
+                # unix family only; no UDP (inet/inet6 dgram), no netlink.
+                self.assertNotIn("  network inet dgram,", lines)
+                self.assertNotIn("  network inet6 dgram,", lines)
+                self.assertFalse([l for l in lines if l.startswith("  network netlink")])
+
+    def test_profiles_deny_abstract_namespace_unix_sockets_like_the_php_fpm_precedent(self):
+        # GO-20.31 AppSec round 2: abstract-namespace unix sockets bypass
+        # every path rule, so the stream/dgram family grants are bounded by
+        # denying abstract endpoints outright — the exact rule pair the
+        # php-fpm confinement precedent ships in its shared abstraction and
+        # enforces with its AbstractSocketDenial tests. mysqld's own socket
+        # and systemd notify are path sockets.
+        for instance in CONTRACT.INSTANCES.values():
+            with self.subTest(instance=instance.name):
+                lines = CONTRACT.apparmor_profile(instance).splitlines()
+                self.assertEqual(lines.count("  audit deny unix (connect, send, receive) peer=(addr=@**),"), 1)
+                self.assertEqual(lines.count("  audit deny unix (bind, listen, accept) addr=@**,"), 1)
+                # Exhaustive unix surface (QA/AppSec round 3): every
+                # non-comment line mentioning "unix" is collected — network
+                # family rules, unix rules, allow or deny, audit or not — so
+                # adding e.g. "network unix seqpacket," or any
+                # "audit allow unix ..." rule fails here unconditionally,
+                # not only via the hash pins.
+                unix_lines = [l for l in lines if "unix" in l and not l.lstrip().startswith("#")]
+                self.assertEqual(sorted(unix_lines), sorted([
+                    "  network unix stream,",
+                    "  network unix dgram,",
+                    "  audit deny unix (connect, send, receive) peer=(addr=@**),",
+                    "  audit deny unix (bind, listen, accept) addr=@**,",
+                ]))
 
     def test_vendor_percent_I_unescapes_the_instance_name_and_selects_a_missing_config_group(self):
         # The defect: the vendor template's @%I becomes @wpcaregrid/production, a group
@@ -984,13 +1043,13 @@ class ProductionG1MySQLContractTests(unittest.TestCase):
 
         expected = {
             "production-g1-mysql.py": "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-            "production_g1_mysql_contract.py": "0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8",
-            "production-g1-mysql-manifest.json": "eef752c71e15c3a41f1cf5948305b699a5eba6a91b66aeae243787ba9e4e5f9b",
+            "production_g1_mysql_contract.py": "c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8",
+            "production-g1-mysql-manifest.json": "25d8446724740a0f8390b13d6e380b5d75425221a87b6438e25f588ecdf71b35",
         }
         sums_path = ROOT / "SHA256SUMS"
         sums_bytes = sums_path.read_bytes()
         self.assertEqual(hashlib.sha256(sums_bytes).hexdigest(),
-                         "0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85")
+                         "c507e07575f845307c9c354ed830d34ce20c13f471644d9e4357fd070ee24bfd")
         self.assertTrue(sums_bytes.endswith(bytes([10])))
         sums = {}
         for line in sums_bytes.splitlines(keepends=True):

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Read-only AppArmor audit evidence collector for the /run/systemd/notify denial.
 
-The separate GO-5.4a socket-lock hotfix deliberately adds no systemd-notify
-rule to the G1 MySQL profiles. Before anyone proposes widening a profile, the
-complete audit records must be available and their necessity established
-(docs/PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md). This tool collects that
+The GO-5.4a hotfix now adds the reviewed, evidence-backed systemd-notify
+permission pair to the G1 MySQL profiles (GO-20.29/20.30/20.31; the complete
+necessity evidence lives in docs/PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md).
+Until the separately approved transaction runs, the OLD profiles still omit
+it, so the Owner's read-only preflight confirmation still collects that
 evidence without changing anything:
 
   - bounded kernel-journal read (default and maximum 20000 lines, optional

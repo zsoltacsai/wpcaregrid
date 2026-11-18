@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GO-5.4a socket-lock policy transaction for the confirmed installed G1 baseline.
+"""GO-5.4a socket-lock and systemd-notify policy transaction for the confirmed installed G1 baseline.
 
 This tool is preparation only until a separate Owner GO. It never starts MySQL,
 initializes data, changes option files, or touches mysql.service/vendor policy.
@@ -43,10 +43,10 @@ OLD = {
 }
 NEW = {
     HELPER: "9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274",
-    CONTRACT: "0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8",
-    MANIFEST: "eef752c71e15c3a41f1cf5948305b699a5eba6a91b66aeae243787ba9e4e5f9b",
-    PROFILE_P: "28e02508e195efe285be40932df74b9e6f3c6aa792250ef67c078da40699f7d2",
-    PROFILE_R: "9567eab67e96d352ab971ca26adafe4e35bc5e12891ef788147ff673bf7cfbab",
+    CONTRACT: "c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8",
+    MANIFEST: "25d8446724740a0f8390b13d6e380b5d75425221a87b6438e25f588ecdf71b35",
+    PROFILE_P: "64f1bd60ba0b8626978d79951179bb9c2484df1ce79981e567a7a41e057ea73a",
+    PROFILE_R: "b612b2d913d4d8a178707516d8581724f2c003c5e8076f12e7b6930930c4fc32",
 }
 PACKAGE = {
     HELPER: "production-g1-mysql.py",

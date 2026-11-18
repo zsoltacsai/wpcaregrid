@@ -30,12 +30,12 @@ for f in "${FILES[@]}"; do
   [ "$(stat -c '%U:%G:%a:%F' -- "$f")" = "root:root:600:regular file" ] || stop package_file_metadata_invalid
 done
 printf '%s  %s\n' \
-  0846e20f10495edfececc96aa373a7dca774777ccc4cca6645c63f183d39fb85 SHA256SUMS \
+  c507e07575f845307c9c354ed830d34ce20c13f471644d9e4357fd070ee24bfd SHA256SUMS \
   | sha256sum -c --strict - >/dev/null || stop sums_file_hash_mismatch
 printf '%s  %s\n' \
   9ff1b969fa2371d3967c15ff9f6fcf4553ecf5fcda2b039b46e924d885bbf274 production-g1-mysql.py \
-  0023be227381e617f482c1e905cd0019c1fba604a7aa7050345a95f208c89cf8 production_g1_mysql_contract.py \
-  eef752c71e15c3a41f1cf5948305b699a5eba6a91b66aeae243787ba9e4e5f9b production-g1-mysql-manifest.json \
+  c81af789c99876cd9cf60ed26681eb8501c6bfe7cacfd46b120f748e43d8b4d8 production_g1_mysql_contract.py \
+  25d8446724740a0f8390b13d6e380b5d75425221a87b6438e25f588ecdf71b35 production-g1-mysql-manifest.json \
   | sha256sum -c --strict - >/dev/null || stop package_content_hash_mismatch
 sha256sum -c --strict SHA256SUMS >/dev/null || stop package_sums_mismatch
 [ "$(wc -l < SHA256SUMS)" = 3 ] || stop sums_entry_count_invalid
