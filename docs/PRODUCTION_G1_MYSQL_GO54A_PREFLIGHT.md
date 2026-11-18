@@ -31,14 +31,14 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   `scripts/production-g1-diagnostics/` with its own `SHA256SUMS` (the
   `production-g1-inventory` precedent). The `scripts/production-g1-ops/`
   transaction toolkit keeps its reviewed GO-0 logic; its `SHA256SUMS`
-  (digest `92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d`,
+  (digest `df03747b8bc75567b74573fd5aa965e3df653f8561bb10a5a825470303e74c03`,
   23 entries) is regenerated for the refreshed GO-5.4a pins:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `7e055299f84f4047084dac5c5271ce5aa2b69f0918a7fe6ac09dba6eab87c576`)
+    (SHA-256 `faf11f564e1cd950b6d1916d71527fae6499708e1b962a577d2df18a79bb3300`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `52a8ed2711c700b60d5b396c0a3552fc592bd31f759b201d3c3c1ed0752aef98`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `98295b252ce6fe244f9f0870702c5ace38d01ee16057796e07eda69bc61cdb8e`)
+    `cb9fae9ed97be079640bff9377a3330df970e7ac4926f325ebbacd0f6f398e6f`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk

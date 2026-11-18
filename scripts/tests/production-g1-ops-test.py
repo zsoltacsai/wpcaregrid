@@ -170,7 +170,7 @@ class ToolkitStaticTest(unittest.TestCase):
 
     def test_go0_pinned_manifest_accepts_uppercase_names_and_rejects_partial_downloads(self):
         toolkit_commit = "0951d9e829364296796a1d4acd303feef698cbc7"
-        manifest_pin = "92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d"
+        manifest_pin = "df03747b8bc75567b74573fd5aa965e3df653f8561bb10a5a825470303e74c03"
         # Read the exact toolkit manifest shipped with this source snapshot.
         # The pinned digest below anchors its full byte content and filename list.
         manifest = (OPS / "SHA256SUMS").read_bytes()
@@ -442,7 +442,8 @@ class ToolkitStaticTest(unittest.TestCase):
                 return result
 
         reasons = []
-        self.assertEqual(run_race(lambda fd, uid, gid: diagnostic.scan_datadir_fd(fd, uid, gid, reasons)), 0)
+        scanned_size, _newest_mtime = run_race(lambda fd, uid, gid: diagnostic.scan_datadir_fd(fd, uid, gid, reasons))
+        self.assertEqual(scanned_size, 0)
         self.assertIn("entry_unreadable", reasons)
 
         class WalkRefused(Exception):
@@ -2431,8 +2432,16 @@ class InitializerRecoveryTest(unittest.TestCase):
             "datadir_mode_755": "proof=managed_directory_mode_invalid | diag=UNCLEAR:datadir_owner_or_mode",
             "fifo_in_datadir": f"proof={P} | diag=UNCLEAR:foreign_group_in_datadir,foreign_owner_in_datadir,special_file_in_datadir",
             "log_without_end_marker": f"proof={P} | diag=PARTIAL:log_end_marker_missing",
-            "log_without_start_marker": f"proof={P} | diag=UNCLEAR:datadir_not_empty_but_log_has_no_start_marker",
-            "log_error_line": f"proof={P} | diag=UNCLEAR:end_marker_but_error_lines",
+            # GO-20.35: an end marker without a start marker is a contradictory
+            # marker sequence; the diagnostic's new reason replaces the old
+            # whole-log classification.
+            "log_without_start_marker": f"proof={P} | diag=UNCLEAR:marker_sequence_invalid:end_without_start",
+            # GO-20.35: an [ERROR] line appended AFTER the end marker belongs to
+            # a later event; the diagnostic reports it as a POST_INIT fact
+            # (post_errors=1) and keeps PROVEN_COMPLETE, while the initializer's
+            # own completion proof still refuses the whole-log error (at proof
+            # time the log contains only the initializer's own run).
+            "log_error_line": f"proof={P} | diag=PROVEN_COMPLETE:",
             "log_mode_644": f"proof={P} | diag=UNCLEAR:log_type_owner_or_mode",
             "log_foreign_group": f"proof={P} | diag=UNCLEAR:log_type_owner_or_mode",
             "socket_marker": f"proof={P} | diag=UNCLEAR:runtime_marker_present",
@@ -2449,10 +2458,17 @@ class InitializerRecoveryTest(unittest.TestCase):
         self.assertEqual(self.get("race_diag"), "UNCLEAR:entry_unreadable | swap=yes")
 
     def test_only_a_proven_complete_datadir_is_ever_called_complete(self):
+        # GO-20.35: a post-initialization [ERROR] line (a later event appended
+        # after the end marker) no longer downgrades the diagnostic's
+        # classification - it is reported as a POST_INIT fact. The initializer's
+        # own completion proof still refuses it, so mut_log_error_line is the
+        # one intentional proof/diagnostic divergence.
+        allowed = ("mut_none", "mut_log_error_line")
         for name, value in self.r.items():
             if name.startswith("mut_") and "diag=PROVEN_COMPLETE" in value:
-                self.assertEqual(name, "mut_none")
-                self.assertIn("proof=NO_REFUSAL", value)
+                self.assertIn(name, allowed)
+                if name == "mut_none":
+                    self.assertIn("proof=NO_REFUSAL", value)
             if name.startswith("mut_") and "proof=NO_REFUSAL" in value:
                 self.assertIn("diag=PROVEN_COMPLETE", value)
 

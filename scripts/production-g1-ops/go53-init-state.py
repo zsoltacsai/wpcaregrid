@@ -2,16 +2,21 @@
 """GO-5.3 recovery diagnostic: classify the initialization state of both Production G1 MySQL datadirs. READ-ONLY.
 
 Writes, deletes, starts, stops and signals nothing and never prints file contents: the instance error log contains the
-generated root password, so it is only scanned for the server's own marker lines (booleans and counts are printed).
-Fixed paths only; no argument. Usage (root): python3 -I -B go53-init-state.py
+generated root password, so it is only scanned for the server's own marker lines (booleans, counts and the marker
+lines' own timestamps are printed; a marker-line timestamp is the only log text ever emitted). Fixed paths only; no
+argument. Usage (root): python3 -I -B go53-init-state.py
 
 Per instance one of:
   EMPTY            datadir exactly as `provision-paths` created it (empty, mysql:mysql 0750), empty log, no process
   PROVEN_COMPLETE  a finished `mysqld --initialize`: the exact datadir contents, the server's own start line followed
-                   by its end line in the error log, no [ERROR] line, no process, no socket/pid marker
+                   by its end line in the error log, no [ERROR] line located before that end marker, no process, no
+                   socket/pid marker. Events AFTER the end marker (a later startup attempt) do not downgrade the
+                   proof: their [ERROR] lines and any datadir modification newer than the end-marker timestamp are
+                   reported separately as POST_INIT facts (GO-20.35).
   PARTIAL          sane but unfinished: initialization artefacts present, end marker missing (and nothing else odd)
   UNCLEAR          anything else (symlink, foreign owner/group/mode, special file, running process, end marker without the
-                   files, error lines, unreadable ...). The completion of an UNCLEAR or PARTIAL datadir is NOT proven.
+                   files, [ERROR] lines before/inside the initialization section, duplicated/unordered/overlapping
+                   markers, unparseable marker timestamps, unreadable ...). Completion is NOT proven for UNCLEAR/PARTIAL.
 Final line:  G1_GO53_INIT_STATE=DONE;WPCAREGRID_PRODUCTION=<state>;WPCAREGRID_PRODUCTION_RESTORE=<state>   (exit 0)
              G1_GO53_INIT_STATE=STOP;CODE=<cause>                                                        (exit 3/4)
 """
@@ -39,6 +44,13 @@ START = b"[MY-015017] [Server] MySQL Server Initialization - start."
 END = b"[MY-015018] [Server] MySQL Server Initialization - end."
 INNODB_STARTED, INNODB_ENDED = b"[MY-013576] [InnoDB] InnoDB initialization has started.", b"[MY-013577] [InnoDB] InnoDB initialization has ended."
 LOG_LIMIT = 2 * 1024 * 1024
+# GO-20.35: the error log mixes the one-time initialization section with any later
+# startup attempts. Errors are scoped by POSITION against the initialization end
+# marker: before it they are initialization failures (blocking), after it they belong
+# to later events and are reported as POST facts. The end-marker line's timestamp plus
+# datadir mtimes decide whether later events touched the datadir after initialization.
+TS_RE = re.compile(rb"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z) ")
+TOUCH_GRACE_SECONDS = 60
 WALK_LIMIT = 200000
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.#@+:-]{1,120}$")
 SAFE_PATH = re.compile(r"^[A-Za-z0-9_./#@+:-]{1,200}$")
@@ -113,6 +125,7 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
     """Traverse using held descriptors; never resolve child names through a replaceable path."""
     stack = [(os.dup(root_fd), True)]
     seen = size = 0
+    newest = 0.0
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     entry_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
@@ -128,12 +141,13 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                     seen += 1
                     if seen > WALK_LIMIT:
                         unclear.append("datadir_too_large_to_scan")
-                        return size
+                        return size, newest
                     try:
                         before = os.stat(entry, dir_fd=current_fd, follow_symlinks=False)
                     except OSError:
                         unclear.append("entry_unreadable")
                         continue
+                    newest = max(newest, before.st_mtime)
                     public_file = top_level and entry in PUBLIC_DATADIR_FILES
                     private_file = entry in PRIVATE_DATADIR_FILES
                     unclear.extend(datadir_entry_problems(before, uid, gid, public_file=public_file,
@@ -148,6 +162,7 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
                         continue
                     try:
                         opened = os.fstat(entry_fd)
+                        newest = max(newest, opened.st_mtime)
                         if not same_entry_snapshot(before, opened):
                             unclear.append("entry_changed_during_read")
                             continue
@@ -166,7 +181,50 @@ def scan_datadir_fd(root_fd, uid, gid, unclear):
     finally:
         for pending_fd, _ in stack:
             os.close(pending_fd)
-    return size
+    return size, newest
+
+
+def _epoch(token):
+    """Parse a marker-line timestamp (UTC ISO) to epoch seconds; None if invalid."""
+    from datetime import datetime, timezone
+    try:
+        when = datetime.fromisoformat(token.decode("ascii").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.timestamp()
+
+
+def _iso_utc(epoch):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _marker_events(log):
+    """Ordered (position, kind, epoch-or-None, timestamp-text-or-None) for every
+    START/END marker. The timestamp comes only from the marker line's own prefix;
+    no other log text is ever extracted."""
+    events = []
+    for kind, token in (("start", START), ("end", END)):
+        pos = log.find(token)
+        while pos != -1:
+            line_start = log.rfind(b"\n", 0, pos) + 1
+            match = TS_RE.match(log, line_start)
+            epoch = _epoch(match.group(1)) if match else None
+            events.append((pos, kind, epoch, match.group(1).decode("ascii") if match else None))
+            pos = log.find(token, pos + 1)
+    events.sort(key=lambda item: item[0])
+    return events
+
+
+def _error_positions(log):
+    positions = []
+    pos = log.find(b"[ERROR]")
+    while pos != -1:
+        positions.append(pos)
+        pos = log.find(b"[ERROR]", pos + 1)
+    return positions
 
 
 def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
@@ -174,8 +232,9 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
     R = lambda p: root.rstrip("/") + p  # noqa: E731
     uid, gid = ids() if ids else (pwd.getpwnam("mysql").pw_uid, grp.getgrnam("mysql").gr_gid)
     facts = {"entries": 0, "size": 0, "top": [], "log_size": None, "start": False, "end": False,
-             "innodb_started": False, "innodb_ended": False, "errors": 0, "processes": 0, "initializer": 0,
-             "socket": "absent", "pid": "absent", "missing": []}
+             "innodb_started": False, "innodb_ended": False, "errors": 0, "post_errors": 0,
+             "post_touched": "-", "post_newest_mtime": "-", "end_ts": "-", "log_truncated": False,
+             "processes": 0, "initializer": 0, "socket": "absent", "pid": "absent", "missing": []}
     unclear = []
     suffix = f"--defaults-group-suffix=@{name}"
     procs = [argv for _, argv in live_processes(proc_root) if suffix in argv]
@@ -227,7 +286,8 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
     try:
         # The root descriptor pins the checked directory. Child directories are opened relative to held fds
         # with O_NOFOLLOW and checked against their lstat snapshot before traversal.
-        facts["size"] = scan_datadir_fd(root_fd, uid, gid, unclear)
+        facts["size"], newest_mtime = scan_datadir_fd(root_fd, uid, gid, unclear)
+        newest_mtime = max(newest_mtime, st.st_mtime)
     finally:
         os.close(root_fd)
     procs_after_scan = [argv for _, argv in live_processes(proc_root) if suffix in argv]
@@ -260,9 +320,45 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
                     log = handle.read(LOG_LIMIT)
     except OSError:
         unclear.append("log_unavailable")
-    start, end = log.find(START), log.rfind(END)
-    facts.update(start=start >= 0, end=end >= 0 and end > start >= 0, innodb_started=INNODB_STARTED in log,
-                 innodb_ended=INNODB_ENDED in log, errors=log.count(b"[ERROR]"))
+    # GO-20.35: scope errors by POSITION against the one initialization section.
+    events = _marker_events(log)
+    starts = [item for item in events if item[1] == "start"]
+    ends = [item for item in events if item[1] == "end"]
+    if len(starts) > 1 or len(ends) > 1:
+        unclear.append("marker_sequence_invalid:multiple_markers")
+    elif ends and not starts:
+        unclear.append("marker_sequence_invalid:end_without_start")
+    elif starts and ends and ends[0][0] < starts[0][0]:
+        unclear.append("marker_sequence_invalid:end_before_start")
+    # Round-2/3 (AppSec F-1): a byte-ordered but chronologically reversed
+    # marker pair is a contradictory event sequence. Its reversed END
+    # timestamp must neither back a PROVEN_COMPLETE nor drive the
+    # timestamp-derived POST_INIT touch evidence.
+    timestamps_contradictory = (len(starts) == 1 and len(ends) == 1
+                                and starts[0][2] is not None and ends[0][2] is not None
+                                and ends[0][2] < starts[0][2])
+    if timestamps_contradictory:
+        unclear.append("marker_sequence_invalid:end_timestamp_before_start_timestamp")
+    if any(item[2] is None for item in events):
+        unclear.append("marker_timestamp_unparseable")
+    start_pos = starts[0][0] if len(starts) == 1 else -1
+    end_pos = ends[0][0] if len(ends) == 1 else -1
+    ordered_section = len(starts) == 1 and len(ends) == 1 and end_pos > start_pos
+    error_positions = _error_positions(log)
+    if ordered_section:
+        init_errors = sum(1 for where in error_positions if where < end_pos)
+        post_errors = sum(1 for where in error_positions if where > end_pos)
+    else:
+        init_errors, post_errors = len(error_positions), 0
+    facts.update(start=bool(starts), end=ordered_section,
+                 innodb_started=INNODB_STARTED in log, innodb_ended=INNODB_ENDED in log,
+                 errors=init_errors, post_errors=post_errors,
+                 log_truncated=facts["log_size"] is not None and facts["log_size"] > LOG_LIMIT)
+    if ordered_section and not timestamps_contradictory:
+        facts["end_ts"] = ends[0][3] or "-"
+        if ends[0][2] is not None:
+            facts["post_touched"] = "yes" if newest_mtime > ends[0][2] + TOUCH_GRACE_SECONDS else "no"
+            facts["post_newest_mtime"] = _iso_utc(newest_mtime)
     facts["missing"] = missing
     if unclear:
         return "UNCLEAR", sorted(set(unclear)), facts
@@ -274,7 +370,7 @@ def classify(name, spec, *, root="/", proc_root="/proc", ids=None):
         if missing:
             return "UNCLEAR", ["end_marker_but_required_entries_missing"], facts
         if facts["errors"]:
-            return "UNCLEAR", ["end_marker_but_error_lines"], facts
+            return "UNCLEAR", ["initialization_error_lines"], facts
         return "PROVEN_COMPLETE", [], facts
     if not facts["start"]:
         return "UNCLEAR", ["datadir_not_empty_but_log_has_no_start_marker"], facts
@@ -306,7 +402,10 @@ def report(states, facts_by, denials, *, out=print):
         out(f"INSTANCE={name}")
         out(f"  DATADIR entries={f['entries']} size_bytes={f['size']} top={','.join(f['top']) or '-'}")
         out(f"  LOG size={f['log_size']} start={'yes' if f['start'] else 'no'} end={'yes' if f['end'] else 'no'} "
-            f"innodb_started={'yes' if f['innodb_started'] else 'no'} innodb_ended={'yes' if f['innodb_ended'] else 'no'} errors={f['errors']}")
+            f"innodb_started={'yes' if f['innodb_started'] else 'no'} innodb_ended={'yes' if f['innodb_ended'] else 'no'} "
+            f"init_errors={f['errors']} post_errors={f['post_errors']}")
+        out(f"  POST_INIT end_ts={f['end_ts']} touched={f['post_touched']} "
+            f"newest_mtime={f['post_newest_mtime']} truncated={'yes' if f['log_truncated'] else 'no'}")
         out(f"  PROCESSES count={f['processes']} initializer={f['initializer']}")
         out(f"  MARKERS socket={f['socket']} pid={f['pid']}")
         out(f"  MISSING={','.join(f['missing']) or '-'}")

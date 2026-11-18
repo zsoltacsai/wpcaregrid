@@ -37,7 +37,7 @@ directory in place for read-only investigation; reruns get a new path.
 ```bash
 ( set -euo pipefail; umask 077
   OPS_SHA=0951d9e829364296796a1d4acd303feef698cbc7
-  SUMS_SHA256=92c9a1b698aeddd21e34fa7d7853c33daa43a0a756d6212eefba57fdf61f075d
+  SUMS_SHA256=df03747b8bc75567b74573fd5aa965e3df653f8561bb10a5a825470303e74c03
   [[ $OPS_SHA =~ ^[0-9a-f]{40}$ && $SUMS_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "STOP: pins malformed"; exit 1; }
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')"
   [[ $RUN_ID =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] || { echo "STOP: run id malformed"; exit 1; }
@@ -394,12 +394,22 @@ MySQL. GO-5.3 stays a separate Owner approval.
 python3 -I -B "$OPS/go53-init-state.py"
 ```
 
-It prints per instance: entry count, size, the first 40 top-level names, log size and marker flags (`start`, `end`, `innodb_started`,
-`innodb_ended`, `errors`), process and socket/pid markers, missing required entries and the `STATE`, then the kernel AppArmor denials
+It prints per instance: entry count, size, the first 40 top-level names, log size, marker flags (`start`, `end`, `innodb_started`,
+`innodb_ended`), initialization-scoped and post-initialization error counts, the initialization end-marker timestamp, post-initialization
+datadir-touch evidence, process and socket/pid markers, missing required entries and the `STATE`, then the kernel AppArmor denials
 of the two profiles (distinct paths only) and a final `G1_GO53_INIT_STATE=DONE;WPCAREGRID_PRODUCTION=<state>;WPCAREGRID_PRODUCTION_RESTORE=<state>`.
 States: `EMPTY` (exactly as `provision-paths` left it), `PROVEN_COMPLETE` (proof above), `PARTIAL` (sane, artefacts present, end marker missing),
-`UNCLEAR` (anything else, e.g. symlink, foreign owner/mode, running process, end marker without the files, error lines): completion is **not**
+`UNCLEAR` (anything else, e.g. symlink, foreign owner/mode, running process, end marker without the files, initialization-phase error
+lines, duplicated/unordered/overlapping markers, unparseable marker timestamps): completion is **not**
 proven for `PARTIAL` and `UNCLEAR`; STOP. Expected for the incident: production `PARTIAL` with `innodb_started=yes innodb_ended=no`, restore `EMPTY`.
+
+GO-20.35 semantics (initialization vs later startup events): the shared error log may contain later, separate startup attempts
+after the one-time initialization section. `[ERROR]` lines located before the initialization end marker are initialization
+failings and stay blocking; `[ERROR]` lines after it belong to later events and are reported as `POST_INIT` facts —
+`post_errors`, `touched` (datadir mtimes newer than the end-marker timestamp, beyond a 60 s finalize grace), `newest_mtime`
+and `truncated` (log beyond the 2 MiB analysis window) — without downgrading a proven-complete initialization. The later
+events' datadir consequences are exactly the `touched`/`newest_mtime` evidence plus the standing structural checks; the
+marker-line timestamp is the only log text the tool ever emits (never log contents or the generated root password).
 
 **Recovery plan (every step a separate Owner decision; nothing automatic):**
 1. Run the diagnostic. `PROVEN_COMPLETE` would allow `verify-install`/`preflight` and a later GO-5.4; `PARTIAL`/`UNCLEAR` stays STOP.

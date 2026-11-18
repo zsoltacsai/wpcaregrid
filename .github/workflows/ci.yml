@@ -82,6 +82,8 @@ jobs:
 
       - name: GO-5.3 helper upgrade transaction tests
         run: sudo -n python3 -B -m unittest scripts/tests/test_go53_upgrade_transaction.py
+      - name: GO-5.3 initialization-state diagnostic tests
+        run: python3 -B scripts/tests/go53-init-state-test.py
 
       - name: GO-5.4a AppArmor upgrade transaction tests
         run: sudo -n python3 -B -m unittest scripts/tests/test_go54a_upgrade_transaction.py
@@ -293,25 +295,8 @@ jobs:
       - name: JavaScript contracts and M147-A safety tests (fake sinks; no network)
         run: npm test
 
-      - name: npm advisories (high and critical; GHSA-fc5q-39xc-vjpf Owner GO-20.1 exception, expires 2026-12-01)
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/tests/npm-audit-gate-test.py
-          python3 -m py_compile scripts/npm_audit_gate.py scripts/tests/npm-audit-gate-test.py
-          report="$RUNNER_TEMP/npm-audit-report.json"
-          status=0
-          python3 scripts/npm_audit_gate.py --report-out "$report" || status=$?
-          echo "::group::raw npm audit --json report (evidence; no artifact upload, see docs/SECURITY_EXCEPTIONS.md)"
-          npm --version
-          tok="$(cat /proc/sys/kernel/random/uuid)"
-          echo "::stop-commands::$tok"
-          if [[ -s "$report" ]]; then cat -- "$report"; else echo "no report written"; fi
-          echo
-          echo "::$tok::"
-          if [[ -s "$report" ]]; then sha256sum -- "$report"; fi
-          echo "::endgroup::"
-          exit "$status"
+      - name: npm advisories (high and critical)
+        run: npm audit --audit-level=high
 
       - name: Secret scan (Gitleaks 8.30.0, verified archive, full history)
         run: |
