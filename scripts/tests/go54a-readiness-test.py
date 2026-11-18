@@ -483,7 +483,7 @@ class ReadinessTestCase(unittest.TestCase):
         commands[(rd.VENDOR_UNIT, "MainPID")] = ["1131", "2049"]
         self.host = self.healthy_host(commands=commands)
         self.assertEqual(self.run_main(), 3)
-        self.assertIn("HOLD vendor_mysql_pid_changed_during_run", self.output())
+        self.assertIn("HOLD vendor_mysql_pid_changed_between_observations", self.output())
 
     def test_vendor_pid_not_mysqld_holds(self):
         files = dict(self.host.files)
@@ -697,7 +697,7 @@ class ReadinessTestCase(unittest.TestCase):
         self.host = self.healthy_host(euid=1000)
         self.assertEqual(self.run_main(), 4)
         self.assertEqual(self.last_line(), "G1_GO54A_READINESS=UNKNOWN")
-        self.assertIn("CHECK console_root UNKNOWN not_root_console", self.output())
+        self.assertIn("CHECK console_root UNKNOWN not_root_euid", self.output())
 
     def test_loaded_profiles_unavailable_yields_unknown(self):
         files = dict(self.host.files)
@@ -962,6 +962,21 @@ class ReadinessTestCase(unittest.TestCase):
         self.assertNotIn("/root/wpcg-go54a-x\nEVIL", self.output())
 
     # -- AppSec round-6 findings (R6-F1 stale evidence, R6-F2 UNKNOWN) ------
+
+    def test_vendor_mysql_revalidation_healthy(self):
+        self.host = self.healthy_host()
+        self.assertEqual(self.run_main(), 0)
+        self.assertIn("CHECK vendor_mysql_revalidation PASS vendor_mysql_observations_match_at_close=1131",
+                      self.output())
+        self.assertNotIn("mainpid_stable_during_run", self.output())
+        self.assertNotIn("vendor_mysql_stability", self.output())
+
+    def test_vendor_mysql_deactivated_between_observations_holds(self):
+        commands = dict(self.host.commands)
+        commands[(rd.VENDOR_UNIT, "ActiveState")] = ["active", "inactive"]
+        self.host = self.healthy_host(commands=commands)
+        self.assertEqual(self.run_main(), 3)
+        self.assertIn("HOLD vendor_mysql_not_active_at_close:inactive", self.output())
 
     def test_state_revalidation_passes_in_healthy_run(self):
         self.assertEqual(self.run_main(), 0)

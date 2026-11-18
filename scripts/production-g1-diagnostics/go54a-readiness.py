@@ -60,7 +60,7 @@ import subprocess
 import sys
 
 TOOL = "go54a-readiness"
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 LIBEXEC = "/usr/local/libexec"
 APPARMOR = "/etc/apparmor.d"
@@ -403,7 +403,8 @@ def validate_package_dir(host, path):
 
 def check_console_root(host, emit):
     status = "PASS" if host.euid() == 0 else "UNKNOWN"
-    detail = "" if status == "PASS" else "not_root_console"
+    detail = "" if status == "PASS" else "not_root_euid"
+    emit("NOTE root_euid_only: console authorization is a separate operator record")
     return status, detail
 
 
@@ -857,13 +858,25 @@ def main(argv=None, host=None, stream=None):
     results.append(("toolkit_companions", status, detail))
 
     if vendor_pid is not None:
-        closing = guard(lambda: unit_property(host, VENDOR_UNIT, "MainPID"))
-        if isinstance(closing, tuple):
-            results.append(("vendor_mysql_stability", "UNKNOWN", closing[1]))
-        elif closing != vendor_pid:
-            results.append(("vendor_mysql_stability", "HOLD", "vendor_mysql_pid_changed_during_run"))
+        # AppSec R9-F1: the closing vendor observation re-observes BOTH
+        # ActiveState and MainPID; equality of samples only proves the two
+        # observations matched, never continuous stability, and a
+        # non-active closing state fails closed.
+        closing_state = guard(lambda: unit_property(host, VENDOR_UNIT, "ActiveState"))
+        closing_pid = guard(lambda: unit_property(host, VENDOR_UNIT, "MainPID"))
+        if isinstance(closing_state, tuple):
+            results.append(("vendor_mysql_revalidation", "UNKNOWN", closing_state[1]))
+        elif isinstance(closing_pid, tuple):
+            results.append(("vendor_mysql_revalidation", "UNKNOWN", closing_pid[1]))
+        elif closing_state != "active":
+            results.append(("vendor_mysql_revalidation", "HOLD",
+                             "vendor_mysql_not_active_at_close:" + closing_state))
+        elif closing_pid != vendor_pid:
+            results.append(("vendor_mysql_revalidation", "HOLD",
+                            "vendor_mysql_pid_changed_between_observations"))
         else:
-            results.append(("vendor_mysql_stability", "PASS", "mainpid_stable_during_run=" + vendor_pid))
+            results.append(("vendor_mysql_revalidation", "PASS",
+                            "vendor_mysql_observations_match_at_close=" + vendor_pid))
 
     # AppSec R6-F1/R7-F1: the four critical transaction-relevant checks
     # are re-run quietly (through a sink so the evidence transcript is not

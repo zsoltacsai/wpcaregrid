@@ -30,11 +30,11 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
   (digest `70f92e3a2aba84ca13f5d6c81f732be605c50a09531308878991f7b671c48a9e`,
   23 entries) remain byte-identical and untouched:
   - `scripts/production-g1-diagnostics/go54a-readiness.py`
-    (SHA-256 `1a1e5cfe0313a099e571170c9a156b2bb4d797e00f20a81ec1b3a8eac40d69f9`)
+    (SHA-256 `98aa0ee66cac4c6219bca96bca924fa6f0448db54548e12345fbed95dc80348c`)
   - `scripts/production-g1-diagnostics/g1-notify-evidence.py`
     (SHA-256 `3c0b7841a7885fd2e19cc03453ef4173e23d0b41874d39df9d8824a3c8d4dc87`)
   - `scripts/production-g1-diagnostics/SHA256SUMS` (file digest
-    `4c586d95ca2511a77d03bc669cc6e89cb45e723aaf6fcf72c0819b4640fc39d5`)
+    `a81f57cc3d13d3606808294fdcd898d600d63446a2b3c1a7a176ae489feeb2f8`)
   - Reviewer corrections included in v1.1.0: the installed `MANIFEST` path now
     matches the transaction tool exactly; parent-directory safety checks for
     `/usr/local/libexec` and `/etc/apparmor.d`; an upgrader-grade datadir walk
@@ -104,6 +104,16 @@ Related: [GO-5.4a hotfix](PRODUCTION_G1_MYSQL_GO54A_APPARMOR_HOTFIX.md)
     UNKNOWN uniformly; the log pathname stat happens while the descriptor is
     still open; the per-level enumeration bound residual is documented.
     The notify tool is unchanged in this round too (v1.4.0).
+  - Reviewer corrections included in v1.9.0 (AppSec round 9, GPT Medium
+    via T3): the closing vendor-MySQL observation re-observes BOTH the
+    service ActiveState and MainPID, fails closed on a non-active closing
+    state, and its PASS wording is observation-scoped
+    (`vendor_mysql_observations_match_at_close`) — two PID samples prove
+    only a match, never continuous stability; the advisory-semantics
+    paragraph now points to the installation procedure step 2 of this
+    preflight (where the serialization requirement lives); the root check
+    label states exactly what it proves (`not_root_euid`, with a note that
+    console authorization is a separate operator record).
   - Reviewer corrections included in v1.7.0 (AppSec round 7, readiness tool):
     the verdict semantics are stated honestly everywhere — ADVISORY,
     NON-ATOMIC evidence: the closing re-observation narrows but cannot
@@ -157,7 +167,8 @@ window — but a read-only collector cannot serialize with a concurrent
 transaction. `PASS` never asserts that no transaction is active or will
 start. **The Owner must serialize evidence collection against any
 transaction**: collect the evidence, decide, and only then issue the
-separate execution GO (the runbook states this sequencing requirement).
+separate execution GO (the installation procedure step 2 below states this
+sequencing requirement).
 Residual bound (documented, AppSec R6-F4/R7-F3): the per-level entry cap is
 enforced while processing a level's entries; a single directory's name
 enumeration and sort happen before that cap, so a pathological single
