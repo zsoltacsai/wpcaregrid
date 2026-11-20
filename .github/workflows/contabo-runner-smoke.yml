@@ -1,0 +1,30 @@
+name: Contabo runner smoke (isolated)
+
+on:
+  push:
+    branches:
+      - ci/contabo-runner-smoke-20261120
+    paths:
+      - .github/workflows/contabo-runner-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-smoke:
+    name: Contabo runner smoke
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Verify isolated runner baseline (no checkout, no secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          test "$(id -un)" = github-runner
+          echo "runner=ok"
+          echo "cpu_count=$(nproc)"
+          echo "docker_cli=$(docker --version)"
+          echo "smoke=PASS"
