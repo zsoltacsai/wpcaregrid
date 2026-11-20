@@ -30,7 +30,7 @@ This proves the sandbox's tested egress boundary for this workflow run. It does 
 
 The policy test rejects mutations enabling inline `sync` queues, external mail/storage, Stripe live mode, scheduler, workers, Connector polling or backup operations. The live FPM probe checks effective Laravel configuration, denies inherited runner/proxy credential variables, verifies the Docker socket is absent, and confirms that no queue/scheduler/Supervisor/Connector consumer runs. Startup/config errors, warnings, fatal errors, failed egress denial, unexpected listener, probe timeout, or non-graceful process shutdown fail the lane.
 
-The additional CI job does not change ruleset #25300175 or its existing seven required contexts. All existing PHP 8.4/8.5 server suites, both MySQL process-concurrency executions, SQLite regression gate and full Connector matrix remain in place.
+The PHP 8.5 FPM compatibility job does not change ruleset #25300175 or its existing required contexts. The Laravel server suite and SQLite regression now run on PHP 8.5; the full MySQL process-concurrency gate and Connector compatibility matrix remain in place.
 
 ## Limits
 

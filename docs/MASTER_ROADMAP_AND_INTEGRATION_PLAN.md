@@ -29,7 +29,7 @@ This decision supersedes earlier release-plan text in this document wherever it 
 1. **P0 — HU/EN marketing-only MVP:** keep registration, checkout, live payment, provisioning, Connector onboarding and paid SaaS operations disabled. Production activation still requires separate exact-release authorization.
 2. **Post-production product roadmap:** defer daily database backups to the existing S3-compatible store; encrypted backup storage, retention and failure monitoring; secure internal database administration; restore tooling and periodic isolated restore verification; and full customer-facing M15 Backup & Restore. These are separate infrastructure and customer product workstreams. The hosting provider's reported weekly server backups are an Owner-reported existing safeguard, not verified application/database restore evidence.
 3. **Infrastructure release safety:** the authorized release is the full Laravel application through the existing controller. It invokes migrations and can change database state, so retain exact-SHA rollback, a fresh pre-deployment app/config/database backup, and demonstrated restore/recovery evidence. Do not waive that gate.
-4. **PHP policy:** server-side PHP 8.4+ only; preserve PHP 8.4 and 8.5 CI coverage. PHP 8.5 cutover remains unauthorized. The WordPress Connector compatibility matrix is unchanged.
+4. **PHP policy:** server-side CI uses PHP 8.5. This CI policy does not authorize host runtime changes. The WordPress Connector PHP 8.2–8.5 compatibility matrix is unchanged.
 5. **Database administration:** prefer DBeaver Community over the existing approved SSH tunnel for later operator use; DBeaver documents SSH tunnels for remote database connections ([SSH configuration](https://dbeaver.com/docs/dbeaver/SSH-Configuration/)). Require host-key verification, least-privilege DB credentials, and no public database listener. Do not install it as a server service. A future browser-based phpMyAdmin option must be separately reviewed, remain inaccessible from the public internet, use appropriate authentication and HTTPS, and be maintained against security updates ([phpMyAdmin security guidance](https://docs.phpmyadmin.net/en/latest/setup.html#securing-your-phpmyadmin-installation)); no database admin interface is part of this release.
 
 ### Release-path finding: current controller always migrates
@@ -56,7 +56,7 @@ The Owner approved a marketing-only first MVP. The later release-simplification 
 2. **Recovery gate for database-changing releases:** preserve fresh backup, configuration/key pairing and recovery proof when the selected path changes database state. This requirement does not make full M15 customer functionality a launch dependency.
 3. **Paid service activation — later, separately gated:** choose only a package whose advertised capabilities have verified technical delivery, staffed operations, financial/accounting approval, support and recovery evidence. Keep customer registration, Stripe Checkout, webhook provisioning and production service activation disabled until those conditions pass. Sandbox tests may validate code paths; no live transaction is authorized.
 4. **M15 product milestone:** full customer-facing Backup & Restore, customer-facing entitlements/retention, browsing, restore-provider/isolation workflows and product acceptance remain post-production scope. Keep those interfaces and capabilities unavailable until M15 acceptance.
-5. **M17 controls and PHP policy:** security, legal/accounting, monitoring, secrets/access, runtime, privacy and production release gates apply to the actual enabled scope. Laravel server CI must cover PHP 8.4 and 8.5; PHP 8.5 compatibility is a validation target, not a cutover authorization. PHP 8.5 staging/production cutover remains NO-GO. The Connector matrix is unchanged.
+5. **M17 controls and PHP policy:** security, legal/accounting, monitoring, secrets/access, runtime, privacy and production release gates apply to the actual enabled scope. Laravel Quality and server CI run PHP 8.5; this does not authorize a staging or production operation. The Connector matrix is unchanged.
 
 ### Restore-gate options
 
@@ -275,7 +275,7 @@ Rules: worktrees are independent; no shared working directory. Recheck primary S
 
 ## 8. CI and integration protocol
 
-The 2026-10-24 planning baseline had 37 successful jobs; the current recorded exact merge-SHA run `41747134447` has 38/38 PASS. Counts are per-run evidence, not permanent constants. At PR time inspect `.github/workflows/ci.yml`, the active ruleset, required checks, skipped jobs and exact run SHA. Preserve Laravel server PHP 8.4/8.5 coverage and the separate Connector compatibility matrix (unchanged, including its existing combinations). Preserve the mandatory MySQL process-concurrency job.
+The 2026-10-24 planning baseline had 37 successful jobs; the recorded exact merge-SHA run `41747134447` has 38/38 PASS. Counts are per-run evidence, not permanent constants. At PR time inspect `.github/workflows/ci.yml`, the active ruleset, required checks, skipped jobs and exact run SHA. Laravel Quality and server CI now use PHP 8.5; preserve the separate Connector PHP 8.2–8.5 compatibility matrix and the mandatory MySQL process-concurrency job.
 
 For each PR, Thread 4 follows this sequence:
 

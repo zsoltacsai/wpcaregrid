@@ -1,14 +1,12 @@
-# Laravel PHP 8.4 CI retirement — preparation only
+# Laravel PHP 8.4 CI retirement
 
-**Status:** `CI_PHP84_RETIREMENT=PREPARATION` / `REMOVAL_GATE=HOLD`
-**Planning baseline:** `c9b1378cce26ab243bce2690749a57ecb15ad8dd`
-**Owner decision:** [Issue #285](https://github.com/zsoltacsai/wpcaregrid/issues/285)
+**Scope:** CI configuration only. This change does not install, remove, or switch PHP on any host, and it does not authorize a staging or production operation.
 
-This document prepares a focused change; it does not remove, rename, or weaken any current check. Retirement is blocked until PHP 8.5 staging Laravel/runtime acceptance is formally recorded and the PHP 8.4 rollback window is explicitly closed by the Owner and Integration & QA.
+The protected primary was `08cf12c1be9810a2be4afeb73dd335233830a2f5` when this change was prepared. The workflow change sets Quality, Laravel MySQL server tests, SQLite regressions, and Connector release-artifact packaging to PHP 8.5. The Connector customer-runtime matrix remains PHP 8.2–8.5 with its existing WordPress/database combinations. MySQL 8.4 remains the Laravel integration database.
 
-## Current protected-primary evidence
+## Protected check status
 
-The active [primary ruleset](https://github.com/zsoltacsai/wpcaregrid/rules/25300175) requires pull requests, stale-review dismissal, resolved review threads, strict required status checks, and has no bypass actors. It currently requires:
+Ruleset [25300175](https://github.com/zsoltacsai/wpcaregrid/rules/25300175) was inspected and not modified. It currently requires:
 
 1. `Quality (lint, style, dependencies, build, secrets)`
 2. `Server tests (PHP 8.4, mysql)`
@@ -18,40 +16,13 @@ The active [primary ruleset](https://github.com/zsoltacsai/wpcaregrid/rules/2530
 6. `Server SQLite regression gate (PHP 8.4)`
 7. `Server tests (PHP 8.5, mysql)`
 
-The current [CI workflow](https://github.com/zsoltacsai/wpcaregrid/blob/c9b1378cce26ab243bce2690749a57ecb15ad8dd/.github/workflows/ci.yml) sets `PHP_VERSION: '8.4'`; the server MySQL matrix includes `['8.4', '8.5']`. The server SQLite regression context is separately named for PHP 8.4. MySQL 8.4 is a database-engine version and remains required independently of PHP retirement.
+Removing the PHP 8.4 server and SQLite lanes means the two currently required PHP 8.4 contexts will not be produced by the revised workflow. Their check names are not aliased to PHP 8.5 runs. Unless the protected ruleset is changed through its separate authorized process, strict required-check enforcement therefore blocks merging this change. The review must explicitly resolve that administrative dependency without changing it in this repository task.
 
-## Changes eligible only after both release gates pass
+## Coverage retained
 
-Candidate application workflow changes are limited to:
+- PHP 8.5 runs the complete Laravel MySQL suite, including migrations, process concurrency, storage services, and failure-path checks.
+- PHP 8.5 retains the targeted SQLite regression gate.
+- The WordPress Connector continues testing customer PHP 8.2–8.5, WordPress 6.8/7.1, MySQL 5.7/8.0/8.4, MariaDB 10.11, and its existing protected PHP 8.4 contexts.
+- PHP 8.4 references for runtime packages, rollback, staging, and production are operational policy and are outside this CI-only change.
 
-- Quality server runtime: PHP 8.4 → PHP 8.5.
-- Laravel MySQL server matrix: PHP `['8.4', '8.5']` → `['8.5']`.
-- Laravel SQLite regression lane: PHP 8.4 → PHP 8.5, retaining the SQLite gate.
-- Keep MySQL 8.4 and all migration, concurrency, restore, and failure-path coverage.
-- Inspect the PHP 8.4 Connector package-build use separately before changing it.
-- Preserve the WordPress Connector customer-runtime PHP 8.2–8.5 matrix unchanged.
-
-The check-name transition must be coordinated with Integration & QA and the ruleset owner. The replacement PHP 8.5 SQLite context must be present and required before the old PHP 8.4 SQLite context can be removed; no interval may silently omit a required check. Repository PR review alone cannot update an administrative ruleset.
-
-## Evidence required before preparing the retirement PR
-
-Record links and exact release identity for all of the following:
-
-- Accepted PHP 8.5 staging web/FPM and CLI runtime.
-- PHP 8.5 Laravel HTTP and application acceptance.
-- Queue and scheduler compatibility acceptance for the deployed operating profile.
-- Current verified backup, isolated restore, migration rehearsal, and tested recovery/rollback evidence.
-- Formal Owner and Integration & QA closure of the PHP 8.4 rollback window.
-
-Installed PHP 8.5 packages, CI success, helper preflight, or `artisan system:check` do not satisfy these operational gates by themselves.
-
-## Planned integration sequence
-
-1. Recheck the authoritative primary, exact workflow, required contexts, and ruleset immediately before editing.
-2. After both release gates are accepted, update the focused workflow lanes while retaining all Connector and MySQL-engine coverage.
-3. Coordinate the replacement required-context name with the ruleset administrator before the old context is retired.
-4. Run PHP 8.5 server MySQL/SQLite tests, all Connector PHP 8.2–8.5 lanes, MySQL 8.4, concurrency/restore gates, and exact-HEAD CI.
-5. Obtain independent Integration & QA and M17 AppSec exact-diff reviews; use only the protected merge workflow.
-6. Verify exact merge-SHA CI and update the #174 ledger. Remove PHP 8.4 checks only after the formal rollback-window closure is recorded.
-
-No staging or production operation is authorized by this preparation document.
+No branch protection setting, required-check name, runner installation/configuration, or production VPS is changed by this work.

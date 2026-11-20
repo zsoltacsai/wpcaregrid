@@ -100,7 +100,7 @@ The first release is the full Laravel application operating in marketing-only mo
 
 - First release scope is HU/EN public marketing only. Registration, checkout, live payments, provisioning, Connector onboarding, and paid SaaS operations remain disabled. Production activation requires separate exact-release authorization.
 - Move these to post-production: daily database backups to the existing S3-compatible store; encryption, retention and failure monitoring; secure internal database administration; restore tooling and periodic isolated restore verification; and full customer-facing M15 Backup & Restore. Hosting-provider weekly backups are Owner-reported only, not verified application/database restore evidence.
-- Server-side PHP 8.4+ only. Keep PHP 8.4/8.5 CI; PHP 8.5 cutover is not authorized. Keep the WordPress Connector PHP matrix unchanged.
+- Server-side CI uses PHP 8.5. CI configuration does not authorize a host runtime operation. Keep the WordPress Connector PHP 8.2–8.5 matrix unchanged.
 - Do not install a database admin UI in this release. For later operator access, prefer DBeaver Community over the approved SSH tunnel with verified host identity and least-privilege DB credentials. A future phpMyAdmin deployment requires separate security review and must be inaccessible from the public internet.
 
 ### Database-change split for the release gate
@@ -122,7 +122,7 @@ The first production target is the **HU/EN marketing-only MVP**. Customer regist
 | --- | --- | --- |
 | Exact source and CI | Primary observed at that time `06d35a28453445ed19bdc11e62592e187e17dbf8`; merge CI `41817511959` — 38/38 PASS. | Recheck target SHA and mandatory jobs immediately before release. CI does not establish staging behavior. |
 | Marketing-only application QA | Marketing E2E `41748568634` — PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`; later primary changes were documentation-only. | Revalidate HU/EN routes, informational pricing, navigation, CTA/contact, responsive layouts, SEO and negative access checks for registration, checkout, payment, service provisioning and SaaS/background actions on the deployed exact SHA. |
-| Server PHP policy | PHP 8.4 is the staging/rollback baseline. Server CI covers PHP 8.4 and 8.5. | Keep staging baseline on 8.4. Complete 8.5 compatibility validation in CI or an approved isolated environment; this is not a PHP 8.5 cutover authorization. Connector PHP matrix remains separate and unchanged. |
+| Server PHP policy | PHP 8.4 is the staging/rollback baseline. Laravel Quality and server CI use PHP 8.5. | Keep staging baseline on 8.4 unless separately authorized. CI configuration does not itself authorize a host runtime operation. Connector PHP matrix remains separate and unchanged. |
 | Pre-deployment backup | Fresh, mutually associated application/configuration/database backup is not currently evidenced. The controller creates only the DB dump; no application/config snapshot or restore proof is produced by that step. | Capture immediately before a state-changing deployment; verify identity, completeness and hashes; protect `.env`/`APP_KEY` through approved secret recovery without exposing values. |
 | Actual recovery proof | Required for the current controller path because it runs migrations; restore work is paused by Owner decision. Synthetic MySQL migration passes are not actual backup restore evidence. | Before using the current controller, restore the fresh backup into an isolated disposable MySQL 8.4.11 environment, verify application/config/key pairing, run release migrations on a restored clone, and verify cleanup. |
 | Rollback/recovery | Exact-SHA controller and PHP 8.4 rollback baseline exist; an actual current backup restore remains unproven. | Demonstrate code/config rollback and database recovery path without automatic destructive migration rollback. Keep the public gate closed on migration failure. |
@@ -140,7 +140,7 @@ The first production target is the **HU/EN marketing-only MVP**. Customer regist
 | Staging application SHA at that time | `761e0e5d37558da808ac961ca2d2a68b4ffab0db`, rechecked through `caregrid-staging` on 2026-11-04 11:27 UTC; worktree clean; PHP CLI 8.4.27. | Primary was 546 commits ahead. The target includes application, billing, Connector, backup, migrations, deployment/runtime, localization and marketing changes. Use the full protected exact-SHA controller release; do not cherry-pick marketing files. |
 | Exact-source acceptance | Merge CI `41817511959` = 38/38 PASS; Marketing E2E `41748568634` = PASS on application SHA `7355788882e026db7c4a6d37db2b957740b5f385`, with later primary changes documentation-only. | Repository evidence only. It does not establish deployed staging behavior; actual browser QA follows a successful exact-SHA deploy. |
 | Staging deploy | **NO-GO** | The full Laravel controller runs migrations. Do not deploy until fresh backup, isolated restore/recovery proof, target migration rehearsal, current runtime/fencing/controller checks and post-deploy acceptance are evidenced. No alternate architecture is authorized. |
-| PHP policy | PHP 8.4 is staging/rollback baseline; PHP 8.5 is planned compatibility validation only. | Keep server CI on 8.4/8.5. No PHP 8.5 cutover; Connector matrix remains unchanged. |
+| PHP policy | PHP 8.4 is the staging/rollback baseline; server CI uses PHP 8.5. | Keep host changes separately authorized. Connector matrix remains unchanged. |
 | Paid plan candidate | `wordpress.basic`, 8,990 HUF/month, is a later candidate, not part of this MVP and not approved for sale. | It includes plugin/theme/core updates, remote backup, uptime monitoring, monthly security checks and activity log; catalogue marks it restore-eligible. Verify capability, operator coverage, entitlement, financial readiness and recovery before later activation. HU/EN labels are Basic/Business/Secure; 39,900 HUF is `woocommerce.secure`. |
 | Registration and payment | Disabled for marketing-only MVP; real payment is prohibited. | Verify account creation, Checkout, webhook provisioning and service activation are inaccessible. Sandbox customer-journey verification belongs to the later paid-service gate; live mode always needs separate explicit Owner GO. |
 | Deferred product scope | Full customer-facing M15 Backup & Restore is post-production; daily S3-compatible backups, encryption/retention/monitoring, secure internal DB administration, restore tooling and periodic isolated restore verification are also post-production roadmap items. | Keep customer Backup & Restore capabilities unavailable until M15 acceptance. Reconcile catalogue entitlements before any package is sold. The current controller's database-changing release still requires the recovery gate. |
@@ -166,8 +166,8 @@ These remain mandatory before any state-changing staging or production release, 
 
 | Item | State | Check |
 | --- | --- | --- |
-| PHP 8.4 with required extensions | READY | CI runs PHP 8.4 on Ubuntu 24.04; Ubuntu ships 8.3, so the server needs `ppa:ondrej/php`; exact extension list in DEPLOYMENT.md; server: `composer check-platform-reqs --no-dev` |
-| PHP 8.5 backend compatibility | READY IN SERVER CI / STAGING CUTOVER NO-GO | Preserve Laravel CI coverage on PHP 8.4 and 8.5. Complete any required isolated compatibility validation before release; PHP 8.5 staging/production cutover needs separate approval. Connector matrix is separate and unchanged. |
+| PHP 8.4 host runtime and required extensions | Current staging baseline | Ubuntu 24.04 ships 8.3, so the host needs `ppa:ondrej/php`; exact extension list in DEPLOYMENT.md; server: `composer check-platform-reqs --no-dev` |
+| PHP 8.5 backend compatibility | Validated by current server CI; host operations remain separately gated | Quality and Laravel server CI use PHP 8.5. CI does not itself authorize a staging/production runtime change. Connector matrix is separate and unchanged. |
 | English and Hungarian for the public site, customer login and portal; HU → HUF; no fake international prices | READY | LOCALIZATION.md; CustomerLocalizationTest, HungarianContentTest, Playwright localization spec |
 | Customer emails in Hungarian | NOT READY | English only; needs the language stored at checkout (LOCALIZATION.md) |
 | Fresh install without dev packages | READY | `composer install --no-dev`, build, migrate, `connector:package`, all caches, rollback and re-migrate verified on an exported copy of the repository (2026-10-04) |
@@ -186,7 +186,7 @@ These remain mandatory before any state-changing staging or production release, 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Migrations run from an empty database, roll back fully, run again | READY | Full Laravel CI on MySQL 8.4 for PHP 8.4 and 8.5; targeted SQLite regressions separately |
+| Migrations run from an empty database, roll back fully, run again | READY | Full Laravel CI on MySQL 8.4 with PHP 8.5; targeted SQLite regressions separately |
 | Indexes and foreign keys | READY | verified on MySQL 8.4 (every table has a primary key; foreign keys on all relations) |
 | Server-side suite on MySQL | READY | CI server job (mysql); found and fixed: reason codes longer than their columns, JSON key order in tests |
 | No seed or demo data in production | READY | `migrate --force` only; no seeders run |
@@ -326,6 +326,6 @@ These remain mandatory before any state-changing staging or production release, 
 
 | Item | State | Check |
 | --- | --- | --- |
-| Workflow: quality, Laravel PHP 8.4/8.5 on MySQL 8.4, targeted SQLite regressions, Connector matrix | READY | CI workflow; Connector MariaDB coverage unchanged |
+| Workflow: quality, Laravel PHP 8.5 on MySQL 8.4, PHP 8.5 SQLite regressions, Connector matrix | READY | CI workflow; Connector PHP 8.2–8.5 and MariaDB coverage unchanged |
 | First green run on GitHub | READY | run #2 (commit `3f01f5d`, 2026-10-04): all 5 jobs green; server 593 tests × 2 with real S3 (moto) and SFTP (OpenSSH), 0 skips; connector 169 tests × 2; gitleaks clean over full history; audits clean. Run #1 failed on CI configuration only (moto path, two test fixtures not allowlisted) |
-| Required status checks on protected primary | READY | Ruleset 25300175 requires Quality, Laravel MySQL 8.4/PHP 8.4+8.5, SQLite regression, and three Connector PHP 8.4 contexts |
+| Required status checks on protected primary | REVIEW REQUIRED | Current ruleset 25300175 still names the PHP 8.4 server and SQLite contexts; align those required contexts separately before merge. The three Connector PHP 8.4 contexts remain unchanged. |

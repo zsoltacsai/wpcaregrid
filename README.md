@@ -185,7 +185,7 @@ Production setup (PHP 8.4, MySQL 8.4, nginx, two queue workers, one cron schedul
 
 - `php artisan system:check` reports each part (application, database, queue, scheduler, connector API, Stripe, backup storage, security scanner, mail, safety switches) as OK, WARNING, ERROR or NOT CONFIGURED, without printing secrets.
 - `php tests/smoke/http-smoke.php https://<host>` checks a running installation (read-only).
-- `.github/workflows/ci.yml` runs on Linux with PHP 8.4: lint, Pint, dependency audits, build, secret scan, the server suite on SQLite and MySQL 8.4 with real S3 (moto) and SFTP (OpenSSH) services, and the connector suite inside real WordPress on SQLite and MySQL.
+- `.github/workflows/ci.yml` runs Quality and Laravel server checks on PHP 8.5, including SQLite regressions and MySQL 8.4 integration with real S3 (moto) and SFTP (OpenSSH) services. The WordPress Connector retains its customer PHP 8.2–8.5 compatibility matrix.
 
 ## Demo content
 
