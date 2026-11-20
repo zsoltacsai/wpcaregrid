@@ -18,7 +18,7 @@ trait ProvesStagingNext
             'marketing_release.requested_profile' => 'staging_active',
             'marketing_release.staging_active_enabled' => true,
             'marketing_release.enforcement_mode' => 'enforced',
-            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false],
+            'marketing_release.staging_active_features' => ['connector_api' => false, 'external_services' => false, 'platform_updates_outbound' => false],
             'marketing_release.staging_active_db_uuid_sha256' => null,
             'marketing_release.staging_mail_allowlist' => [],
             'app.env' => 'staging',

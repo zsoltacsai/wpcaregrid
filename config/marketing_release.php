@@ -63,6 +63,9 @@ return [
     'staging_active_features' => [
         'connector_api' => filter_var(env('STAGING_ACTIVE_CONNECTOR_API', false), FILTER_VALIDATE_BOOL),
         'external_services' => filter_var(env('STAGING_ACTIVE_EXTERNAL_SERVICES', false), FILTER_VALIDATE_BOOL),
+        // Only the advisory check of Platform Update Intelligence (one fixed public endpoint, no customer data). Independent of
+        // external_services: opening it opens nothing else (no DNS, backups, invoicing, AI, VAT, website probes).
+        'platform_updates_outbound' => filter_var(env('STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND', false), FILTER_VALIDATE_BOOL),
     ],
     // Optional SHA-256 of the MySQL server_uuid; when set, the live database must match it.
     'staging_active_db_uuid_sha256' => env('STAGING_ACTIVE_DB_UUID_SHA256'),

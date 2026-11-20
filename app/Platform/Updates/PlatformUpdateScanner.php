@@ -28,7 +28,7 @@ final class PlatformUpdateScanner
         $trigger = $trigger === 'manual' ? 'manual' : 'scheduled';
 
         if (($refusal = PlatformUpdateGate::checkRefusal()) !== null) {
-            // Disabled, or staging-next that is not opened and proven for external contact: no outbound request at all.
+            // Disabled, or staging-next without its dedicated opt-in or without proof of the environment: no outbound request at all.
             return $this->refused($trigger, $refusal, persist: $refusal !== 'disabled');
         }
         if ($this->checkedRecently()) {
