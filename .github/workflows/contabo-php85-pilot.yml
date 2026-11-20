@@ -1,0 +1,42 @@
+# Isolated host-compatibility pilot. Not a replacement for protected CI.
+name: Contabo PHP 8.5 pilot
+
+on:
+  push:
+    branches:
+      - ci/contabo-php85-pilot-20261120
+    paths:
+      - .github/workflows/contabo-php85-pilot.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contabo-php85-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php85-pilot:
+    name: Contabo PHP 8.5 isolated container pilot
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Verify runner Docker access without changing permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = "github-runner"
+          docker info --format 'Docker daemon available: {{.ServerVersion}}'
+
+      - name: Exercise pinned PHP 8.5 container without network or repository checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='php:8.5.12-fpm@sha256:8b4b4a764f7985137b13e4cb49dd59e967d9daa7946a731f9d06e31e748e39bb'
+          docker run --rm --pull=always \
+            --network=none --read-only \
+            --user 65534:65534 --cap-drop=ALL --security-opt=no-new-privileges \
+            --pids-limit=64 --memory=256m --cpus=1 \
+            --entrypoint php "$image" -r \
+            'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 5) { exit(1); } echo "PHP ".PHP_VERSION." isolated pilot PASS\\n";'
