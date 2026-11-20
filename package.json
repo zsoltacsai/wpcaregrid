@@ -11,7 +11,7 @@
         "test:e2e:marketing-acceptance": "playwright test -c playwright.marketing-acceptance.config.ts"
     },
     "devDependencies": {
-        "@playwright/test": "^1.65.0",
+        "@playwright/test": "^1.65.1",
         "@tailwindcss/vite": "^4.3.5",
         "concurrently": "^10.0.7",
         "laravel-vite-plugin": "^3.2",
