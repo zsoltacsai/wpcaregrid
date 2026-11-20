@@ -7,6 +7,7 @@ on:
       - ci/contabo-sqlite-gate
     paths:
       - .github/workflows/contabo-sqlite-dev.yml
+      - .github/ci/php85-sqlite.Dockerfile
   workflow_dispatch:
 
 permissions:
@@ -17,31 +18,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sqlite-host-attempt:
-    name: Contabo SQLite dev (host attempt)
+  sqlite-container:
+    name: Contabo SQLite dev (container)
     runs-on: [self-hosted, Linux, X64, wpcaregrid-ci]
-    timeout-minutes: 25
-    env:
-      DB_CONNECTION: sqlite
-      DB_DATABASE: database/ci-sqlite-regressions.sqlite
-      DB_URL: ''
-      CACHE_STORE: array
-      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite
+    timeout-minutes: 30
     steps:
-      - name: Runner capabilities that decide the design (read-only)
-        shell: bash
-        run: |
-          echo "user=$(id -un) cpus=$(nproc) mem_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)"
-          for c in php composer node npm docker git; do printf '%s=%s\n' "$c" "$(command -v $c || echo ABSENT)"; done
-          if sudo -n true 2>/dev/null; then echo "sudo=NOPASSWD"; else echo "sudo=NO"; fi
-          df -h --output=target,avail "$GITHUB_WORKSPACE" | tail -1
-          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' 2>/dev/null | head -10 || true
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
-        with:
-          php-version: '8.5'
-          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, fileinfo, openssl, curl, posix, pcntl, bcmath
-          coverage: none
-          tools: composer:v2
+      - name: Build the pinned CI image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="wpcaregrid-ci-php85-sqlite:$(sha256sum .github/ci/php85-sqlite.Dockerfile | cut -c1-12)"
+          echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+          start=$(date +%s)
+          docker build --pull=false -t "$tag" -f .github/ci/php85-sqlite.Dockerfile .github/ci
+          echo "image build seconds: $(( $(date +%s) - start ))"
+          docker run --rm --entrypoint php "$tag" -r 'echo PHP_VERSION, " ", implode(",", array_intersect(["mbstring","intl","gd","zip","sodium","pdo_sqlite","sqlite3","fileinfo","openssl","curl","posix","pcntl","bcmath"], get_loaded_extensions())), PHP_EOL;'
+
+      - name: Server SQLite regression gate in the CI container (same commands as before)
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          docker run --rm \
+            --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=4096 \
+            -e HOME=/tmp/home -e COMPOSER_HOME=/tmp/composer -e npm_config_cache=/tmp/npm \
+            -e DB_CONNECTION=sqlite -e DB_DATABASE=database/ci-sqlite-regressions.sqlite -e DB_URL= -e CACHE_STORE=array -e CAREGRID_EXPECTED_DATABASE_DRIVER=sqlite \
+            -v "$GITHUB_WORKSPACE":/workspace -w /workspace --entrypoint bash "$IMAGE_TAG" -euo pipefail -c '
+              mkdir -p /tmp/home /tmp/composer /tmp/npm
+              cp .env.example .env
+              touch database/ci-sqlite-regressions.sqlite
+              composer install --no-interaction --prefer-dist --no-progress
+              php artisan key:generate --force
+              php artisan migrate --force
+              npm ci
+              npm run build
+              php scripts/tests/assert-ci-sqlite-driver.php
+              vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings tests/Unit
+              for test in \
+                tests/Feature/AuthorizationMatrixTest.php \
+                tests/Feature/Account/AuthenticationTest.php \
+                tests/Feature/Account/AuthorizationTest.php \
+                tests/Feature/Account/CustomerAreaTest.php \
+                tests/Feature/Account/OnboardingTest.php \
+                tests/Feature/CustomerLocalizationTest.php \
+                tests/Feature/LocalizedMarketingRoutesTest.php; do
+                vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
+              done
+            '
+          echo "gate seconds: $(( $(date +%s) - start ))"
