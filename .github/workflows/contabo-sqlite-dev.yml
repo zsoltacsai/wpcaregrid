@@ -45,6 +45,7 @@ jobs:
             --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=4096 \
             -e HOME=/tmp/home -e COMPOSER_HOME=/tmp/composer -e npm_config_cache=/tmp/npm \
             -e DB_CONNECTION=sqlite -e DB_DATABASE=database/ci-sqlite-regressions.sqlite -e DB_URL= -e CACHE_STORE=array -e CAREGRID_EXPECTED_DATABASE_DRIVER=sqlite \
+            -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
             -v "$GITHUB_WORKSPACE":/workspace -w /workspace --entrypoint bash "$IMAGE_TAG" -euo pipefail -c '
               mkdir -p /tmp/home /tmp/composer /tmp/npm
               cp .env.example .env
