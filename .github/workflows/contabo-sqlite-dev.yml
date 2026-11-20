@@ -1,0 +1,47 @@
+# TEMPORARY development workflow for the Contabo SQLite pilot. Removed before the PR is marked ready. Not a protected check.
+name: Contabo SQLite dev
+
+on:
+  push:
+    branches:
+      - ci/contabo-sqlite-gate
+    paths:
+      - .github/workflows/contabo-sqlite-dev.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contabo-sqlite-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sqlite-host-attempt:
+    name: Contabo SQLite dev (host attempt)
+    runs-on: [self-hosted, Linux, X64, wpcaregrid-ci]
+    timeout-minutes: 25
+    env:
+      DB_CONNECTION: sqlite
+      DB_DATABASE: database/ci-sqlite-regressions.sqlite
+      DB_URL: ''
+      CACHE_STORE: array
+      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite
+    steps:
+      - name: Runner capabilities that decide the design (read-only)
+        shell: bash
+        run: |
+          echo "user=$(id -un) cpus=$(nproc) mem_kb=$(awk '/MemAvailable/{print $2}' /proc/meminfo)"
+          for c in php composer node npm docker git; do printf '%s=%s\n' "$c" "$(command -v $c || echo ABSENT)"; done
+          if sudo -n true 2>/dev/null; then echo "sudo=NOPASSWD"; else echo "sudo=NO"; fi
+          df -h --output=target,avail "$GITHUB_WORKSPACE" | tail -1
+          docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' 2>/dev/null | head -10 || true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, fileinfo, openssl, curl, posix, pcntl, bcmath
+          coverage: none
+          tools: composer:v2
