@@ -79,7 +79,8 @@ def validate_workflow_controls(workflow):
     assert not re.search(r"(?m)^\s+(?:write-all|contents|actions|checks|pull-requests|deployments|id-token):\s*(?:write|write-all)\s*$", workflow), "unexpected token write permission"
     assert "name: Quality (lint, style, dependencies, build, secrets)" in workflow
     assert "name: Server tests (PHP ${{ matrix.php }}, mysql)" in workflow
-    assert "php: ['8.4', '8.5']" in workflow, "server PHP matrix must retain 8.4 and 8.5"
+    assert "php: ['8.5']" in workflow, "server PHP matrix must run only PHP 8.5"
+    assert "PHP_VERSION: '8.5'" in workflow, "Quality runtime must use PHP 8.5"
     server = workflow.split("  server:" + chr(10), 1)[1].split("  sqlite_regressions:" + chr(10), 1)[0]
     assert "database:" not in server and "matrix.database" not in server, "obsolete Laravel matrix remains"
     mysql_service = re.search(
@@ -122,6 +123,10 @@ def validate_workflow_controls(workflow):
     assert re.search(r"DISPATCH_BASE.*inputs\.connector_release_base", workflow)
     assert "^[0-9a-fA-F]{40}$" in workflow
 
+    connector = workflow.split("  wordpress:" + chr(10), 1)[1]
+    artifact_build = connector.split("      - name: Resolve test tools for the customer PHP branch", 1)[0]
+    assert "php-version: '8.5'" in artifact_build, "Connector release artifact must build on PHP 8.5"
+
 
 def validate_sqlite_regression_gate(workflow):
     lines = workflow.splitlines()
@@ -129,8 +134,8 @@ def validate_sqlite_regression_gate(workflow):
     assert start is not None, "dedicated fast SQLite regression job missing"
     end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("  ") and not lines[index].startswith("    ") and lines[index].endswith(":")), len(lines))
     job = "\n".join(lines[start:end])
-    assert "name: Server SQLite regression gate (PHP 8.4)" in job, "stable SQLite check name changed"
-    assert "php-version: '8.4'" in job, "SQLite regression gate PHP version changed"
+    assert "name: Server SQLite regression gate (PHP 8.5)" in job, "SQLite check must identify PHP 8.5"
+    assert "php-version: '8.5'" in job, "SQLite regression gate must use PHP 8.5"
     assert re.search(r"(?m)^      DB_CONNECTION: sqlite$", job), "SQLite job must select the SQLite connection"
     assert re.search(r"(?m)^      DB_DATABASE: database/ci-sqlite-regressions\.sqlite$", job), "SQLite job must use its isolated disposable database file"
     assert re.search(r"(?m)^      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite$", job), "SQLite driver expectation missing"
@@ -177,7 +182,7 @@ def main():
         (workflow.replace("Required MySQL process-concurrency gate", "optional MySQL process gate", 1), "missing MySQL process gate"),
         (workflow.replace("      mysql:\n        image: mysql:8.4", "      mysql:\n        image: mariadb:10.11", 1), "wrong Laravel engine"),
         (workflow.replace("CAREGRID_EXPECTED_DATABASE_VERSION=8.4", "CAREGRID_EXPECTED_DATABASE_VERSION=8.0", 1), "wrong MySQL version"),
-        (workflow.replace("php: ['8.4', '8.5']", "php: ['8.5']", 1), "missing PHP 8.4 server lane"),
+        (workflow.replace("php: ['8.5']", "php: ['8.4']", 1), "server matrix must use PHP 8.5 only"),
         (workflow.replace("  sqlite_regressions:", "  quick_sqlite_missing:", 1), "missing dedicated SQLite regression gate"),
         (workflow.replace("^[0-9a-fA-F]{40}$", "^.+$", 1), "weak manual SHA grammar"),
     )

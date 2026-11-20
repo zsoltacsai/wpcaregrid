@@ -6,7 +6,7 @@
 ## Supported runtime contract
 
 - The Laravel application declares PHP `^8.3` in `composer.json`. This is a dependency constraint, not proof that every PHP minor is operationally supported.
-- Full Laravel server CI runs PHP 8.4 and PHP 8.5 against MySQL 8.4 LTS. A separate targeted PHP 8.4 SQLite regression gate remains. Full Laravel MariaDB lanes are retired; the WordPress Connector compatibility matrix is unchanged. Passing PHP 8.5 CI is compatibility evidence only and does not approve a staging runtime migration.
+- Laravel Quality, the full server suite, and targeted SQLite regressions run on PHP 8.5; the full server suite uses MySQL 8.4 LTS. Full Laravel MariaDB lanes are retired; the WordPress Connector compatibility matrix remains PHP 8.2–8.5. CI scope does not itself authorize a staging runtime change.
 - A PHP minor is approved for staging only after dependency/platform checks, the full server matrix, the MySQL process-concurrency gate, and a protected staging release all pass. Production requires its own decision and migration; staging evidence never authorizes production.
 - Keep the active PHP-FPM, CLI, Composer, scheduler, queue-worker, and protected deployment-controller interpreters on a known, patched runtime. Record each independently; a CLI version alone does not identify the web runtime.
 
