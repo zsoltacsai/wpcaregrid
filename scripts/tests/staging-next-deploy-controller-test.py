@@ -22,7 +22,7 @@ CONTROLLER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = CONTROLLER
 SPEC.loader.exec_module(CONTROLLER)
 
-from scripts import staging_next_deploy_backend_1_4_11 as BACKEND
+from scripts import staging_next_deploy_backend_1_4_12 as BACKEND
 
 
 class StagingNextControllerTests(unittest.TestCase):
@@ -153,8 +153,8 @@ class StagingNextControllerTests(unittest.TestCase):
     def test_exact_active_primary_is_noop_without_build_or_staging(self):
         digest = "a" * 40
         helper_result = {
-            "result": "PASS", "application_sha": digest, "helper_version": "1.4.11",
-            "helper_contract": "wpcaregrid-staging-next-deploy-v15",
+            "result": "PASS", "application_sha": digest, "helper_version": "1.4.12",
+            "helper_contract": "wpcaregrid-staging-next-deploy-v16",
             "helper_artifact_sha256": CONTROLLER.HELPER_ARTIFACT_SHA256,
             "artifact_sha256": "b" * 64,
         }
