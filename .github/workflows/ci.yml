@@ -40,6 +40,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate Agent Registry
+        run: |
+          python3 scripts/validate-agent-registry.py
+          python3 scripts/tests/agent-registry-test.py
+
       - name: Verify locked Actions dependencies for ci.yml
         shell: bash
         env:
