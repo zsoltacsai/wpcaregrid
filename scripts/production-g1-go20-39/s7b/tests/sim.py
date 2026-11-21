@@ -41,6 +41,29 @@ def render():
             wr("kill_real", ""); os.symlink(os.path.join(SB, "kill_real"), os.path.join(SB, cgdir, "cgroup.kill"))
         elif not SCEN.get("no_cgroup_kill") and not os.path.lexists(os.path.join(SB, cgdir, "cgroup.kill")): wr(cgdir + "/cgroup.kill", "")
     for pid, comm in SCEN.get("procs", {"4242": "mysqld"}).items(): wr("proc/%s/comm" % pid, comm + "\n")
+def inject_intents():
+    """CG-1 tests: write START_INTENT (or a hostile variant) into the wrapper's run directory when the virtual clock reaches `at`.
+    scenario["intent"] = [{"tag": "a", "at": 100, "mode": "ok", "nonce": "<32 hex>"}, ...]; a row is skipped until the run directory exists."""
+    import stat as _st
+    for row in SCEN.get("intent", []):
+        tag = row["tag"]
+        if rd("inj_" + tag) is not None or int(rd("vclock", "0")) < row["at"]: continue
+        runp = os.path.join(SB, "runp"); dirs = sorted(x for x in os.listdir(runp) if x.startswith("wpcg-s7b-")) if os.path.isdir(runp) else []
+        if not dirs: continue
+        d = os.path.join(runp, dirs[-1]); rid = dirs[-1][len("wpcg-s7b-"):]; nonce = row.get("nonce", "a" * 32); mode = row.get("mode", "ok")
+        path = os.path.join(d, "START_INTENT"); ok = "START_INTENT v1 run=%s nonce=%s\n" % (rid, nonce)
+        if mode == "ok": open(path, "x").write(ok); os.chmod(path, 0o600)
+        elif mode == "replace": open(path, "w").write(ok); os.chmod(path, 0o600)
+        elif mode == "wrong_run": open(path, "x").write("START_INTENT v1 run=20250101T000000Z-aaaaaaaaaaaa nonce=%s\n" % nonce); os.chmod(path, 0o600)
+        elif mode == "bad_format": open(path, "x").write("START_INTENT v2 run=%s nonce=%s\n" % (rid, nonce)); os.chmod(path, 0o600)
+        elif mode == "bad_mode": open(path, "x").write(ok); os.chmod(path, 0o644)
+        elif mode == "two_lines": open(path, "x").write(ok + ok); os.chmod(path, 0o600)
+        elif mode == "no_newline": open(path, "x").write(ok.rstrip("\n")); os.chmod(path, 0o600)
+        elif mode == "short_nonce": open(path, "x").write("START_INTENT v1 run=%s nonce=%s\n" % (rid, nonce[:31])); os.chmod(path, 0o600)
+        elif mode == "symlink":
+            real = os.path.join(d, "intent_real"); open(real, "w").write(ok); os.chmod(real, 0o600); os.symlink(real, path)
+        elif mode == "preack": open(os.path.join(d, "START_ACK"), "x").write("pre-existing\n")
+        wr("inj_" + tag, "1")
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "init": wr("vclock", "0"); render()
@@ -52,6 +75,7 @@ if __name__ == "__main__":
         wr("vclock", str(after))
         lim = rd("int_at")
         render()
+        inject_intents()
         if lim is not None and int(rd("vclock")) >= int(lim) and not os.path.exists(os.path.join(SB, "int_sent")):
             wr("int_sent", "1"); sys.exit(77)
     elif cmd == "stop": wr("stop_at", rd("vclock", "0")); open(os.path.join(SB, "calls.log"), "a").write("stop %s\n" % rd("vclock")); render()

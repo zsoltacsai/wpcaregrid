@@ -302,7 +302,50 @@ case("RB06 an existing output file is never overwritten", t_reb_exists)
 # ======================================================= console A (start orchestration), all stubs
 import fcntl
 CALLS = "calls_a.log"
-def ca_env(b, pre_gate_rc=0, pre_outcome="NO_BLOCKER_FOUND", pkg_last="PKG_STATE=CLEAR_RESIDENT_ONLY", helper_rc=0, armed_mode="contain", with_t8=True, logstate=True, hold_lock=True):
+import threading
+ARM_RID = "20261120T100000Z-aaaaaaaaaaaa"
+def b_ack_line(rid, nonce, pid, w): return "START_ACK v1 run=%s nonce=%s pid=%d w=%d\n" % (rid, nonce, pid, w)
+def b_responder(ad, mode, lk, run):
+    """Emulates console B's handshake side in the test process (a real B is covered by s7b/tests HS*). Modes: see the CG cases."""
+    dead = subprocess.Popen(["true"]); dead.wait(); dead_pid = dead.pid
+    def go():
+        intent, ack = ad + "/START_INTENT", ad + "/START_ACK"
+        for _ in range(4000):
+            if os.path.exists(intent) and os.path.getsize(intent) > 0: break
+            time.sleep(0.005)
+        else: return
+        time.sleep(0.01)
+        m = re.match(r"START_INTENT v1 run=(\S+) nonce=([0-9a-f]{32})\n$", open(intent).read()); nonce = m.group(2) if m else "0" * 32
+        def put(text, md=0o600):
+            with open(ack, "x") as f: f.write(text)
+            os.chmod(ack, md)
+        def release(): fcntl.flock(lk, fcntl.LOCK_UN); lk.close()
+        ok = b_ack_line(ARM_RID, nonce, os.getpid(), 250)
+        if mode == "ack": put(ok)
+        elif mode == "none": pass
+        elif mode == "late":
+            time.sleep(2.5)
+            try: put(ok)
+            except OSError: pass
+        elif mode == "wrong_nonce": put(b_ack_line(ARM_RID, "f" * 32, os.getpid(), 250))
+        elif mode == "wrong_run": put(b_ack_line("20261119T100000Z-bbbbbbbbbbbb", nonce, os.getpid(), 250))
+        elif mode == "short_commit": put(b_ack_line(ARM_RID, nonce, os.getpid(), 249))
+        elif mode == "bad_mode": put(ok, 0o644)
+        elif mode == "two_lines": put(ok + ok)
+        elif mode == "no_newline": put(ok.rstrip("\n"))
+        elif mode == "pid_gone": put(b_ack_line(ARM_RID, nonce, dead_pid, 250))
+        elif mode == "garbage": put("hello\n")
+        elif mode == "symlink":
+            real = ad + "/ack_real"; open(real, "w").write(ok); os.chmod(real, 0o600); os.symlink(real, ack)
+        elif mode == "release_before_ack": release()
+        elif mode == "release_after_ack": put(ok); release()
+        elif mode == "finish_after_ack": put(ok); open(ad + "/evidence.txt", "a").write("S7B_RESULT=NO_START_OBSERVED;WAITED=120s;ACTION=NONE;G1_NOT_SUPERVISED\n")
+        elif mode == "newdir_after_ack":
+            nd = run + "/wpcg-s7b-20261120T100500Z-bbbbbbbbbbbb"; os.makedirs(nd); open(nd + "/evidence.txt", "w").write("S7B_ARMED version=s7b-containment-v3 instance=production mode=contain unit=x run_dir=%s\n" % nd)
+            time.sleep(0.05); put(ok)   # the newer directory exists BEFORE the ACK is visible, so the outcome does not depend on timing
+    th = threading.Thread(target=go, daemon=True); th.start(); return th
+def ca_env(b, pre_gate_rc=0, pre_outcome="NO_BLOCKER_FOUND", pkg_last="PKG_STATE=CLEAR_RESIDENT_ONLY", helper_rc=0, armed_mode="contain", with_t8=True, logstate=True, hold_lock=True,
+           b_mode="ack", patches=(), max_intent=30, pre_sleep=0, release=None, preexist=None, evidence_extra="", run_dir_in_evidence=True):
     tk = b.p("toolkit"); os.makedirs(tk); run = b.p("runroot"); os.makedirs(run)
     def w(path, text, mode=0o755): open(path, "w").write(text); os.chmod(path, mode); return path
     log = b.p(CALLS)
@@ -311,20 +354,33 @@ def ca_env(b, pre_gate_rc=0, pre_outcome="NO_BLOCKER_FOUND", pkg_last="PKG_STATE
     w(tk + "/go20-38-post-script-v2.py", '#!/usr/bin/env python3\nimport sys\nopen(%r, "a").write("post " + " ".join(sys.argv[1:]) + "\\n")\nprint("POST_STUB_OK")\n' % log)
     w(tk + "/go20-38-post-gate-v2.sh", '#!/bin/bash\necho postgate >> %s\necho "POSTGATE=OK"\nexit 0\n' % log)
     w(tk + "/pkg-state.sh", '#!/bin/bash\necho pkgstate >> %s\necho "%s"\n[ "%s" = "PKG_STATE=CLEAR_RESIDENT_ONLY" ]\n' % (log, pkg_last, pkg_last))
-    pre = w(b.p("pre-script.sh"), '#!/bin/bash\necho pre >> %s\necho "WPCG_BLOCK_BEGIN stub"\necho "PRE_OUTCOME=%s"\n%s\necho "WPCG_BLOCK_END stub"\n' % (log, pre_outcome, 'echo "LOGSTATE inode=654096 size=2345 t0=1795171284"' if logstate else ""))
+    pre = w(b.p("pre-script.sh"), '#!/bin/bash\necho pre >> %s\n%secho "WPCG_BLOCK_BEGIN stub"\necho "PRE_OUTCOME=%s"\n%s\necho "WPCG_BLOCK_END stub"\n' % (log, ("sleep %s\n" % pre_sleep) if pre_sleep else "", pre_outcome, 'echo "LOGSTATE inode=654096 size=2345 t0=1795171284"' if logstate else ""))
     helper = w(b.p("helper.py"), '#!/usr/bin/env python3\nimport sys\nopen(%r, "a").write("helper " + " ".join(sys.argv[1:]) + "\\n")\nprint("START=PASS;INSTANCE=wpcaregrid-production" if %d == 0 else "G1_MYSQL=STOP;CODE=command_failed")\nsys.exit(%d)\n' % (log, helper_rc, helper_rc))
     coll = w(b.p("collector.sh"), "#!/bin/bash\n"); w(b.p("bin/journalctl"), '#!/bin/bash\necho "-- cursor: s=abc;i=1;b=2;m=3;t=4;x=5"\n')
     if with_t8: open(b.p("t8_marker"), "w").write("paused\n")
     open(b.p("s7b_lock"), "a").close()
     if armed_mode:
-        ad = run + "/wpcg-s7b-20261120T100000Z-aaaaaaaaaaaa"; os.makedirs(ad); open(ad + "/evidence.txt", "w").write("S7B_ARMED version=s7b-containment-v2 instance=production mode=%s unit=x run_dir=y\n" % armed_mode)
+        ad = run + "/wpcg-s7b-" + ARM_RID; os.makedirs(ad); open(ad + "/evidence.txt", "w").write("S7B_ARMED version=s7b-containment-v3 instance=production mode=%s unit=x run_dir=%s\n%s" % (armed_mode, ad if run_dir_in_evidence else "y", evidence_extra))
+        if preexist == "ack": open(ad + "/START_ACK", "w").write(b_ack_line(ARM_RID, "0" * 32, os.getpid(), 250)); os.chmod(ad + "/START_ACK", 0o600)
+        if preexist == "intent": open(ad + "/START_INTENT", "w").write("START_INTENT v1 run=%s nonce=%s\n" % (ARM_RID, "0" * 32)); os.chmod(ad + "/START_INTENT", 0o600)
     shas = {k: sha(v) for k, v in {"gate": tk + "/go20-38-pre-gate-v4a.sh", "thr": tk + "/go20-38-pre-thresholds-v1.txt", "post": tk + "/go20-38-post-script-v2.py", "postgate": tk + "/go20-38-post-gate-v2.sh", "helper": helper, "coll": coll}.items()}
     subs = [(r'^ROOT_UID_EXPECT="0"$', 'ROOT_UID_EXPECT="%d"' % UID), (r'^TOOLKIT=.*$', 'TOOLKIT="%s"' % tk), (r'^RUN_PARENT=.*$', 'RUN_PARENT="%s"' % run), (r'^HELPER=.*$', 'HELPER="%s"' % helper), (r'^HELPER_SHA=.*$', 'HELPER_SHA="%s"' % shas["helper"]),
             (r'^COLLECTOR_PATH=.*$', 'COLLECTOR_PATH="%s"' % coll), (r'^COLLECTOR_SHA=.*$', 'COLLECTOR_SHA="%s"' % shas["coll"]), (r'^GATE_SHA=.*$', 'GATE_SHA="%s"' % shas["gate"]), (r'^THRESHOLDS_SHA=.*$', 'THRESHOLDS_SHA="%s"' % shas["thr"]),
-            (r'^POST_SHA=.*$', 'POST_SHA="%s"' % shas["post"]), (r'^POSTGATE_SHA=.*$', 'POSTGATE_SHA="%s"' % shas["postgate"]), (r'^S7B_LOCK=.*$', 'S7B_LOCK="%s"' % b.p("s7b_lock")), (r'^T8_MARKER=.*$', 'T8_MARKER="%s"' % b.p("t8_marker"))]
-    script = b.script("g1-start-console-a.sh", subs)
+            (r'^POST_SHA=.*$', 'POST_SHA="%s"' % shas["post"]), (r'^POSTGATE_SHA=.*$', 'POSTGATE_SHA="%s"' % shas["postgate"]), (r'^S7B_LOCK=.*$', 'S7B_LOCK="%s"' % b.p("s7b_lock")), (r'^T8_MARKER=.*$', 'T8_MARKER="%s"' % b.p("t8_marker")),
+            ]
+    if re.search(r'^ACK_POLL_SEC=1; MAX_INTENT_TO_START_SEC=30; ACK_MIN_COMMIT_SEC=250$', read("g1-start-console-a.sh"), re.M):   # absent in the pre-CG-1 source: the same scenarios then run against it unchanged
+        subs.append((r'^ACK_POLL_SEC=1; MAX_INTENT_TO_START_SEC=30; ACK_MIN_COMMIT_SEC=250$', 'ACK_POLL_SEC=0.02; MAX_INTENT_TO_START_SEC=%s; ACK_MIN_COMMIT_SEC=250' % max_intent))
+    script = b.script("g1-start-console-a.sh", subs, patches)
     lk = None
     if hold_lock: lk = open(b.p("s7b_lock"), "w"); fcntl.flock(lk, fcntl.LOCK_EX)
+    if lk and armed_mode: b_responder(run + "/wpcg-s7b-" + ARM_RID, b_mode, lk, run)
+    if lk and release == "during_pre": threading.Timer(0.5, lambda: (fcntl.flock(lk, fcntl.LOCK_UN), lk.close())).start()
+    if lk and release == "after_gate":
+        def watch():
+            for _ in range(4000):
+                if os.path.exists(log) and "gate" in open(log).read(): fcntl.flock(lk, fcntl.LOCK_UN); lk.close(); return
+                time.sleep(0.005)
+        threading.Thread(target=watch, daemon=True).start()
     return script, pre, sha(pre), run, log, lk
 def ca_args(pre, ps): return ["--pre-script", pre, "--pre-sha", ps, "--confirm", "START production " + ps[:12]]
 def ca_exec(b, script, args): return subprocess.run(["bash", "--noprofile", "--norc", script, *args], capture_output=True, text=True, env=dict(os.environ, PATH=b.p("bin") + ":" + os.environ["PATH"]), timeout=120)
@@ -373,6 +429,97 @@ def t_ca_static():
     for bad in (r"systemctl", r"\brm\b", r"\bkill\b", r"reset-failed", r"daemon-reload", r"\bwhile\b", r"\buntil\b", r"sysctl\b|>+\s*/proc/sys", r"apparmor|aa-"): A(not re.search(bad, c), "banned: " + bad)
     A(len(re.findall(r'"\$HELPER" start', c)) == 1, "exactly one helper start call site")
 case("CA15 static: no systemctl/rm/kill/loops; exactly one helper start call site", t_ca_static)
+# ======================================================= CG-1: console A <-> console B (S7 containment fail-open), handshake + liveness
+def hcalls(calls): return [c for c in calls if c.startswith("helper")]
+def cg_stop(name, code, **kw):
+    def f(b):
+        x, calls, run, lk = ca_run(b, **kw)
+        A(x.returncode in (1, 2) and ("G1_START=STOP;CODE=%s" % code) in x.stdout, x.stdout + x.stderr)
+        A(not hcalls(calls), "the helper must NOT run: %s" % calls)
+    case(name, boxed(f))
+def t_cg_happy(b):
+    x, calls, run, lk = ca_run(b); A(x.returncode == 0 and "G1_START=DONE" in x.stdout, x.stdout + x.stderr)
+    A([c.split()[0] for c in calls] == ["pkgstate", "pre", "gate", "helper", "post", "postgate"] and len(hcalls(calls)) == 1, calls)
+    ad = run + "/wpcg-s7b-" + ARM_RID; it = open(ad + "/START_INTENT").read(); m = re.fullmatch(r"START_INTENT v1 run=%s nonce=([0-9a-f]{32})\n" % ARM_RID, it); A(m, it)
+    A(oct(os.stat(ad + "/START_INTENT").st_mode & 0o777) == "0o600", "intent mode")
+    bsrc = open(os.path.join(OPS, "s7b", "s7b-containment.sh")).read(); bm = re.search(r'\[\[ "\$line" =~ (\^START_INTENT\\ .*?\$) \]\]', bsrc); A(bm, "intent grammar not found in console B")
+    A(re.compile(bm.group(1)).fullmatch(it.rstrip("\n")), "console B's intent grammar must accept exactly what console A writes: %r" % it)
+    rd = [d for d in os.listdir(run) if d.startswith("wpcg-g1-start-")][0]; res = open(run + "/" + rd + "/result.txt").read()
+    A(("START_HANDSHAKE run=%s nonce=%s ack=valid" % (ARM_RID, m.group(1))) in res, res)
+    return m.group(1)
+case("CG01 happy path with the handshake: one helper start; intent (0600, run id + 128-bit nonce) written; handshake recorded in result.txt", boxed(t_cg_happy))
+def t_cg_nonce(b):
+    n = []
+    for _ in range(2):
+        bb = Box()
+        try: n.append(t_cg_happy(bb))
+        finally: bb.clean()
+    A(n[0] != n[1], "every start attempt uses a fresh nonce (no replay)")
+case("CG02 a fresh nonce for every run (an ACK from an earlier run can never match)", boxed(t_cg_nonce))
+cg_stop("CG03 console B exits DURING A's pre-run (PoC 2 of the finding): STOP before the helper", "console_b_changed_before_start", release="during_pre", pre_sleep=1.5)
+cg_stop("CG04 console B exits after the pre run and the gate, before the handshake (PoC 3): STOP before the helper", "console_b_changed_before_start", release="after_gate")
+cg_stop("CG05 console B exits after the intent, before any ACK: STOP (no ACK)", "console_b_no_ack", b_mode="release_before_ack")
+cg_stop("CG06 console B never ACKs: bounded wait, STOP (no retry, no second intent)", "console_b_no_ack", b_mode="none")
+cg_stop("CG07 a late ACK (after the bounded wait) is not accepted: STOP", "console_b_no_ack", b_mode="late")
+for _m in ("wrong_nonce", "wrong_run", "short_commit", "bad_mode", "two_lines", "no_newline", "pid_gone", "garbage", "symlink"):
+    cg_stop("CG08-%s invalid ACK (%s): STOP before the helper" % (_m, _m), "console_b_bad_ack", b_mode=_m)
+cg_stop("CG09 REQUIRED CASE: console B exits AFTER the ACK, before the helper (lock released): STOP, helper not called", "console_b_changed_before_start", b_mode="release_after_ack")
+cg_stop("CG10 console B wrote its result line after the ACK (finished): STOP, helper not called", "console_b_changed_before_start", b_mode="finish_after_ack")
+cg_stop("CG11 a different, newer console B run directory appears after the ACK: STOP (the ACK belongs to another instance)", "console_b_changed_before_start", b_mode="newdir_after_ack")
+cg_stop("CG12 a pre-existing START_ACK (replay from an earlier run) is refused before the intent is written", "start_handshake_preexisting", preexist="ack")
+cg_stop("CG13 a pre-existing START_INTENT is refused", "start_handshake_preexisting", preexist="intent")
+cg_stop("CG14 an ACK that arrives but is older than the intent->helper cap is expired: STOP", "start_ack_expired", max_intent=0)
+cg_stop("CG15 the evidence of console B names a different run directory: STOP at the gates", "console_b_state_invalid", run_dir_in_evidence=False)
+cg_stop("CG16 console B already reports a start observation at the gates: STOP", "console_b_state_invalid", evidence_extra="S7B_START_OBSERVED t=1 g1=activating/start-pre\n")
+cg_stop("CG17 console B already reports a result at the gates (finished): STOP", "console_b_state_invalid", evidence_extra="S7B_RESULT=NO_START_OBSERVED;WAITED=120s;ACTION=NONE;G1_NOT_SUPERVISED\n")
+def t_cg_static():
+    src = read("g1-start-console-a.sh"); c = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#") and 'while [ "$#" -gt 0 ]' not in l)
+    A(re.search(r"^ACK_POLL_SEC=1; MAX_INTENT_TO_START_SEC=30; ACK_MIN_COMMIT_SEC=250$", src, re.M), "production handshake constants")
+    loops = re.findall(r"^\s*for n in ([0-9 ]+); do$", c, re.M); A(len(loops) == 1 and loops[0].split() == [str(i) for i in range(1, 21)], "exactly one bounded ACK loop with the literal bound 20: %s" % loops)
+    A(not re.search(r"\bwhile\b|\buntil\b|\bretry\b|\bgoto\b", c), "no unbounded wait, no retry")
+    A(len(re.findall(r'"\$HELPER" start', c)) == 1, "one helper call site")
+    lines = c.splitlines(); i = [k for k, l in enumerate(lines) if '"$HELPER" start' in l][0]
+    A("b_check || stop console_b_changed_before_start" in lines[i - 1], "the very last command before the helper is the liveness check of the exact B instance")
+    h = [k for k, l in enumerate(lines) if l.lstrip().startswith("printf 'START_HANDSHAKE")][0]
+    between = [l.strip() for l in lines[h + 1:i - 1]]
+    A(len(between) == 3 and all(re.match(r"^(T_START_CMD=\$\(date -u \+%s\.%N\)|awk -v a=\"\$T_(PRE_END|INTENT)\" .* stop (pre_run_stale|start_ack_expired))$", l) for l in between), "between the verified ACK and the helper only the timestamp and the two freshness checks run: %s" % between)
+    j = [k for k, l in enumerate(lines) if "journalctl" in l][0]; A(j < [k for k, l in enumerate(lines) if 'PHASE="start_handshake"' in l][0], "the variable-time journal cursor is taken BEFORE the handshake")
+    p1 = [k for k, l in enumerate(lines) if "pre-gate-v4a.sh" in l and "RUN/pre.out" in l][0]; A(p1 < h, "the handshake comes after PKG-STATE, pre run and pre gate")
+    A('timeout -k 10 "$START_TIMEOUT"' in src and re.search(r"START_TIMEOUT=180;", src), "helper timeout 180 s with a 10 s kill grace")
+    s7 = open(os.path.join(OPS, "s7b", "s7b-containment.sh")).read(); A(re.search(r"^INTENT_WAIT_SEC=250\b", s7, re.M), "console B commits 250 s")
+    A(250 >= 30 + 180 + 10 + 5 + 25, "commitment covers intent->helper cap + helper timeout + kill grace + sample + reserve")
+case("CG18 static: bounded ACK loop (20, literal), no while/until/retry, one helper call site, the liveness check is the command right before the helper, cursor before the handshake, handshake after the pre gate, constants consistent with console B", t_cg_static)
+FIN = '  b_check || stop console_b_changed_before_start   # LAST check: the exact B instance is still armed and alive; the helper call is the very next command'
+def t_cg_residual(b):
+    path = b.p("s7b_lock"); open(path, "a").close(); holder = subprocess.Popen(["flock", path, "sleep", "30"])
+    try:
+        for _ in range(400):
+            if subprocess.run(["flock", "-n", path, "true"]).returncode != 0: break
+            time.sleep(0.01)
+        script, pre, ps, run, log, lk = ca_env(b, hold_lock=False, patches=[(FIN, FIN + "\n  kill %d; sleep 0.3" % holder.pid)])
+        b_responder(run + "/wpcg-s7b-" + ARM_RID, "ack", None, run)
+        x = ca_exec(b, script, ca_args(pre, ps)); calls = open(log).read().splitlines()
+        A(len(hcalls(calls)) == 1 and "G1_START=DONE" in x.stdout, "characterisation: console B ending after the last check lets the helper run: " + x.stdout[-300:])
+    finally: holder.kill(); holder.wait()
+case("CGR1 KNOWN RESIDUAL, NOT CLOSABLE IN CODE (CG-1 stays OPEN): console B ends between the last liveness check and the helper -> the helper still starts (this test documents the window, it does not accept it)", boxed(t_cg_residual))
+def cgm(name, patch, **kw):
+    def f(b):
+        x, calls, run, lk = ca_run(b, patches=[patch], **kw); A(len(hcalls(calls)) == 1 and "G1_START=DONE" in x.stdout, "the mutant must let the helper run in the scenario the defense stops: " + x.stdout[-250:] + str(calls))
+    case(name, boxed(f))
+AGE = "  awk -v a=\"$T_INTENT\" -v b=\"$T_START_CMD\" -v m=\"$MAX_INTENT_TO_START_SEC\" 'BEGIN{exit (b-a<=m)?0:1}' || stop start_ack_expired"
+CG_RESLINE = "  if grep -qE '^(S7B_RESULT=|S7B_FINAL |S7B_START_OBSERVED |S7B_TRIGGER )' \"$ev\" 2>/dev/null; then BC_WHY=\"b_already_started_or_finished\"; return 1; fi"
+cgm("CGM01 mutant: no last liveness check -> CG09 scenario (B exits after the ACK) lets the helper run (killed by CG09)", (FIN, "  :"), b_mode="release_after_ack")
+cgm("CGM02 mutant: lock not checked -> CG03 scenario (B gone during pre-run) lets the helper run (killed by CG03/CG04/CG09)", ('  if flock -n 8; then BC_WHY="lock_free"; return 1; fi', "  :"), release="during_pre", pre_sleep=1.5)
+cgm("CGM03 mutant: nonce not compared -> wrong_nonce ACK accepted (killed by CG08-wrong_nonce)", ('[ "${BASH_REMATCH[2]}" = "$H_NONCE" ] || { ACK_WHY="nonce"; return 1; }', ":"), b_mode="wrong_nonce")
+cgm("CGM04 mutant: run id not compared -> an ACK from another run accepted (killed by CG08-wrong_run)", ('[ "${BASH_REMATCH[1]}" = "$H_RID" ] || { ACK_WHY="other_run"; return 1; }', ":"), b_mode="wrong_run")
+cgm("CGM05 mutant: commitment not checked -> a 249 s ACK accepted (killed by CG08-short_commit)", ('[ "${BASH_REMATCH[4]}" -ge "$ACK_MIN_COMMIT_SEC" ] || { ACK_WHY="commitment_short"; return 1; }', ":"), b_mode="short_commit")
+cgm("CGM06 mutant: ACK wait skipped -> no ACK needed (killed by CG06)", ("    if ack_valid; then ack_ok=1; break; fi", "    ack_ok=1; break"), b_mode="none")
+cgm("CGM07 mutant: intent->helper age not enforced -> expired ACK accepted (killed by CG14)", (AGE, "  :"), max_intent=0)
+cgm("CGM08 mutant: run directory identity not compared -> a newer B run accepted (killed by CG11)", ('  [ -n "$ARMED_DIR" ] && [ "$cur" = "$ARMED_DIR" ] || { BC_WHY="run_dir_changed"; return 1; }', "  :"), b_mode="newdir_after_ack")
+cgm("CGM09 mutant: B result line not checked -> a finished B accepted (killed by CG10)", (CG_RESLINE, "  :"), b_mode="finish_after_ack")
+cgm("CGM10 mutant: B process liveness (pid) not checked -> an ACK naming a dead pid accepted (killed by CG08-pid_gone)", ('[ -d "/proc/${BASH_REMATCH[3]}" ] || { ACK_WHY="b_process_gone"; return 1; }', ":"), b_mode="pid_gone")
+cgm("CGM11 mutant: ACK file mode not checked -> a 0644 ACK accepted (killed by CG08-bad_mode)", ('case "$meta" in *" 600 "*) ;; *) ACK_WHY="mode"; return 1 ;; esac', ":"), b_mode="bad_mode")
+cgm("CGM12 mutant: one-line rule not checked -> a two-line ACK accepted (killed by CG08-two_lines)", ('[ "${meta##* }" = "$(( ${#line} + 1 ))" ] || { ACK_WHY="not_one_line"; return 1; }', ":"), b_mode="two_lines")
 # resident-helper-aware package block, executed against /proc fixtures
 def pkg_block():
     d = tempfile.mkdtemp(); out = os.path.join(d, "o.sh"); reb("--in", FROZEN, "--out", out, "--resident-helper-aware"); t = open(out).read(); shutil.rmtree(d)
@@ -409,7 +556,7 @@ FROZEN_HASHES = {"go20-38-pre-script-v3c.sh": "4da0c13117320b946d6cad4a4df905310
                  "go20-38-post-script-v2.py": "14c875db52a4cc910ad04f32a5b7033bfedc6f9ce301d89de7f381609fa122a4", "go20-38-post-gate-v2.sh": "7be4b22aa01da7f5bbae6ba41854c85a4db5dbdd6a264d8113be43150e3910fd", "go20-37-collector-v2.2.sh": "25c985276f1016eabe8a0338caaecc1134c38999d84180170308a76ea9f54956"}
 def t_frozen():
     for n, h in FROZEN_HASHES.items(): A(sha(os.path.join(OPS, "frozen", n)) == h, "frozen artifact changed: " + n)
-    A(sha(os.path.join(OPS, "s7b", "s7b-containment.sh")) == "71cdc74c24e723e2b03d601765697508177130ea99553242a06cfa2955f9fb51", "S7-B wrapper hash")
+    A(sha(os.path.join(OPS, "s7b", "s7b-containment.sh")) == "924b2f9634625629e757231fda2ebaed32f1a203485662116e5ca09e4cfd60a6", "S7-B wrapper hash")
 case("FZ01 frozen approved artifacts and the S7-B wrapper equal their approved sha256 values", t_frozen)
 def t_s7b_subset():
     env = dict(os.environ, S7B_ONLY=r"^(A|S0|W03)", S7B_WORKERS="2")

@@ -31,6 +31,6 @@ chk go20-38-pre-thresholds-v1.txt d5a029bda6f51c97d73f99180a864307b8a95ddbd8a4ff
 chk go20-38-post-script-v2.py 14c875db52a4cc910ad04f32a5b7033bfedc6f9ce301d89de7f381609fa122a4
 chk go20-38-post-gate-v2.sh 7be4b22aa01da7f5bbae6ba41854c85a4db5dbdd6a264d8113be43150e3910fd
 chk go20-37-collector-v2.2.sh 25c985276f1016eabe8a0338caaecc1134c38999d84180170308a76ea9f54956
-chk s7b-containment.sh 71cdc74c24e723e2b03d601765697508177130ea99553242a06cfa2955f9fb51
+chk s7b-containment.sh 924b2f9634625629e757231fda2ebaed32f1a203485662116e5ca09e4cfd60a6
 chmod 0500 "$TOOLKIT"/*.sh "$TOOLKIT"/*.py 2>/dev/null; chmod 0400 "$TOOLKIT"/MANIFEST.sha256 "$TOOLKIT"/*.txt 2>/dev/null; chmod 0500 "$TOOLKIT"
 echo "TOOLKIT_INSTALL=PASS;DIR=$TOOLKIT;BUNDLE_SHA256=$want;MANIFEST_SHA256=$(sha256sum -- "$TOOLKIT/MANIFEST.sha256" | cut -d' ' -f1)"

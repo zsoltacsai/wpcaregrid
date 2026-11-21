@@ -406,7 +406,7 @@ def t_static():
     A("--no-block" in code, "stop is non-blocking")
 case("S01 static: no start/restart/kill/reset-failed/daemon-reload/set-property/rm/sysctl/AppArmor/MySQL-config/reboot tokens; one stop site; one cgroup.kill write site", t_static)
 def t_const():
-    for k, v in [("SAMPLE_SEC", 5), ("WINDOW_SEC", 300), ("HANG_CUTOFF_SEC", 150), ("STOP_WAIT_SEC", 120), ("MEM_TRIGGER_MIB", 256), ("ARM_MAX_SEC", 120)]:
+    for k, v in [("SAMPLE_SEC", 5), ("WINDOW_SEC", 300), ("HANG_CUTOFF_SEC", 150), ("STOP_WAIT_SEC", 120), ("MEM_TRIGGER_MIB", 256), ("ARM_MAX_SEC", 120), ("INTENT_WAIT_SEC", 250)]:
         A(re.search(r'^%s=%d\b' % (k, v), ORIG, re.M), "constant %s=%d" % (k, v))
     A("${" not in "".join(re.findall(r'^(?:SAMPLE_SEC|WINDOW_SEC|HANG_CUTOFF_SEC|STOP_WAIT_SEC|MEM_TRIGGER_MIB)=.*$', ORIG, re.M)), "no environment expansion in the constants")
 case("S02 documented constants: 5 s sampling, 300 s window, 150 s hang cutoff, 120 s stop wait, 256 MiB trigger; no overrides", t_const)
@@ -420,6 +420,106 @@ def t_diff():
             A(ok, "unexpected difference in the test copy: " + l[:120])
     finally: sb.clean()
 case("S03 the test copy differs from the candidate only in sandbox constants, the PATH line and the five seam functions", t_diff)
+
+# ====================================================================================================================================================
+# CG-1: START_INTENT / START_ACK handshake (console A <-> console B), arm phase only. Deterministic (virtual clock); no host access.
+# ====================================================================================================================================================
+INACT = {"A": "inactive", "S": "dead", "pid": 0, "nr": 0}
+NONCE = "0123456789abcdef0123456789abcdef"
+def hs_scen(start=None, intents=(), **kw):
+    sc = {"g1": [[0, INACT]] + ([[start, ST], [start + 10, ACT]] if start is not None else []), "intent": list(intents)}; sc.update(kw); return sc
+def I(at, mode="ok", nonce=NONCE): return {"tag": "i%d%s" % (at, mode), "at": at, "mode": mode, "nonce": nonce}
+def rdir(sb): return sb.d + "/runp/" + sb.rundirs()[0]
+def rid_of(sb): return sb.rundirs()[0][len("wpcg-s7b-"):]
+def evtxt(sb): return open(rdir(sb) + "/evidence.txt").read()
+def waited(sb): return int(re.search(r"NO_START_OBSERVED;WAITED=(\d+)s", sb.result()).group(1))
+def vclock(sb): return int(open(sb.d + "/vclock").read())
+def lock_free(sb):
+    import fcntl
+    with open(sb.d + "/lock", "a") as f:
+        try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); return True
+        except OSError: return False
+def console_a_ack_regex():
+    src = open(os.path.join(HERE, "..", "..", "g1-start-console-a.sh")).read()
+    m = re.search(r'\[\[ "\$line" =~ (\^START_ACK\\ .*?\$) \]\]', src); assert m, "ACK regex not found in console A"; return re.compile(m.group(1))
+def a_const(name):
+    src = open(os.path.join(HERE, "..", "..", "g1-start-console-a.sh")).read()
+    m = re.search(r'(?:^|[; ])%s=(\d+)\b' % name, src, re.M); assert m, name; return int(m.group(1))
+def t_hs_ack_nostart(sb):
+    r = sb.run(); A(r.returncode == 4 and sb.result().startswith("NO_START_OBSERVED;"), (r.returncode, sb.result()))
+    p = rdir(sb) + "/START_ACK"; line = open(p).read(); A(oct(os.stat(p).st_mode & 0o777) == "0o600", "ACK mode")
+    A(re.fullmatch(r"START_ACK v1 run=%s nonce=%s pid=\d+ w=250\n" % (re.escape(rid_of(sb)), NONCE), line), line)
+    A(console_a_ack_regex().fullmatch(line.rstrip("\n")), "console A's ACK grammar must accept exactly what console B writes: %r" % line)
+    first = evtxt(sb).splitlines()[0]; A(first.startswith("S7B_ARMED version=s7b-containment-v3 instance=production mode=contain unit=") and first.endswith(" run_dir=" + rdir(sb)) and sum(1 for l in evtxt(sb).splitlines() if l.startswith("S7B_ARMED ")) == 1, "console A matches this exact armed record: " + first)
+    lim = int(re.search(r"S7B_INTENT_ACK run=\S+ nonce=\S+ w=250 arm_limit=(\d+)s", evtxt(sb)).group(1))
+    A(350 <= lim <= 355 and waited(sb) == lim, "limit counted from the ACK (intent written at 100 s): %s / %s" % (lim, sb.result()))
+    A(vclock(sb) >= lim and vclock(sb) <= lim + 10, vclock(sb)); A(not sb.stops() and not sb.forbidden(), "no action")
+    A(lock_free(sb), "console B has exited: its lock is free again")
+case("HS01 valid intent at 100 s: ACK written (0600, exact grammar, accepted by console A's parser), arm deadline = ACK time + 250 s, not the initial arm time", with_sb(t_hs_ack_nostart, hs_scen(None, [I(100)])))
+def t_hs_late_start(sb):
+    r = sb.run(); A(r.returncode == 0 and sb.result().startswith("WINDOW_COMPLETE;G1=active/running"), (r.returncode, sb.result()))
+    so = int(re.search(r"S7B_START_OBSERVED t=(\d+)", r.stdout).group(1)); A(so >= 150, "start observed at %s (the old 120 s arm deadline would have ended the run)" % so)
+case("HS02 intent at 118 s, start at 150 s (after the old 120 s deadline): the start is supervised, window completes", with_sb(t_hs_late_start, hs_scen(150, [I(118)])))
+def t_hs_no_intent(sb):
+    r = sb.run(); A(r.returncode == 4 and waited(sb) == 120 and vclock(sb) <= 130, (sb.result(), vclock(sb))); A(not os.path.exists(rdir(sb) + "/START_ACK"), "no ACK without an intent")
+case("HS03 no intent: arm deadline unchanged (120 s, exit 4)", with_sb(t_hs_no_intent, hs_scen(None)))
+def t_hs_in_time(sb):
+    r = sb.run(); A(r.returncode == 0 and sb.result().startswith("WINDOW_COMPLETE"), (r.returncode, sb.result()))
+case("HS04a intent at 10 s, start at 250 s (inside ACK + 250 s): supervised", with_sb(t_hs_in_time, hs_scen(250, [I(10)])))
+def t_hs_too_late(sb):
+    r = sb.run(); A(r.returncode == 4 and 255 <= waited(sb) <= 262, (r.returncode, sb.result()))
+case("HS04b intent at 10 s, start at 262 s (after ACK + 250 s): NOT observed, exit 4 (the commitment is bounded, not open-ended)", with_sb(t_hs_too_late, hs_scen(262, [I(10)])))
+def hs_reject(mode):
+    def f(sb):
+        r = sb.run(); A(r.returncode == 4 and waited(sb) == 120, (mode, sb.result())); A(not os.path.exists(rdir(sb) + "/START_ACK"), "no ACK for a rejected intent: " + mode)
+        A("S7B_INTENT_REJECTED" in evtxt(sb) and "S7B_INTENT_ACK " not in evtxt(sb), evtxt(sb)[-300:])
+    return f
+for _m in ("wrong_run", "bad_format", "bad_mode", "two_lines", "no_newline", "short_nonce", "symlink"):
+    case("HS05-%s hostile/invalid intent (%s): rejected, no ACK, no extension" % (_m, _m), with_sb(hs_reject(_m), hs_scen(None, [I(10, _m)])))
+def t_hs_second(sb):
+    r = sb.run(); A(r.returncode == 4, sb.result()); ev = evtxt(sb)
+    A(ev.count("S7B_INTENT_ACK ") == 1 and "S7B_INTENT_ACK_FAILED" not in ev and open(rdir(sb) + "/START_ACK").read().count(NONCE) == 1, "exactly one intent is processed per run (no replay): " + ev[-400:])
+case("HS06 a second intent (different nonce) after a valid one is ignored: one ACK, no re-processing", with_sb(t_hs_second, hs_scen(None, [I(10), I(40, "replace", "f" * 32)])))
+def t_hs_bad_then_good(sb):
+    r = sb.run(); A(r.returncode == 4 and waited(sb) == 120 and not os.path.exists(rdir(sb) + "/START_ACK"), sb.result())
+case("HS07 a rejected intent poisons the run: a later valid-looking intent is not accepted (one intent per run)", with_sb(t_hs_bad_then_good, hs_scen(None, [I(10, "bad_format"), I(40, "replace")])))
+def t_hs_preack(sb):
+    r = sb.run(); A(r.returncode == 4 and waited(sb) == 120, sb.result()); ev = evtxt(sb); A("S7B_INTENT_ACK_FAILED" in ev and "S7B_INTENT_ACK " not in ev, ev[-300:])
+    A(open(rdir(sb) + "/START_ACK").read() == "pre-existing\n", "an existing ACK file is never overwritten (noclobber)")
+case("HS08 a pre-existing START_ACK file: never overwritten, no extension, ACK_FAILED", with_sb(t_hs_preack, hs_scen(None, [I(5, "preack"), I(10)])))
+def t_hs_phase2(sb):
+    r = sb.run(); A(r.returncode == 0 and sb.result().startswith("WINDOW_COMPLETE"), sb.result()); A(not os.path.exists(rdir(sb) + "/START_ACK"), "an intent after the start was observed is ignored")
+    A(vclock(sb) <= 10 + 316, "the 300 s window is unchanged by the handshake (%s)" % vclock(sb))
+case("HS09 an intent after the start was observed is ignored; the 300 s observation window is unchanged", with_sb(t_hs_phase2, hs_scen(10, [I(50)])))
+def t_hs_exit_after_ack(sb):
+    r = sb.run(); A(r.returncode == 130 and "INTERRUPTED;ACTION=NONE;PHASE=arm;G1_NOT_SUPERVISED" in (sb.result() or ""), (r.returncode, sb.result()))
+    A(os.path.exists(rdir(sb) + "/START_ACK"), "the ACK was written before console B exited"); A(lock_free(sb), "after console B exited its lock is free: console A's liveness check (CG16/CG17) refuses the start")
+case("HS10 console B exits (interrupted) AFTER the ACK, before any start: not supervised, lock free, ACK left behind (console A must refuse; see CA tests)", with_sb(t_hs_exit_after_ack, hs_scen(None, [I(100)]), int_at=130))
+def t_hs_static():
+    src = open(os.path.join(HERE, "..", "..", "g1-start-console-a.sh")).read()
+    A(a_const("ACK_MIN_COMMIT_SEC") == 250 and a_const("MAX_INTENT_TO_START_SEC") == 30 and a_const("START_TIMEOUT") == 180, "console A constants")
+    A('timeout -k 10 "$START_TIMEOUT" python3 -I -B "$HELPER" start' in src, "helper kill grace is 10 s")
+    A(250 >= 30 + 180 + 10 + 5 + 25, "INTENT_WAIT_SEC covers intent->helper cap + helper timeout + kill grace + one sample + reserve"); A(re.search(r"^SAMPLE_SEC=5\b", ORIG, re.M), "5 s sample")
+    A(re.search(r"^INTENT_WAIT_SEC=250\b", ORIG, re.M), "B constant equals console A's ACK_MIN_COMMIT_SEC")
+case("HS11 static: the B commitment (250 s) equals A's required minimum and covers 30 + 180 + 10 + 5 + 25 s (cross-file)", t_hs_static)
+# ---- mutants: removing a defense must change the observable result of the scenario above (these are the kill checks for HS01-HS10)
+def mut(name, patch, scen, check, **kw): case(name, with_sb(check, scen, patches=[patch], **kw))
+def k_nolimit(sb):
+    r = sb.run(); A(r.returncode == 4 and waited(sb) == 120, "mutant (no deadline extension) must lose the late start: %s" % sb.result())
+mut("BM01 mutant: no deadline extension after the ACK -> HS02 scenario ends NO_START_OBSERVED (killed by HS02)", ("newlim=$(( el + INTENT_WAIT_SEC ))", "newlim=$ARM_LIMIT"), hs_scen(150, [I(118)]), k_nolimit)
+def k_fromarm(sb):
+    r = sb.run(); A(r.returncode == 0, "mutant (deadline counted from the initial arm time) observes the 262 s start: %s" % sb.result())
+mut("BM02 mutant: deadline counted from the initial arm time instead of the ACK -> HS04b start at 262 s is (wrongly) observed (killed by HS04b)", ("newlim=$(( el + INTENT_WAIT_SEC ))", "newlim=$(( ARM_MAX_SEC + INTENT_WAIT_SEC ))"), hs_scen(262, [I(10)]), k_fromarm)
+def k_replay(sb):
+    r = sb.run(); ev = evtxt(sb); A(ev.count("S7B_INTENT_ACK") >= 2, "mutant (no one-shot) processes the replayed intent: " + ev[-300:])
+mut("BM03 mutant: no one-intent-per-run rule -> the replayed intent is processed again (killed by HS06)", ("  INTENT_DONE=1\n", "  INTENT_DONE=0\n"), hs_scen(None, [I(10), I(40, "replace", "f" * 32)]), k_replay)
+def k_acked(sb):
+    sb.run(); A(os.path.exists(rdir(sb) + "/START_ACK"), "the mutant accepts the hostile intent")
+mut("BM04 mutant: run id not checked -> an intent from another run is accepted (killed by HS05-wrong_run)", ('[ "$want" = "$rid" ] || { out "S7B_INTENT_REJECTED reason=other_run"; return 0; }', ":"), hs_scen(None, [I(10, "wrong_run")]), k_acked)
+mut("BM05 mutant: mode 0600 not checked -> a 0644 intent is accepted (killed by HS05-bad_mode)", ('case "$meta" in *" 600 "*) ;; *) out "S7B_INTENT_REJECTED reason=mode"; return 0 ;; esac', ":"), hs_scen(None, [I(10, "bad_mode")]), k_acked)
+mut("BM06 mutant: nonce length not enforced -> a short nonce is accepted (killed by HS05-short_nonce)", ("nonce=([0-9a-f]{32})$ ]]", "nonce=([0-9a-f]*)$ ]]"), hs_scen(None, [I(10, "short_nonce")]), k_acked)
+mut("BM07 mutant: one-line rule not enforced -> a two-line intent is accepted (killed by HS05-two_lines)", ('[ "${meta##* }" = "$(( ${#line} + 1 ))" ] || { out "S7B_INTENT_REJECTED reason=not_one_line"; return 0; }', ":"), hs_scen(None, [I(10, "two_lines")]), k_acked)
+
 if __name__ == "__main__":
     t0 = time.time()
     import concurrent.futures as cf

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WP CareGrid GO-20.38 S7-B containment wrapper (console B), candidate v2.
+# WP CareGrid GO-20.38 S7-B containment wrapper (console B), candidate v3 (CG-1: START_INTENT / START_ACK handshake).
 # NOT installed, NOT approved. Local development artefact. Real use needs a separate Owner execution GO.
 #
 # Role: run on the SECOND root console (console B) BEFORE console A issues the single helper start. It observes the G1 unit for at most
@@ -15,12 +15,22 @@
 # without a result: treat G1 as unsupervised); 130 = interrupted.
 # stdout must be a terminal in contain mode (use script(1) for a transcript, not a pipe to tee).
 #
+# CG-1 handshake (console A <-> console B, arm phase only). Console A may issue the helper start only after it has written a START_INTENT file into THIS run
+# directory and read back a matching START_ACK written by THIS process. Intent: one line `START_INTENT v1 run=<run id> nonce=<32 hex>` (regular file, root-owned,
+# mode 0600, no symlink). B accepts exactly ONE intent per run (never a second one, never a replay), verifies run id and nonce, and BEFORE it writes
+# `START_ACK v1 run=<run id> nonce=<nonce> pid=<B pid> w=<INTENT_WAIT_SEC>` it commits to keep waiting for the start until ACK_TIME + INTENT_WAIT_SEC (the arm deadline
+# only moves forward, never back). INTENT_WAIT_SEC = 250 s = 30 s (console A: intent -> helper call, enforced by console A) + 180 s (helper timeout) + 10 s (kill grace)
+# + 5 s (one sample) + 25 s reserve. A missing, malformed, foreign-run, replayed or late intent/ACK means NO start (console A stops before the helper).
+# What the handshake can NOT do: if B exits after console A's last liveness check and before the unit leaves `inactive`, the start is unsupervised. That window is not
+# closable by code and stays an Owner decision (docs/PRODUCTION_G1_START_PROCEDURE.md, CG-1).
+#
 # Usage (absolute path, root-owned file):   /root/go20-38-s7b-containment-v1.sh --instance production|restore --mode observe|contain
 
 # ------------------------------------------------------------ constants (no environment or argument can change them)
 SAMPLE_SEC=5            # sampling interval
 WINDOW_SEC=300          # supervision window, counted from the first observation of activation
-ARM_MAX_SEC=120         # how long to wait for the start after arming
+ARM_MAX_SEC=120         # how long to wait for the start after arming (until a valid START_INTENT is acknowledged)
+INTENT_WAIT_SEC=250     # commitment after a valid ACK: 30 (A: intent->helper) + 180 (helper timeout) + 10 (kill grace) + 5 (sample) + 25 (reserve)
 HANG_CUTOFF_SEC=150     # activating longer than this (from first observation) = start hang
 STOP_WAIT_SEC=120       # wait after the single stop attempt
 KILL_CONFIRM_SEC=60     # time the Owner has to type the confirmation phrase
@@ -34,7 +44,7 @@ PROCROOT="/proc"
 CGROOT="/sys/fs/cgroup"
 LOCKFILE="/run/wpcg-s7b.lock"
 LEGACY_UNIT="mysql.service"
-WRAPPER_VERSION="s7b-containment-v2"
+WRAPPER_VERSION="s7b-containment-v3"
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C
 unset BASH_ENV ENV CDPATH IFS 2>/dev/null
 set -u
@@ -238,6 +248,35 @@ snapshot() {  # fixed-property evidence only (no process arguments, no log text)
   return 0
 }
 
+# ---------------------------------------------------------------------------------- CG-1 handshake (arm phase only)
+INTENT_DONE=0; ARM_LIMIT="$ARM_MAX_SEC"
+handle_intent() {  # at most ONE intent per run; sets ARM_LIMIT (seconds from T_ARM) only after the ACK commitment was written and read back
+  [ "$INTENT_DONE" -eq 0 ] || return 0
+  local f="$RUN_DIR/START_INTENT" a="$RUN_DIR/START_ACK" meta line rid want nonce ack el newlim old
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  INTENT_DONE=1
+  rid="${RUN_DIR##*/wpcg-s7b-}"
+  if [ ! -f "$f" ] || [ -L "$f" ]; then out "S7B_INTENT_REJECTED reason=not_regular"; return 0; fi
+  meta=$(stat -c '%u %a %s' -- "$f" 2>/dev/null) || { out "S7B_INTENT_REJECTED reason=stat_failed"; return 0; }
+  [ "${meta%% *}" = "$ROOT_UID_EXPECT" ] || { out "S7B_INTENT_REJECTED reason=owner"; return 0; }
+  case "$meta" in *" 600 "*) ;; *) out "S7B_INTENT_REJECTED reason=mode"; return 0 ;; esac
+  IFS= read -r line < "$f" 2>/dev/null || { out "S7B_INTENT_REJECTED reason=unreadable"; return 0; }
+  [ "${meta##* }" = "$(( ${#line} + 1 ))" ] || { out "S7B_INTENT_REJECTED reason=not_one_line"; return 0; }
+  [[ "$line" =~ ^START_INTENT\ v1\ run=([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})\ nonce=([0-9a-f]{32})$ ]] || { out "S7B_INTENT_REJECTED reason=format"; return 0; }
+  want="${BASH_REMATCH[1]}"; nonce="${BASH_REMATCH[2]}"
+  [ "$want" = "$rid" ] || { out "S7B_INTENT_REJECTED reason=other_run"; return 0; }
+  el=$(( $(now) - T_ARM )); newlim=$(( el + INTENT_WAIT_SEC )); old="$ARM_LIMIT"
+  [ "$newlim" -gt "$ARM_LIMIT" ] || newlim="$ARM_LIMIT"
+  ARM_LIMIT="$newlim"
+  ack="START_ACK v1 run=$rid nonce=$nonce pid=$$ w=$INTENT_WAIT_SEC"
+  if { ( umask 077; printf '%s\n' "$ack" > "$a" ) 2>/dev/null; } && [ "$(cat "$a" 2>/dev/null)" = "$ack" ]; then
+    out "S7B_INTENT_ACK run=$rid nonce=$nonce w=$INTENT_WAIT_SEC arm_limit=${ARM_LIMIT}s"
+  else
+    ARM_LIMIT="$old"; out "S7B_INTENT_ACK_FAILED reason=write_or_readback"
+  fi
+  return 0
+}
+
 # ------------------------------------------------------------------------------------------- main
 finish() {  # finish EXITCODE : result line, final fresh read, exit
   emit_result "$RESULT_CODE"; final_line "$1"; exit "$1"
@@ -304,7 +343,8 @@ main() {
   local n=0 apolls=0 started=0 pfails=0 seen_exit=0 deact_since=0 deact_n=0 flags="" trig="" hist="" f=0 ones=0 el rd first=1
   while [ "$started" -eq 0 ]; do
     [ "$INTERRUPTED" -eq 0 ] || { snapshot interrupted; RESULT_CODE="INTERRUPTED;ACTION=NONE;PHASE=arm;G1_NOT_SUPERVISED"; emit_result "$RESULT_CODE"; final_line 130; exit 130; }
-    if [ $(( $(now) - T_ARM )) -ge "$ARM_MAX_SEC" ] && [ "$apolls" -ge $(( ARM_MAX_SEC / SAMPLE_SEC )) ]; then RESULT_CODE="NO_START_OBSERVED;WAITED=${ARM_MAX_SEC}s;ACTION=NONE;G1_NOT_SUPERVISED"; snapshot no_start; finish 4; fi
+    handle_intent
+    if [ $(( $(now) - T_ARM )) -ge "$ARM_LIMIT" ] && [ "$apolls" -ge $(( ARM_LIMIT / SAMPLE_SEC )) ]; then RESULT_CODE="NO_START_OBSERVED;WAITED=${ARM_LIMIT}s;ACTION=NONE;G1_NOT_SUPERVISED"; snapshot no_start; finish 4; fi
     nap "$SAMPLE_SEC"; apolls=$((apolls+1))
     if read_unit "$G1_UNIT" G; then
       pfails=0
