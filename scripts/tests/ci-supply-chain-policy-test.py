@@ -72,7 +72,16 @@ def validate_weekly_deployment_workflow(content):
 def validate_workflow_controls(workflow):
     assert "pull_request_target" not in workflow, "pull_request_target is prohibited"
     assert re.search(r"(?m)^\s*pull_request:\s*$", workflow), "public PR CI trigger missing"
-    assert "self-hosted" not in workflow, "untrusted PRs must not execute on persistent self-hosted runners"
+    # The persistent Contabo runner is allowed for exactly one job (the SQLite regression gate) and only behind a fork fallback;
+    # everywhere else untrusted PR code must never reach a persistent self-hosted runner.
+    sqlite_start = workflow.find("  sqlite_regressions:" + chr(10))
+    assert sqlite_start != -1, "dedicated fast SQLite regression job missing"
+    sqlite_end = workflow.find("  wordpress:" + chr(10), sqlite_start)
+    assert sqlite_end != -1, "job following the SQLite gate missing"
+    assert "self-hosted" not in workflow[:sqlite_start] + workflow[sqlite_end:], "self-hosted is only allowed in the SQLite regression gate"
+    assert workflow.count("self-hosted") == 1, "exactly one self-hosted reference (the SQLite gate runs-on) is allowed"
+    assert "github.event.pull_request.head.repo.full_name != github.repository" in workflow[sqlite_start:sqlite_end], "fork pull requests must fall back to a GitHub-hosted runner"
+    assert '["ubuntu-24.04"]' in workflow[sqlite_start:sqlite_end], "fork fallback runner missing"
     assert "secrets." not in workflow, "CI must not access repository or environment secrets"
     assert not re.search(r"(?i)actions/(?:upload|download)-artifact", workflow), "PR artifacts must not become release inputs"
     assert re.search(r"(?m)^permissions:\s*\n\s+contents:\s*read\s*$", workflow), "workflow token must remain contents: read"
@@ -135,7 +144,11 @@ def validate_sqlite_regression_gate(workflow):
     end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("  ") and not lines[index].startswith("    ") and lines[index].endswith(":")), len(lines))
     job = "\n".join(lines[start:end])
     assert "name: Server SQLite regression gate (PHP 8.5)" in job, "SQLite check must identify PHP 8.5"
-    assert "php-version: '8.5'" in job, "SQLite regression gate must use PHP 8.5"
+    dockerfile = (ROOT / ".github/ci/php85-sqlite.Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^FROM php:8\.5\.\d+-cli@sha256:[0-9a-f]{64}$", dockerfile), "SQLite CI image must pin PHP 8.5 by digest"
+    assert all("@sha256:" in line for line in dockerfile.splitlines() if line.startswith("FROM ")), "every CI image base must be pinned by digest"
+    assert ".github/ci/php85-sqlite.Dockerfile" in job and "docker build" in job, "SQLite gate must build the pinned CI image"
+    assert "--cap-drop=ALL" in job and "--security-opt=no-new-privileges" in job, "SQLite container must drop privileges"
     assert re.search(r"(?m)^      DB_CONNECTION: sqlite$", job), "SQLite job must select the SQLite connection"
     assert re.search(r"(?m)^      DB_DATABASE: database/ci-sqlite-regressions\.sqlite$", job), "SQLite job must use its isolated disposable database file"
     assert re.search(r"(?m)^      CAREGRID_EXPECTED_DATABASE_DRIVER: sqlite$", job), "SQLite driver expectation missing"
@@ -184,6 +197,9 @@ def main():
         (workflow.replace("CAREGRID_EXPECTED_DATABASE_VERSION=8.4", "CAREGRID_EXPECTED_DATABASE_VERSION=8.0", 1), "wrong MySQL version"),
         (workflow.replace("php: ['8.5']", "php: ['8.4']", 1), "server matrix must use PHP 8.5 only"),
         (workflow.replace("  sqlite_regressions:", "  quick_sqlite_missing:", 1), "missing dedicated SQLite regression gate"),
+        (workflow.replace("github.event.pull_request.head.repo.full_name != github.repository", "true", 1), "missing fork fallback for the self-hosted runner"),
+        (workflow.replace("    runs-on: ubuntu-24.04" + chr(10), "    runs-on: [self-hosted, Linux]" + chr(10), 1), "self-hosted runner outside the SQLite gate"),
+        (workflow.replace("--cap-drop=ALL", "", 1), "container without dropped capabilities"),
         (workflow.replace("^[0-9a-fA-F]{40}$", "^.+$", 1), "weak manual SHA grammar"),
     )
     for mutated, reason in mutations:
