@@ -32,7 +32,7 @@ for request_id in ("open-pulls", "dependabot-alerts", "issue-174-comments", "mer
 assert "GH_API_REQUEST=%s STATE=END RC=%s" in candidate
 assert '2>"$stderr_file"' in candidate
 assert "HTTP=%s" in candidate and '"$stderr_file"' in candidate
-assert "    permissions:\n      contents: read\n      pull-requests: read\n      security-events: read\n      issues: read\n      actions: read" in candidate
+assert "    permissions:\n      contents: read\n      pull-requests: read\n      security-events: read\n      vulnerability-alerts: read\n      issues: read\n      actions: read" in candidate
 
 staging = workflow.split("  staging-deploy:\n", 1)[1].split("  production-deploy:\n", 1)[0]
 assert "vars.WPCG_WEEKLY_STAGING_ENABLED == 'true'" in staging
