@@ -17,6 +17,18 @@ Dependabot checks and Actions schedules use `Europe/Budapest`, so daylight-savin
 
 Candidate admission runs on protected primary before Saturday staging and is repeated on Sunday before production promotion. It verifies the latest completed CI run for that exact SHA. A later failed or in-progress run invalidates admission even if an earlier run passed. The candidate manifest records lockfile digests, merged-PR identity, V3 admission digest and CI/workflow run IDs; its checksum accompanies the artifact.
 
+### Integration ledger #174 reading
+
+`review-subject` must read the whole append-only review ledger (issue #174) to find the merged PR and its V3 records. That ledger is now larger than the generic per-input JSON bound (measured 2026-11-22: 1 534 comments, 16 pages, 9 324 174 B, growing about 2.38 MB per week), so it is streamed page by page instead of raising the 8 MB bound that still applies to every other input.
+
+- The single `gh api --paginate --slurp` snapshot is read in order, page by page. Nothing is truncated, no time window is applied and no comment is excluded from the duplicate/identity checks.
+- The streamed comment count must equal the `comments` value of one separate read-only issue metadata request (`issue-174-metadata`); the request logs only its request id, return code and HTTP status.
+- The same file is read twice; both passes must agree on byte count, SHA-256, page count and comment count, otherwise the run holds.
+- Every bound is finite: 160 000 000 B whole file, 16 000 000 B per page, 1 000 000 B per comment, 20 000 comments, 201 pages of 100 items. Holds are explicit: `ledger_too_large`, `ledger_page_too_large`, `ledger_comment_too_large`, `ledger_comments_too_many`, `ledger_pages_too_many`, `ledger_page_repeated`, `ledger_page_incomplete`, `ledger_json_invalid`, `ledger_changed`, `ledger_unstable`, `ledger_metadata_invalid`, `ledger_count_mismatch`.
+- Memory is bounded by one page plus the bounded identifier set kept for global duplicate detection (0.20 MB at 1 534 identifiers, 3.25 MB at the 20 000 cap), not by the file size. Measured scan peaks: 3.48 MB at 9.39 MB / 1 534 comments, 3.56 MB at 28.15 MB / 4 600 comments.
+- A comment posted between the comments read and the metadata read makes the counts disagree and holds the run; that is intentional, so re-run after the ledger settles.
+
+
 Staging executes only on the dedicated `wpcg-staging` self-hosted runner, as `deploy`, from `/var/www/wpcaregrid`, through the root-owned and hash-pinned installed controller. The controller performs its own exact-SHA CI, backup, migration, traffic-gate, worker and rollback checks. Afterward, an HTTPS HU/EN marketing smoke checks localization, HSTS and disabled customer/checkout/Connector routes. A successful smoke and receipt mark that exact SHA `FROZEN`; the resulting GitHub deployment status is the promotion reference. A failed deployment or smoke records a failed deployment status and remains HOLD for operator recovery through the existing controller.
 
 Production runs only on the dedicated `wpcg-production` runner as `deploy-production`, using the installed immutable helper/controller. The workflow calls `sync` with an exact SHA; it does not run raw migrations or grant database privileges. The helper must still find the candidate to be the current primary tip, so a newer merge after the Saturday freeze holds Sunday promotion and requires a new staging qualification.

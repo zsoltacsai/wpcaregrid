@@ -30,9 +30,22 @@ assert "open Dependabot PRs remain" in candidate
 assert "review-subject" in candidate and "review-ledger.json" in candidate
 assert "github.event.schedule == '0 20 * * 0'" in candidate, \
     "Sunday promotion must rerun current candidate admission"
-for request_id in ("open-pulls", "dependabot-alerts", "issue-174-comments", "merged-prs-for-sha", "exact-ci-runs"):
+for request_id in ("open-pulls", "dependabot-alerts", "issue-174-comments", "issue-174-metadata",
+                   "merged-prs-for-sha", "exact-ci-runs"):
     assert candidate.count(f"gh_api_read {request_id} ") == 1, \
         f"candidate API request must have one stable diagnostic id: {request_id}"
+assert ('gh_api_read issue-174-metadata "$RUNNER_TEMP/review-ledger-meta.json" '
+        '"repos/$GITHUB_REPOSITORY/issues/174"') in candidate, \
+    "the ledger completeness proof needs one read-only issue metadata request"
+assert "review-ledger-meta.json" in candidate and "--ledger-metadata" in candidate, \
+    "review-subject must receive the issue metadata comment count"
+metadata_request = [line for line in candidate.splitlines()
+                    if "gh_api_read issue-174-metadata " in line]
+assert len(metadata_request) == 1 and "--paginate" not in metadata_request[0] \
+    and "--slurp" not in metadata_request[0], \
+    "the issue metadata count must come from one unpaginated document"
+assert "issues/174/comments?per_page=100" in candidate, \
+    "the streamed ledger page size must stay the documented 100 items"
 assert "GH_API_REQUEST=%s STATE=END RC=%s" in candidate
 assert '2>"$stderr_file"' in candidate
 assert "HTTP=%s" in candidate and '"$stderr_file"' in candidate
