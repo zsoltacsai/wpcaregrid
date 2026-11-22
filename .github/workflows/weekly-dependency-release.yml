@@ -178,6 +178,7 @@ jobs:
       contents: read
       pull-requests: read
       security-events: read
+      vulnerability-alerts: read
       issues: read
       actions: read
     outputs:
