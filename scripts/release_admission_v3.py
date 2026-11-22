@@ -28,12 +28,11 @@ else:
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 REQUIRED_CI_JOBS = (
     "Quality (lint, style, dependencies, build, secrets)",
-    "Server tests (PHP 8.4, mysql)",
     "Connector tests in WordPress (PHP 8.4, sqlite)",
     "Connector tests in WordPress (PHP 8.4, mysql)",
     "Connector tests in WordPress (PHP 8.4, mariadb)",
-    "Server SQLite regression gate (PHP 8.4)",
     "Server tests (PHP 8.5, mysql)",
+    "Server SQLite regression gate (PHP 8.5)",
 )
 MAX_REPORT_BYTES = 45 * 1024
 _SHA = re.compile(r"[0-9a-f]{40}\Z")

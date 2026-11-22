@@ -605,6 +605,49 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
         args["primary_ci_run"] = {**args["primary_ci_run"], "conclusion": "failure"}
         self.assertEqual(refusal_reason(primary_ci_run=args["primary_ci_run"]), "ci_run_invalid")
 
+    def test_current_ci_matrix_exact_jobs_pass(self):
+        expected_required = (
+            "Quality (lint, style, dependencies, build, secrets)",
+            "Connector tests in WordPress (PHP 8.4, sqlite)",
+            "Connector tests in WordPress (PHP 8.4, mysql)",
+            "Connector tests in WordPress (PHP 8.4, mariadb)",
+            "Server tests (PHP 8.5, mysql)",
+            "Server SQLite regression gate (PHP 8.5)",
+        )
+        self.assertEqual(REQUIRED_CI_JOBS, expected_required)
+        self.assertNotIn("Server tests (PHP 8.4, mysql)", REQUIRED_CI_JOBS)
+        self.assertNotIn("Server SQLite regression gate (PHP 8.4)", REQUIRED_CI_JOBS)
+        args = fixture()
+        self.assertEqual(verify_release_admission(**args)["result"], "PASS")
+
+    def test_each_required_ci_job_failure_or_omission_is_refused(self):
+        for index, name in enumerate(REQUIRED_CI_JOBS):
+            with self.subTest(omitted=name):
+                args = fixture()
+                args["candidate_ci_jobs"] = [
+                    job for job in args["candidate_ci_jobs"] if job["name"] != name
+                ]
+                self.assertEqual(refusal_reason(candidate_ci_jobs=args["candidate_ci_jobs"]),
+                                 "required_ci_check_failed")
+            with self.subTest(failed=name):
+                args = fixture()
+                for job in args["candidate_ci_jobs"]:
+                    if job["name"] == name:
+                        job["conclusion"] = "failure"
+                self.assertEqual(refusal_reason(candidate_ci_jobs=args["candidate_ci_jobs"]),
+                                 "required_ci_check_failed")
+
+    def test_retired_php84_server_lane_not_required(self):
+        # Additional unrequired jobs (like extra matrix runs or retired lanes) do not block admission when passing
+        args = fixture()
+        retired_job = {
+            "id": 9999, "run_id": 2, "run_attempt": 1,
+            "head_sha": CANDIDATE, "name": "Server tests (PHP 8.4, mysql)",
+            "status": "completed", "conclusion": "success"
+        }
+        args["candidate_ci_jobs"].append(retired_job)
+        self.assertEqual(verify_release_admission(**args)["result"], "PASS")
+
     def test_missing_failed_or_duplicate_required_job_is_refused(self):
         args = fixture()
         args["primary_ci_jobs"] = args["primary_ci_jobs"][:-1]
