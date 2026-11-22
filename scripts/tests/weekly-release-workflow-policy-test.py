@@ -26,6 +26,13 @@ assert "open Dependabot PRs remain" in candidate
 assert "review-subject" in candidate and "review-ledger.json" in candidate
 assert "github.event.schedule == '0 20 * * 0'" in candidate, \
     "Sunday promotion must rerun current candidate admission"
+for request_id in ("open-pulls", "dependabot-alerts", "issue-174-comments", "merged-prs-for-sha", "exact-ci-runs"):
+    assert candidate.count(f"gh_api_read {request_id} ") == 1, \
+        f"candidate API request must have one stable diagnostic id: {request_id}"
+assert "GH_API_REQUEST=%s STATE=END RC=%s" in candidate
+assert '2>"$stderr_file"' in candidate
+assert "HTTP=%s" in candidate and '"$stderr_file"' in candidate
+assert "    permissions:\n      contents: read\n      pull-requests: read\n      security-events: read\n      issues: read\n      actions: read" in candidate
 
 staging = workflow.split("  staging-deploy:\n", 1)[1].split("  production-deploy:\n", 1)[0]
 assert "vars.WPCG_WEEKLY_STAGING_ENABLED == 'true'" in staging

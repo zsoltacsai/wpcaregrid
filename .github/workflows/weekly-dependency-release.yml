@@ -207,10 +207,31 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/$WPCG_PRIMARY_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git ls-remote origin "refs/heads/$WPCG_PRIMARY_BRANCH" | awk 'NR==1 {print $1}')" = "$GITHUB_SHA"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" > "$RUNNER_TEMP/open-pulls.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/dependabot/alerts?state=open&per_page=100" > "$RUNNER_TEMP/open-alerts.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/174/comments?per_page=100" > "$RUNNER_TEMP/review-ledger.json"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100" > "$RUNNER_TEMP/merged-prs.json"
+          gh_api_read() {
+            local request_id="$1" output_file="$2" rc http_status stderr_file status_line
+            shift 2
+            stderr_file="$RUNNER_TEMP/gh-api-${request_id}.stderr"
+            printf 'GH_API_REQUEST=%s STATE=START\n' "$request_id"
+            if gh api "$@" > "$output_file" 2>"$stderr_file"; then
+              rm -f -- "$stderr_file"
+              printf 'GH_API_REQUEST=%s STATE=END RC=0 HTTP=NONE\n' "$request_id"
+            else
+              rc=$?
+              http_status=UNKNOWN
+              status_line="$(grep -oE 'HTTP [0-9]{3}' "$stderr_file" | head -n 1 || true)"
+              if [[ "$status_line" =~ ^HTTP\ ([0-9]{3})$ ]]; then
+                http_status="${BASH_REMATCH[1]}"
+              fi
+              rm -f -- "$stderr_file"
+              printf 'GH_API_REQUEST=%s STATE=END RC=%s HTTP=%s\n' \
+                "$request_id" "$rc" "$http_status" >&2
+              return "$rc"
+            fi
+          }
+          gh_api_read open-pulls "$RUNNER_TEMP/open-pulls.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"
+          gh_api_read dependabot-alerts "$RUNNER_TEMP/open-alerts.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/dependabot/alerts?state=open&per_page=100"
+          gh_api_read issue-174-comments "$RUNNER_TEMP/review-ledger.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/174/comments?per_page=100"
+          gh_api_read merged-prs-for-sha "$RUNNER_TEMP/merged-prs.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100"
           python3 scripts/weekly_release_management.py intake \
             --pull-requests "$RUNNER_TEMP/open-pulls.json" --alerts "$RUNNER_TEMP/open-alerts.json" \
             --output "$RUNNER_TEMP/candidate-intake.json" >/dev/null
@@ -233,7 +254,7 @@ jobs:
           pr_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head_sha"])' "$RUNNER_TEMP/review-subject.json")"
           pr_base="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base_sha"])' "$RUNNER_TEMP/review-subject.json")"
           python3 scripts/production_release_controller_v3.py verify-release "$GITHUB_SHA" "$pr_number" "$pr_head" "$pr_base" > "$RUNNER_TEMP/release-admission.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&branch=$WPCG_PRIMARY_BRANCH&per_page=100" > "$RUNNER_TEMP/ci-runs.json"
+          gh_api_read exact-ci-runs "$RUNNER_TEMP/ci-runs.json" "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&event=push&branch=$WPCG_PRIMARY_BRANCH&per_page=100"
           python3 scripts/weekly_release_management.py ci-run --candidate-sha "$GITHUB_SHA" \
             --runs "$RUNNER_TEMP/ci-runs.json" --output "$RUNNER_TEMP/exact-ci-run.json" >/dev/null
           ci_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow_run_id"])' "$RUNNER_TEMP/exact-ci-run.json")"
