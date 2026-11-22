@@ -6,6 +6,10 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import subprocess
+import sys
+import tempfile
+import tracemalloc
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -290,6 +294,343 @@ class WeeklyReleaseManagementTest(unittest.TestCase):
         result = smoke.run_smoke(opener=Opener())
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(len(result["results"]), 6)
+
+
+LEDGER_SHA = "a" * 40
+LEDGER_HEAD = "b" * 40
+LEDGER_BASE = "c" * 40
+LEDGER_FIXTURE = ROOT / "scripts/tests/fixtures/v3-artifact-ledger-historical.json"
+
+
+def _ledger_prs():
+    return [{"number": 57, "merge_commit_sha": LEDGER_SHA,
+             "merged_at": "2026-11-16T00:00:00Z",
+             "base": {"ref": weekly.PRIMARY_BRANCH, "sha": LEDGER_BASE},
+             "head": {"sha": LEDGER_HEAD}}]
+
+
+def _ledger_filler(comment_id: int, size: int):
+    return {"id": comment_id, "body": "x" * size,
+            "created_at": "2026-11-01T00:00:00Z",
+            "author_association": "OWNER", "user": {"login": "zsoltacsai"}}
+
+
+def _ledger_artifact(comment_id: int, role: str, agent: str):
+    body = (f"{weekly.REVIEW_ARTIFACT_PREFIX}\nrole={role}\npr=57\n"
+            f"head_sha={LEDGER_HEAD}\nbase_sha={LEDGER_BASE}\nagent={agent}\n"
+            f"report_sha256={'d' * 64}\nreport_base64=eA==\n")
+    return {"id": comment_id, "body": body,
+            "created_at": "2026-11-16T12:00:00Z",
+            "author_association": "OWNER", "user": {"login": "zsoltacsai"}}
+
+
+def _ledger_corrections(historical):
+    rendered = []
+    for index, target in enumerate(historical):
+        body_digest = hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
+        body = weekly._release_admission.render_artifact_correction(
+            target_comment_id=target["id"], target_body_sha256=body_digest,
+            target_pr=int(target["body"].split("pr=", 1)[1].splitlines()[0]),
+            target_head_sha=target["body"].split("head_sha=", 1)[1].splitlines()[0],
+            target_base_sha=target["body"].split("base_sha=", 1)[1].splitlines()[0],
+            target_role=target["body"].split("role=", 1)[1].splitlines()[0])
+        rendered.append({"id": 9_900_000_000 + index, "body": body,
+                         "created_at": "2026-11-16T13:00:00Z",
+                         "author_association": "OWNER", "user": {"login": "zsoltacsai"}})
+    return rendered
+
+
+def _ledger_pages(comments, page_size: int = 100):
+    return [comments[i:i + page_size] for i in range(0, len(comments), page_size)] or [[]]
+
+
+def _write_ledger(path: Path, pages):
+    path.write_text(json.dumps(pages, separators=(",", ":")), encoding="utf-8")
+    return path
+
+
+class LedgerStreamingTest(unittest.TestCase):
+    """Bounded page-by-page processing of the append-only #174 ledger."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.tmp = Path(self._temporary.name)
+
+    def ledger(self, name: str = "review-ledger.json") -> Path:
+        return self.tmp / name
+
+    def test_full_size_ledger_matches_the_list_parser(self):
+        historical = json.loads(LEDGER_FIXTURE.read_text(encoding="utf-8"))
+        corrections = _ledger_corrections(historical)
+        fresh = [_ledger_artifact(5_000_001, "integration_qa", "hermione-qa"),
+                 _ledger_artifact(5_000_002, "appsec", "moody-appsec")]
+        relevant = historical + corrections + fresh
+        fixed = len(json.dumps(relevant, separators=(",", ":")))
+        filler_size = 6_000
+        count = max(0, (9_324_175 - fixed) // (filler_size + 200))
+        comments = [_ledger_filler(1_000_000 + index, filler_size) for index in range(count)]
+        comments += relevant
+        pages = _ledger_pages(comments)
+        path = _write_ledger(self.ledger(), pages)
+        size = path.stat().st_size
+        self.assertGreaterEqual(size, 9_100_000)
+        self.assertLessEqual(size, 9_700_000)
+        scan = weekly._scan_ledger(path)
+        self.assertEqual(scan.comment_count, len(comments))
+        self.assertEqual(scan.page_count, len(pages))
+        self.assertEqual(scan.byte_count, size)
+        self.assertEqual(len(scan.sha256), 64)
+        self.assertEqual(len(scan.comments), len(relevant))
+        self.assertEqual(weekly.merged_pr_subject(_ledger_prs(), scan, LEDGER_SHA),
+                         weekly.merged_pr_subject(_ledger_prs(), pages, LEDGER_SHA))
+
+    def test_historical_correction_and_artifact_cases_match_the_list_parser(self):
+        historical = json.loads(LEDGER_FIXTURE.read_text(encoding="utf-8"))
+        corrections = _ledger_corrections(historical)
+        fresh = [_ledger_artifact(5_000_001, "integration_qa", "hermione-qa"),
+                 _ledger_artifact(5_000_002, "appsec", "moody-appsec")]
+        bogus = {"id": 7_700_000_001, "created_at": "2026-11-16T13:00:00Z",
+                 "author_association": "OWNER", "user": {"login": "zsoltacsai"},
+                 "body": weekly._release_admission.render_artifact_correction(
+                     target_comment_id=12345, target_body_sha256="e" * 64, target_pr=57,
+                     target_head_sha=LEDGER_HEAD, target_base_sha=LEDGER_BASE,
+                     target_role="integration_qa")}
+        cases = {
+            "corrected": historical + corrections + fresh,
+            "missing-correction": historical + corrections[:-1] + fresh,
+            "uncorrected": historical + fresh,
+            "foreign-target": historical + corrections + [bogus] + fresh,
+        }
+        expected_results = {}
+        for name, comments in cases.items():
+            pages = _ledger_pages(comments)
+            path = _write_ledger(self.tmp / f"{name}.json", pages)
+            scan = weekly._scan_ledger(path)
+            try:
+                expected = weekly.merged_pr_subject(_ledger_prs(), pages, LEDGER_SHA)
+            except weekly.PolicyError as error:
+                expected = str(error)
+            try:
+                actual = weekly.merged_pr_subject(_ledger_prs(), scan, LEDGER_SHA)
+            except weekly.PolicyError as error:
+                actual = str(error)
+            with self.subTest(case=name):
+                self.assertEqual(actual, expected)
+            expected_results[name] = expected
+        self.assertEqual(expected_results["corrected"],
+                         {"pr_number": 57, "head_sha": LEDGER_HEAD, "base_sha": LEDGER_BASE})
+        self.assertEqual(expected_results["uncorrected"], "review_artifact_invalid")
+        self.assertEqual(expected_results["missing-correction"], "review_artifact_invalid")
+        self.assertEqual(expected_results["foreign-target"], "artifact_correction_target_invalid")
+
+    def test_relevant_filter_follows_the_admission_prefixes(self):
+        self.assertEqual(weekly.REVIEW_ARTIFACT_PREFIX,
+                         weekly._release_admission._ARTIFACT_PREFIX)
+        comments = [_ledger_filler(1, 4)]
+        comments.append({"id": 2, "body": "WPCG_RELEASE_ARTIFACT_CORRECTION_V3 partial",
+                         "created_at": "2026-11-16T13:00:00Z",
+                         "author_association": "OWNER", "user": {"login": "zsoltacsai"}})
+        scan = weekly._scan_ledger(_write_ledger(self.ledger(), _ledger_pages(comments)))
+        self.assertEqual([comment["id"] for comment in scan.comments], [2])
+
+    def test_cli_requires_matching_issue_comment_count(self):
+        prs = self.tmp / "merged-prs.json"
+        prs.write_text(json.dumps(_ledger_prs()), encoding="utf-8")
+        comments = [_ledger_filler(1, 10),
+                    _ledger_artifact(2, "integration_qa", "hermione-qa"),
+                    _ledger_artifact(3, "appsec", "moody-appsec")]
+        ledger = _write_ledger(self.ledger(), _ledger_pages(comments))
+        metadata = self.tmp / "review-ledger-meta.json"
+        output = self.tmp / "review-subject.json"
+        arguments = ("review-subject", "--candidate-sha", LEDGER_SHA,
+                     "--pull-requests", str(prs), "--ledger-comments", str(ledger),
+                     "--ledger-metadata", str(metadata), "--output", str(output))
+        command = [sys.executable, str(ROOT / "scripts/weekly_release_management.py"), *arguments]
+
+        metadata.write_text(json.dumps({"number": 174, "comments": len(comments)}), encoding="utf-8")
+        accepted = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["pr_number"], 57)
+        self.assertIn("CANDIDATE_LEDGER_SCAN name=review-ledger passes=2 bytes=", accepted.stderr)
+        self.assertIn(f"comments={len(comments)}", accepted.stderr)
+        self.assertNotIn(str(self.tmp), accepted.stderr)
+        self.assertNotIn(".json", accepted.stderr)
+
+        metadata.write_text(json.dumps({"number": 174, "comments": len(comments) + 1}),
+                            encoding="utf-8")
+        mismatch = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(mismatch.returncode, 2)
+        self.assertIn("ledger_count_mismatch", mismatch.stderr)
+        self.assertNotIn(str(self.tmp), mismatch.stderr)
+
+        metadata.write_text(json.dumps({"number": 174}), encoding="utf-8")
+        missing = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("ledger_metadata_invalid", missing.stderr)
+
+    def test_truncated_ledger_holds(self):
+        pages = _ledger_pages([_ledger_filler(1, 50), _ledger_filler(2, 50)])
+        path = self.ledger()
+        _write_ledger(path, pages)
+        path.write_text(path.read_text(encoding="utf-8")[:-25], encoding="utf-8")
+        with self.assertRaisesRegex(weekly.PolicyError, "ledger_json_invalid"):
+            weekly._scan_ledger(path)
+
+    def test_invalid_json_holds(self):
+        path = self.ledger()
+        path.write_text("[[{\"id\": 1,,}]]", encoding="utf-8")
+        with self.assertRaisesRegex(weekly.PolicyError, "ledger_json_invalid"):
+            weekly._scan_ledger(path)
+
+    def test_missing_ledger_holds(self):
+        with self.assertRaisesRegex(weekly.PolicyError, "input_unavailable"):
+            weekly._scan_ledger(self.tmp / "absent.json")
+
+    def test_short_intermediate_page_holds(self):
+        pages = [[_ledger_filler(index, 8) for index in range(100)],
+                 [_ledger_filler(1000 + index, 8) for index in range(50)],
+                 [_ledger_filler(2000 + index, 8) for index in range(10)]]
+        path = _write_ledger(self.ledger(), pages)
+        with self.assertRaisesRegex(weekly.PolicyError, "ledger_page_incomplete"):
+            weekly._scan_ledger(path)
+
+    def test_repeated_page_holds(self):
+        page = [_ledger_filler(index, 8) for index in range(100)]
+        path = _write_ledger(self.ledger(), [page, page])
+        with self.assertRaisesRegex(weekly.PolicyError, "ledger_page_repeated"):
+            weekly._scan_ledger(path)
+
+    def test_duplicate_comment_identifier_holds(self):
+        pages = [[_ledger_filler(1, 8), _ledger_filler(2, 8)],
+                 [_ledger_filler(3, 8), _ledger_filler(1, 8)]]
+        path = _write_ledger(self.ledger(), pages)
+        with self.assertRaisesRegex(weekly.PolicyError, "artifact_correction_ambiguous"):
+            weekly._scan_ledger(path)
+
+    def test_non_object_comment_holds(self):
+        path = _write_ledger(self.ledger(), [[_ledger_filler(1, 8), "not-a-comment"]])
+        with self.assertRaisesRegex(weekly.PolicyError, "api_list_invalid"):
+            weekly._scan_ledger(path)
+
+    def test_oversized_page_holds(self):
+        path = _write_ledger(self.ledger(),
+                             [[_ledger_filler(index, 40) for index in range(100)]])
+        with patch.object(weekly, "MAX_LEDGER_PAGE_BYTES", 512):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_page_too_large"):
+                weekly._scan_ledger(path)
+
+    def test_oversized_comment_holds(self):
+        path = _write_ledger(self.ledger(), [[_ledger_filler(1, 400)]])
+        with patch.object(weekly, "MAX_LEDGER_COMMENT_BYTES", 64):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_comment_too_large"):
+                weekly._scan_ledger(path)
+
+    def test_comment_and_page_count_caps_hold(self):
+        path = _write_ledger(self.ledger(),
+                             [[_ledger_filler(index, 8) for index in range(2)],
+                              [_ledger_filler(100 + index, 8) for index in range(2)]])
+        with patch.object(weekly, "MAX_LEDGER_COMMENTS", 3):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_comments_too_many"):
+                weekly._scan_ledger(path)
+        with patch.object(weekly, "MAX_LEDGER_PAGES", 1):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_pages_too_many"):
+                weekly._scan_ledger(path)
+
+    def test_whole_file_cap_holds(self):
+        path = _write_ledger(self.ledger(), [_ledger_pages([_ledger_filler(1, 8)])[0]])
+        with patch.object(weekly, "MAX_LEDGER_JSON_BYTES", 16):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_too_large"):
+                weekly._scan_ledger(path)
+
+    def test_two_passes_must_agree_on_the_identity(self):
+        path = _write_ledger(self.ledger(), _ledger_pages([_ledger_filler(1, 8),
+                                                           _ledger_artifact(2, "appsec", "moody-appsec")]))
+        first = weekly._scan_ledger(path)
+        self.assertEqual(weekly._scan_ledger_stable(path).sha256, first.sha256)
+        drifted = {
+            "sha256": weekly._LedgerScan(first.comments, first.comment_count,
+                                         first.page_count, first.byte_count, "f" * 64),
+            "comment_count": weekly._LedgerScan(first.comments, first.comment_count + 1,
+                                                first.page_count, first.byte_count, first.sha256),
+            "page_count": weekly._LedgerScan(first.comments, first.comment_count,
+                                             first.page_count + 1, first.byte_count, first.sha256),
+            "byte_count": weekly._LedgerScan(first.comments, first.comment_count,
+                                             first.page_count, first.byte_count + 1, first.sha256),
+        }
+        for name, second in drifted.items():
+            with self.subTest(pass_difference=name):
+                with patch.object(weekly, "_scan_ledger", side_effect=(first, second)):
+                    with self.assertRaisesRegex(weekly.PolicyError, "ledger_unstable"):
+                        weekly._scan_ledger_stable(path)
+
+    def test_cli_reads_the_ledger_twice(self):
+        prs = self.tmp / "merged-prs.json"
+        prs.write_text(json.dumps(_ledger_prs()), encoding="utf-8")
+        ledger = _write_ledger(self.ledger(), _ledger_pages(
+            [_ledger_filler(1, 8), _ledger_artifact(2, "integration_qa", "hermione-qa"),
+             _ledger_artifact(3, "appsec", "moody-appsec")]))
+        metadata = self.tmp / "review-ledger-meta.json"
+        metadata.write_text(json.dumps({"number": 174, "comments": 3}), encoding="utf-8")
+        output = self.tmp / "review-subject.json"
+        calls = []
+        real_scan = weekly._scan_ledger
+
+        def counted(path):
+            calls.append(path)
+            return real_scan(path)
+
+        with patch.object(weekly, "_scan_ledger", side_effect=counted):
+            code = weekly.main(("review-subject", "--candidate-sha", LEDGER_SHA,
+                                "--pull-requests", str(prs), "--ledger-comments", str(ledger),
+                                "--ledger-metadata", str(metadata), "--output", str(output)))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(path == ledger for path in calls))
+        self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["pr_number"], 57)
+
+    def test_unterminated_value_holds_with_bounded_memory(self):
+        path = self.ledger()
+        path.write_text('[[' + '"' + "x" * 4_000, encoding="utf-8")
+        with patch.object(weekly, "MAX_LEDGER_PAGE_BYTES", 1_024):
+            with self.assertRaisesRegex(weekly.PolicyError, "ledger_page_too_large"):
+                weekly._scan_ledger(path)
+
+    def test_bare_scalar_page_holds(self):
+        path = self.ledger()
+        path.write_text("[123456789]", encoding="utf-8")
+        with self.assertRaisesRegex(weekly.PolicyError, "ledger_json_invalid"):
+            weekly._scan_ledger(path)
+
+    def test_generic_json_bound_stays_for_other_inputs(self):
+        path = _write_ledger(self.ledger(), _ledger_pages([_ledger_filler(1, 200)]))
+        with patch.object(weekly, "MAX_JSON_BYTES", 64):
+            with self.assertRaisesRegex(weekly.PolicyError, "input_too_large"):
+                weekly._read_json(path)
+            # Only the ledger has its own bounds; the generic one is untouched.
+            self.assertEqual(weekly._scan_ledger(path).comment_count, 1)
+
+    def test_memory_is_bounded_by_page_not_by_file_size(self):
+        small = _write_ledger(self.tmp / "small.json",
+                              _ledger_pages([_ledger_filler(10_000 + index, 2_000)
+                                             for index in range(800)]))
+        large = _write_ledger(self.tmp / "large.json",
+                              _ledger_pages([_ledger_filler(20_000 + index, 2_000)
+                                             for index in range(3_200)]))
+
+        def peak(path: Path) -> int:
+            tracemalloc.start()
+            try:
+                weekly._scan_ledger(path)
+                return tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+        small_peak = peak(small)
+        large_peak = peak(large)
+        self.assertGreater(large.stat().st_size, 3 * small.stat().st_size)
+        self.assertLess(large_peak, 3 * small_peak)
+        self.assertLess(large_peak, 40_000_000)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ versioned, installed deployment controllers.
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
 import json
 import re
@@ -43,7 +44,41 @@ REVIEW_ARTIFACT_RE = re.compile(
     r"agent=([a-z0-9][a-z0-9._-]{2,63})\n"
     r"report_sha256=([0-9a-f]{64})\n"
     r"report_base64=([A-Za-z0-9+/]+={0,2})\n?\Z")
+REVIEW_ARTIFACT_PREFIX = "WPCG_RELEASE_REVIEW_ARTIFACT_V3"
 MAX_JSON_BYTES = 8_000_000
+# The Issue #174 review ledger is an append-only V3 evidence store that
+# ``review-subject`` must read in full.  It is already larger than the generic
+# JSON input bound (measured 2026-11-22: 1 534 comments, 16 pages, 9 324 174 B;
+# growth about 2.38 MB per week), so it is processed page by page below instead
+# of raising ``MAX_JSON_BYTES`` for every input.  Every bound here is finite and
+# fails closed with its own reason code; none of them is a time window, a
+# truncation or a subject filter.
+LEDGER_PAGE_ITEMS = 100
+MAX_LEDGER_JSON_BYTES = 160_000_000     # whole file, before any read
+MAX_LEDGER_COMMENTS = 20_000            # ~50 weeks of growth at the measured rate
+MAX_LEDGER_PAGES = MAX_LEDGER_COMMENTS // LEDGER_PAGE_ITEMS + 1
+MAX_LEDGER_PAGE_BYTES = 16_000_000      # one page of 100 full V3 artifact reports
+MAX_LEDGER_COMMENT_BYTES = 1_000_000    # one comment with a 65 536 character report
+# Structural tokens of the ledger snapshot (strings are matched as a whole, so
+# the scan cost stays linear in the file size instead of per character).
+_LEDGER_TOKEN = re.compile(r'["\[\]{}]')
+
+
+def _ledger_string_end(text: str, start: int) -> int | None:
+    """Return the index just past the JSON string starting at ``start``."""
+    position = start + 1
+    while True:
+        quote = text.find('"', position)
+        if quote < 0:
+            return None
+        backslashes = 0
+        index = quote - 1
+        while index >= start and text[index] == "\\":
+            backslashes += 1
+            index -= 1
+        if backslashes % 2 == 0:
+            return quote + 1
+        position = quote + 1
 LOCKFILES = ("composer.lock", "wordpress/composer.lock", "package-lock.json")
 RECEIPT_SCHEMA = "wpcg-release-recovery-receipt-v1"
 
@@ -81,6 +116,281 @@ def _pages(value: Any) -> list[dict[str, Any]]:
     if len(output) > 5000:
         raise PolicyError("api_list_too_large")
     return output
+
+
+class _LedgerScan:
+    """Page-by-page view of the append-only #174 review ledger.
+
+    ``comments`` holds only the records that the admission checks can act on
+    (owner V3 artifacts, artifact corrections and the fixed set of allowlisted
+    legacy correction targets), never the whole ledger.
+
+    Memory is *not* exclusively page-size dependent.  A scan holds, at once:
+
+    * one decoded page and its raw text (bounded by ``MAX_LEDGER_PAGE_BYTES``);
+    * one digest entry per page (bounded by ``MAX_LEDGER_PAGES``);
+    * the retained relevant records (bounded by the comment count);
+    * the global duplicate-detection set of comment identifiers, which grows
+      with the number of comments because the check spans every page.
+
+    Measured peaks for one scan (2026-11-22, CPython 3.14, tracemalloc):
+    9.39 MB / 1 534 comments -> 3.48 MB, 28.15 MB / 4 600 comments -> 3.56 MB,
+    so the page window dominates and the identifier set adds 0.20 MB at 1 534
+    identifiers and 3.25 MB at the ``MAX_LEDGER_COMMENTS`` cap of 20 000.
+    """
+
+    __slots__ = ("comments", "comment_count", "page_count", "byte_count", "sha256")
+
+    def __init__(self, comments: list[dict[str, Any]], comment_count: int,
+                 page_count: int, byte_count: int, sha256: str) -> None:
+        self.comments = comments
+        self.comment_count = comment_count
+        self.page_count = page_count
+        self.byte_count = byte_count
+        self.sha256 = sha256
+
+
+class _LedgerReader:
+    """UTF-8 character reader with a bounded, sliding look-ahead window."""
+
+    def __init__(self, handle: Any, *, chunk: int = 65_536) -> None:
+        self._handle = handle
+        self._decoder = codecs.getincrementaldecoder("utf-8")("strict")
+        self._chunk = chunk
+        self._buffer = ""
+        self._position = 0
+        self._floor = 0
+        self._eof = False
+        self._digest = hashlib.sha256()
+        self.byte_count = 0
+
+    def _pull(self) -> None:
+        data = self._handle.read(self._chunk)
+        try:
+            tail = self._decoder.decode(data, final=not data)
+        except UnicodeDecodeError:
+            raise PolicyError("ledger_json_invalid") from None
+        if not data:
+            self._eof = True
+        else:
+            self._digest.update(data)
+            self.byte_count += len(data)
+        drop = min(self._floor, self._position)
+        if drop:
+            self._buffer = self._buffer[drop:]
+            self._position -= drop
+            self._floor -= drop
+        self._buffer += tail
+
+    def _fill(self, count: int) -> None:
+        while self._position + count > len(self._buffer) and not self._eof:
+            self._pull()
+
+    def peek(self) -> str:
+        self._fill(1)
+        return self._buffer[self._position] if self._position < len(self._buffer) else ""
+
+    def take(self) -> str:
+        char = self.peek()
+        if char:
+            self._position += 1
+        return char
+
+    def skip_space(self) -> str:
+        while True:
+            char = self.peek()
+            if char and char in " \t\r\n":
+                self._position += 1
+                continue
+            return char
+
+    def read_span(self, limit: int, code: str) -> str:
+        """Return the raw text of the next JSON value, bounded by ``limit``."""
+        self.skip_space()
+        if self.peek() == "":
+            raise PolicyError("ledger_json_invalid")
+        # ``_floor`` marks the first buffer character of the value; ``_pull``
+        # keeps it adjusted while dropping already-consumed characters.
+        self._floor = self._position
+        depth = 0
+        try:
+            while True:
+                match = _LEDGER_TOKEN.search(self._buffer, self._position)
+                if match is None:
+                    if self._eof:
+                        raise PolicyError("ledger_json_invalid")
+                    # No structural token in the buffered text: the value is
+                    # unterminated or a bare scalar.  Keep the window bounded
+                    # while pulling more input so a malformed page cannot grow
+                    # memory without limit.
+                    if len(self._buffer) - self._floor > limit:
+                        raise PolicyError(code)
+                    self._pull()
+                    continue
+                self._position = match.start()
+                char = self._buffer[self._position]
+                if char == '"':
+                    end = _ledger_string_end(self._buffer, self._position)
+                    if end is None:
+                        if self._eof:
+                            raise PolicyError("ledger_json_invalid")
+                        if len(self._buffer) - self._floor > limit:
+                            raise PolicyError(code)
+                        self._pull()
+                        continue
+                    self._position = end
+                elif char in "[{":
+                    depth += 1
+                    self._position += 1
+                else:
+                    depth -= 1
+                    if depth < 0:
+                        raise PolicyError("ledger_json_invalid")
+                    self._position += 1
+                    if depth == 0:
+                        text = self._buffer[self._floor:self._position]
+                        if len(text.encode("utf-8")) > limit:
+                            raise PolicyError(code)
+                        return text
+                if self._position - self._floor > limit:
+                    raise PolicyError(code)
+        finally:
+            self._floor = 0
+
+    def digest_hex(self) -> str:
+        return self._digest.hexdigest()
+
+
+def _ledger_relevant(comment: dict[str, Any], comment_id: Any, allowlist: Any) -> bool:
+    """True when an admission check can ever act on this ledger record."""
+    if type(comment_id) is int and comment_id in allowlist:
+        return True
+    body = comment.get("body")
+    return isinstance(body, str) and (
+        body.startswith(REVIEW_ARTIFACT_PREFIX)
+        or body.startswith(_release_admission.ARTIFACT_CORRECTION_PREFIX))
+
+
+def _scan_ledger(path: Path) -> _LedgerScan:
+    """Read the whole ledger with bounded memory and fail-closed limits.
+
+    The ledger stays a single ``gh api --paginate --slurp`` snapshot: it is read
+    once, in order, page by page.  Nothing is dropped, no window is applied and
+    no record is filtered out of the duplicate/identity checks.
+    """
+    try:
+        info = path.lstat()
+    except OSError:
+        raise PolicyError("input_unavailable") from None
+    if not stat.S_ISREG(info.st_mode):
+        raise PolicyError("input_unavailable")
+    if info.st_size <= 0:
+        raise PolicyError("ledger_json_invalid")
+    if info.st_size > MAX_LEDGER_JSON_BYTES:
+        raise PolicyError("ledger_too_large")
+    allowlist = _release_admission._LEGACY_ARTIFACT_ALLOWLIST
+    relevant: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    duplicate_id = False
+    page_digests: set[bytes] = set()
+    page_sizes: list[int] = []
+    comment_count = 0
+    try:
+        handle = path.open("rb")
+    except OSError:
+        raise PolicyError("input_unavailable") from None
+    with handle:
+        reader = _LedgerReader(handle)
+        reader.skip_space()
+        if reader.take() != "[":
+            raise PolicyError("ledger_json_invalid")
+        while True:
+            char = reader.skip_space()
+            if char == "]":
+                reader.take()
+                break
+            text = reader.read_span(MAX_LEDGER_PAGE_BYTES, "ledger_page_too_large")
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            if digest in page_digests:
+                raise PolicyError("ledger_page_repeated")
+            page_digests.add(digest)
+            try:
+                page = json.loads(text)
+            except json.JSONDecodeError:
+                raise PolicyError("ledger_json_invalid") from None
+            if not isinstance(page, list) or len(page) > LEDGER_PAGE_ITEMS:
+                raise PolicyError("api_list_invalid")
+            page_sizes.append(len(page))
+            if len(page_sizes) > MAX_LEDGER_PAGES:
+                raise PolicyError("ledger_pages_too_many")
+            for comment in page:
+                if not isinstance(comment, dict):
+                    raise PolicyError("api_list_invalid")
+                comment_count += 1
+                if comment_count > MAX_LEDGER_COMMENTS:
+                    raise PolicyError("ledger_comments_too_many")
+                if (len(json.dumps(comment, separators=(",", ":")).encode("utf-8"))
+                        > MAX_LEDGER_COMMENT_BYTES):
+                    raise PolicyError("ledger_comment_too_large")
+                comment_id = comment.get("id")
+                if type(comment_id) is int:
+                    if comment_id in seen_ids:
+                        duplicate_id = True
+                    else:
+                        seen_ids.add(comment_id)
+                if _ledger_relevant(comment, comment_id, allowlist):
+                    relevant.append(comment)
+            char = reader.skip_space()
+            if char == ",":
+                reader.take()
+                continue
+            if char == "]":
+                reader.take()
+                break
+            raise PolicyError("ledger_json_invalid")
+        if reader.skip_space() != "":
+            raise PolicyError("ledger_json_invalid")
+        byte_count = reader.byte_count
+        ledger_sha256 = reader.digest_hex()
+    if byte_count != info.st_size:
+        raise PolicyError("ledger_changed")
+    # Whole-ledger duplicate detection keeps the admission module's existing
+    # ``artifact_correction_ambiguous`` semantics: it applies to every comment
+    # with an integer id, relevant or not.
+    if duplicate_id:
+        raise PolicyError("artifact_correction_ambiguous")
+    # Completeness: every page but the last must be a full page.  A short
+    # intermediate page means the snapshot is not a complete pagination run.
+    if len(page_sizes) > 1 and any(size != LEDGER_PAGE_ITEMS for size in page_sizes[:-1]):
+        raise PolicyError("ledger_page_incomplete")
+    return _LedgerScan(relevant, comment_count, len(page_sizes), byte_count, ledger_sha256)
+
+
+def _scan_ledger_stable(path: Path) -> _LedgerScan:
+    """Scan the same snapshot twice and require one identical identity.
+
+    Two independent passes over one unchanged file must agree on the byte
+    count, the SHA-256 of the bytes read, the page count and the comment
+    count.  A disagreement means the snapshot changed while it was being read,
+    so the run holds instead of admitting a subject built from mixed input.
+    Only the first pass' records are used; both passes stay bounded exactly
+    like a single one.
+    """
+    first = _scan_ledger(path)
+    second = _scan_ledger(path)
+    if (first.sha256 != second.sha256
+            or first.byte_count != second.byte_count
+            or first.page_count != second.page_count
+            or first.comment_count != second.comment_count):
+        raise PolicyError("ledger_unstable")
+    return first
+
+
+def _ledger_comments(value: Any) -> list[dict[str, Any]]:
+    """Accept either the bounded scan or the legacy in-memory page list."""
+    if isinstance(value, _LedgerScan):
+        return value.comments
+    return _pages(value)
 
 
 def _safe_text(value: Any, limit: int = 240) -> str:
@@ -229,7 +539,7 @@ def merged_pr_subject(pr_data: Any, ledger_data: Any, candidate_sha: str) -> dic
     if len(matches) != 1:
         raise PolicyError("merged_pr_subject_ambiguous")
     subject = matches[0]
-    comments = _pages(ledger_data)
+    comments = _ledger_comments(ledger_data)
     try:
         invalidated_artifacts = _release_admission._authorized_artifact_corrections(
             comments, owner="zsoltacsai")
@@ -239,7 +549,7 @@ def merged_pr_subject(pr_data: Any, ledger_data: Any, candidate_sha: str) -> dic
     for comment in comments:
         body = comment.get("body")
         user = comment.get("user")
-        if (not isinstance(body, str) or not body.startswith("WPCG_RELEASE_REVIEW_ARTIFACT_V3")
+        if (not isinstance(body, str) or not body.startswith(REVIEW_ARTIFACT_PREFIX)
                 or not isinstance(user, dict) or user.get("login") != "zsoltacsai"
                 or comment.get("author_association") != "OWNER"):
             continue
@@ -487,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     subject.add_argument("--candidate-sha", required=True)
     subject.add_argument("--pull-requests", type=Path, required=True)
     subject.add_argument("--ledger-comments", type=Path, required=True)
+    subject.add_argument("--ledger-metadata", type=Path, required=True)
     subject.add_argument("--output", type=Path, required=True)
     gate = sub.add_parser("production-gate")
     gate.add_argument("--candidate-sha", required=True)
@@ -538,8 +849,22 @@ def main(argv: list[str] | None = None) -> int:
             _write_json(args.output, result)
             return 0
         if args.command == "review-subject":
-            result = merged_pr_subject(_read_json(args.pull_requests), _read_json(args.ledger_comments),
-                                       args.candidate_sha)
+            # The ledger is streamed page by page: the generic 8 MB JSON bound
+            # stays unchanged for every other input, and the streamed comment
+            # count must match the count GitHub reports for the issue itself.
+            # Two passes over the same file must also agree on the identity.
+            scan = _scan_ledger_stable(args.ledger_comments)
+            metadata = _read_json(args.ledger_metadata)
+            if (not isinstance(metadata, dict) or type(metadata.get("comments")) is not int
+                    or metadata["comments"] < 0):
+                raise PolicyError("ledger_metadata_invalid")
+            if metadata["comments"] != scan.comment_count:
+                raise PolicyError("ledger_count_mismatch")
+            print(f"CANDIDATE_LEDGER_SCAN name=review-ledger passes=2 bytes={scan.byte_count} "
+                  f"pages={scan.page_count} comments={scan.comment_count} sha256={scan.sha256} "
+                  f"limit_bytes={MAX_LEDGER_JSON_BYTES} limit_pages={MAX_LEDGER_PAGES} "
+                  f"limit_comments={MAX_LEDGER_COMMENTS}", file=sys.stderr)
+            result = merged_pr_subject(_read_json(args.pull_requests), scan, args.candidate_sha)
             _write_json(args.output, result)
             return 0
         if args.command == "validate-recovery":

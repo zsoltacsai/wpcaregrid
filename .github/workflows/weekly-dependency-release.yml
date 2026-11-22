@@ -232,6 +232,7 @@ jobs:
           gh_api_read open-pulls "$RUNNER_TEMP/open-pulls.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100"
           gh_api_read dependabot-alerts "$RUNNER_TEMP/open-alerts.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/dependabot/alerts?state=open&per_page=100"
           gh_api_read issue-174-comments "$RUNNER_TEMP/review-ledger.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/174/comments?per_page=100"
+          gh_api_read issue-174-metadata "$RUNNER_TEMP/review-ledger-meta.json" "repos/$GITHUB_REPOSITORY/issues/174"
           gh_api_read merged-prs-for-sha "$RUNNER_TEMP/merged-prs.json" --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100"
           python3 - "$RUNNER_TEMP/open-pulls.json" "$RUNNER_TEMP/open-alerts.json" <<'PY_INPUT_BYTES'
           import os, stat, sys
@@ -266,7 +267,9 @@ jobs:
           PY
           python3 scripts/weekly_release_management.py review-subject \
             --candidate-sha "$GITHUB_SHA" --pull-requests "$RUNNER_TEMP/merged-prs.json" \
-            --ledger-comments "$RUNNER_TEMP/review-ledger.json" --output "$RUNNER_TEMP/review-subject.json" >/dev/null
+            --ledger-comments "$RUNNER_TEMP/review-ledger.json" \
+            --ledger-metadata "$RUNNER_TEMP/review-ledger-meta.json" \
+            --output "$RUNNER_TEMP/review-subject.json" >/dev/null
           pr_number="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pr_number"])' "$RUNNER_TEMP/review-subject.json")"
           pr_head="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head_sha"])' "$RUNNER_TEMP/review-subject.json")"
           pr_base="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base_sha"])' "$RUNNER_TEMP/review-subject.json")"
