@@ -31,9 +31,10 @@ assert "review-subject" in candidate and "review-ledger.json" in candidate
 assert "github.event.schedule == '0 20 * * 0'" in candidate, \
     "Sunday promotion must rerun current candidate admission"
 for request_id in ("open-pulls", "dependabot-alerts", "issue-174-comments", "issue-174-metadata",
-                   "merged-prs-for-sha", "exact-ci-runs"):
+                   "merged-prs-for-sha", "exact-ci-runs", "exact-ci-jobs"):
     assert candidate.count(f"gh_api_read {request_id} ") == 1, \
         f"candidate API request must have one stable diagnostic id: {request_id}"
+assert "generate-ci-staging-receipt" in candidate and "staging-equivalent-ci-receipt.json" in candidate
 assert ('gh_api_read issue-174-metadata "$RUNNER_TEMP/review-ledger-meta.json" '
         '"repos/$GITHUB_REPOSITORY/issues/174"') in candidate, \
     "the ledger completeness proof needs one read-only issue metadata request"
