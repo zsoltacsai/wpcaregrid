@@ -146,6 +146,74 @@ def refusal_reason(**changes):
     return str(caught.exception)
 
 
+MALFORMED_QA_417 = {
+    "id": 6945646697,
+    "created_at": "2026-11-17T10:37:47Z",
+    "updated_at": "2026-11-17T10:37:47Z",
+    "author_association": "OWNER",
+    "user": {"login": OWNER},
+    "body": (
+        "WPCG_RELEASE_REVIEW_ARTIFACT_V3 role=integration_qa pr=417 "
+        "head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f "
+        "base_sha=822f284575306c8a5474c37ac87672df24a70ae6 "
+        "agent=codex.qa.pr417.3f0f84a "
+        "report_sha256=0ccfc1ae515125cf810e8c78c76e976f67f8282c35724aa21f0a06a3f15f22d1 "
+        "report_base64=UFIgIzQxNyBzb3VyY2UgSW50ZWdyYXRpb24gUUEKSEVBRDogM2YwZjg0YWQyNmE1ZmU3YjZmZDAxY2U0YmU3MTFhNDE2ZGRiMjMwZgpCYXNlOiA4MjJmMjg0NTc1MzA2YzhhNTQ3NGMzN2FjODc2NzJkZjI0YTcwYWU2CgpTb3VyY2UgdmVyZGljdDogUEFTUy4gTm8gZGVmZWN0IGZvdW5kIGluIHRoZSBwcm9kdWN0aW9uLWFkbWlzc2lvbiBIT0xEIGVuZm9yY2VtZW50LCByZWNlaXB0IHZlcmlmaWNhdGlvbiwgdGVzdHMsIG9yIGRvY3VtZW50YXRpb24uIFRoaXMgdmVyZGljdCBjb3ZlcnMgc291cmNlIHJldmlldyBvbmx5LiBDSSBydW4gNDQwNjUyOTE2MTMgaXMgc3RpbGwgaW4gcHJvZ3Jlc3MgYW5kIGlzIG5vdCBQQVNTLiBQcm9kdWN0aW9uIHJlY292ZXJ5IHJlbWFpbnMgSE9MRCB1bnRpbCB0aGUgcmVxdWlyZWQgcnVudGltZSBldmlkZW5jZSBpcyBjb2xsZWN0ZWQuIE5vIGxpdmUgZGF0YWJhc2Ugb3IgaG9zdCB3YXMgYWNjZXNzZWQuClJldmlld2VyIG1vZGVsOiBHUFQtNiBMdW5hLCBtZWRpdW0gZWZmb3J0Lg=="
+    ),
+}
+MALFORMED_APPSEC_417 = {
+    "id": 6945647897,
+    "created_at": "2026-11-17T10:37:50Z",
+    "updated_at": "2026-11-17T10:37:50Z",
+    "author_association": "OWNER",
+    "user": {"login": OWNER},
+    "body": (
+        "WPCG_RELEASE_REVIEW_ARTIFACT_V3 role=appsec pr=417 "
+        "head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f "
+        "base_sha=822f284575306c8a5474c37ac87672df24a70ae6 "
+        "agent=codex.appsec.pr417.3f0f84a "
+        "report_sha256=06d186d018c657c1884fb77942388d64fdf0365112f0ec213ccd0d57e92d3ec1 "
+        "report_base64=UFIgIzQxNyBBcHBTZWMgZXhhY3QtaGVhZCByZXZpZXcKSEVBRDogM2YwZjg0YWQyNmE1ZmU3YjZmZDAxY2U0YmU3MTFhNDE2ZGRiMjMwZgpCYXNlOiA4MjJmMjg0NTc1MzA2YzhhNTQ3NGMzN2FjODc2NzJkZjI0YTcwYWU2CgpWZXJkaWN0OiBQQVNTIGZvciB0aGUgcHJvZHVjdGlvbi1yZWFkaW5lc3Mgc2VwYXJhdGlvbjsgcHJvZHVjdGlvbiByZWNvdmVyeSByZW1haW5zIEhPTEQuIFRoZSBtaWdyYXRpb24gcmVjZWlwdCBtdXN0IHJldGFpbiBwcm9kdWN0aW9uX2FkbWlzc2lvbi5zdGF0ZT1IT0xEIGFuZCB0aGUgZXhhY3QgdGhyZWUgcmVxdWlyZWQgcnVudGltZSBhdHRlc3RhdGlvbnMuIFRoZSB2ZXJpZmllciByZWplY3RzIGFueSByZWNlaXB0IHRoYXQgY2hhbmdlcyB0aGUgc3RhdGUgdG8gUEFTUzsgdGhlIENMSSBsYWJlbHMgYWNjZXB0ZWQgcmVjZWlwdHMgVkFMSURfQ0xPTkVfUkVIRUFSU0FMX09OTFkgYW5kIHJlcG9ydHMgcHJvZHVjdGlvbiByZWNvdmVyeSBIT0xELiBObyBwcm9tb3Rpb24gcGF0aCB3YXMgZm91bmQuCgpUaGUgcmVtYWluaW5nIHJ1bnRpbWUgYXR0ZXN0YXRpb25zIGFyZTogKDEpIG15c3FsZHVtcCBlbmRwb2ludC10by1pbnN0YW5jZSBpZGVudGl0eTsgKDIpIGlkZW50aXR5IHVzaW5nIHRoZSBhY3R1YWwgcHJvdGVjdGVkIGFwcGxpY2F0aW9uIGNyZWRlbnRpYWxzOyBhbmQgKDMpIGV2aWRlbmNlIHRoYXQgdGhlIGV4YWN0IHZlcmlmaWVkIGNhbmRpZGF0ZSBtaWdyYXRpb24gYnl0ZXMgd2VyZSBleGVjdXRlZC4gU3ludGhldGljL3NvdXJjZSB0ZXN0cyBkbyBub3Qgc2F0aXNmeSB0aGVzZSBnYXRlcy4gQ0kgcnVuIDQ0MDY1MjkxNjEzIGlzIHN0aWxsIGluIHByb2dyZXNzIGFuZCBpcyBub3QgUEFTUy4gTm8gaG9zdCBvciBkYXRhYmFzZSB3YXMgYWNjZXNzZWQuClJldmlld2VyIG1vZGVsOiBHUFQtNi4xLCBtZWRpdW0gZWZmb3J0Lg=="
+    ),
+}
+CORRECTION_QA_417 = {
+    "id": 6948174348,
+    "created_at": "2026-11-17T11:00:00Z",
+    "updated_at": "2026-11-17T11:00:00Z",
+    "author_association": "OWNER",
+    "user": {"login": OWNER},
+    "body": (
+        "WPCG_RELEASE_ARTIFACT_CORRECTION_V3\n"
+        "target_comment_id=6945646697\n"
+        "target_body_sha256=f21e60bcc35288d3b2501a5afb99f19f996e82e1bac22bfa7c6e264834af8b27\n"
+        "target_pr=417\n"
+        "target_head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f\n"
+        "target_base_sha=822f284575306c8a5474c37ac87672df24a70ae6\n"
+        "target_role=integration_qa\n"
+        "disposition=INVALIDATED\n"
+        "reason_code=owner_authorized_exact_artifact_invalidation\n"
+    ),
+}
+CORRECTION_APPSEC_417 = {
+    "id": 6948176008,
+    "created_at": "2026-11-17T11:05:00Z",
+    "updated_at": "2026-11-17T11:05:00Z",
+    "author_association": "OWNER",
+    "user": {"login": OWNER},
+    "body": (
+        "WPCG_RELEASE_ARTIFACT_CORRECTION_V3\n"
+        "target_comment_id=6945647897\n"
+        "target_body_sha256=4c6d2f0c7490fdcf26b2cdfe9e66c812b1b4af490fcb8bddd30849d71addeeaa\n"
+        "target_pr=417\n"
+        "target_head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f\n"
+        "target_base_sha=822f284575306c8a5474c37ac87672df24a70ae6\n"
+        "target_role=appsec\n"
+        "disposition=INVALIDATED\n"
+        "reason_code=owner_authorized_exact_artifact_invalidation\n"
+    ),
+}
+
+
 def historical_artifacts():
     return json.loads((Path(__file__).parent / "fixtures" /
                        "v3-artifact-ledger-historical.json").read_text(encoding="utf-8"))
@@ -451,6 +519,82 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
             _verified_report_artifacts(comments, pr_number=409,
                                        head_sha="6ce39d23473bc6b55930429905678fee6b4dbbe8",
                                        base_sha="ff9f86cea3a591415c64714acd2db297c83e0702",
+                                       owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_records_pass(self):
+        comments = [MALFORMED_QA_417, CORRECTION_QA_417,
+                    MALFORMED_APPSEC_417, CORRECTION_APPSEC_417] + fixture()["ledger_comments"]
+        args = fixture()
+        args["ledger_comments"] = comments
+        result = verify_release_admission(**args)
+        self.assertEqual(result["result"], "PASS")
+
+    def test_owner_authorized_exact_artifact_invalidation_unpinned_comment_id_refused(self):
+        unpinned = dict(CORRECTION_QA_417, id=9_900_000_999)
+        comments = [MALFORMED_QA_417, unpinned] + fixture()["ledger_comments"]
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_invalid"):
+            _verified_report_artifacts(comments, pr_number=383, head_sha=HEAD,
+                                       base_sha=BASE, owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_target_mismatch_refused(self):
+        wrong_target_id = dict(CORRECTION_QA_417, body=CORRECTION_QA_417["body"].replace(
+            "target_comment_id=6945646697", "target_comment_id=6945646698"))
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_target_invalid"):
+            _verified_report_artifacts([MALFORMED_QA_417, wrong_target_id] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+        changed_target = dict(MALFORMED_QA_417, body=MALFORMED_QA_417["body"] + " ")
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_target_invalid"):
+            _verified_report_artifacts([changed_target, CORRECTION_QA_417] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_subject_mismatch_refused(self):
+        fields = (
+            ("target_pr=417", "target_pr=418"),
+            ("target_head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f",
+             "target_head_sha=3f0f84ad26a5fe7b6fd01ce4be711a416ddb230e"),
+            ("target_base_sha=822f284575306c8a5474c37ac87672df24a70ae6",
+             "target_base_sha=822f284575306c8a5474c37ac87672df24a70ae5"),
+            ("target_role=integration_qa", "target_role=appsec"),
+        )
+        for original, replaced in fields:
+            with self.subTest(replacement=replaced):
+                tampered = dict(CORRECTION_QA_417,
+                                body=CORRECTION_QA_417["body"].replace(original, replaced))
+                with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_subject_mismatch"):
+                    _verified_report_artifacts([MALFORMED_QA_417, tampered] + fixture()["ledger_comments"],
+                                               pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_non_owner_and_not_append_only_refused(self):
+        not_owner_author = dict(CORRECTION_QA_417, user={"login": "not-owner"})
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_invalid"):
+            _verified_report_artifacts([MALFORMED_QA_417, not_owner_author] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+        not_owner_target = dict(MALFORMED_QA_417, user={"login": "not-owner"})
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_target_invalid"):
+            _verified_report_artifacts([not_owner_target, CORRECTION_QA_417] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+        stale_time = dict(CORRECTION_QA_417, created_at="2026-11-17T10:37:40Z")
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_not_append_only"):
+            _verified_report_artifacts([MALFORMED_QA_417, stale_time] + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_duplicate_refused(self):
+        duplicate = dict(CORRECTION_QA_417, id=9_900_000_002, created_at="2026-11-17T11:01:00Z")
+        with self.assertRaisesRegex(AdmissionRefused, "artifact_correction_invalid"):
+            _verified_report_artifacts([MALFORMED_QA_417, CORRECTION_QA_417, duplicate]
+                                       + fixture()["ledger_comments"],
+                                       pr_number=383, head_sha=HEAD, base_sha=BASE, owner=OWNER)
+
+    def test_owner_authorized_exact_artifact_invalidation_invalidated_artifacts_do_not_act_as_valid_reviews(self):
+        comments = [MALFORMED_QA_417, CORRECTION_QA_417,
+                    MALFORMED_APPSEC_417, CORRECTION_APPSEC_417]
+        with self.assertRaisesRegex(AdmissionRefused, "review_artifact_missing"):
+            _verified_report_artifacts(comments, pr_number=417,
+                                       head_sha="3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f",
+                                       base_sha="822f284575306c8a5474c37ac87672df24a70ae6",
                                        owner=OWNER)
 
     def test_pr_ci_stale_or_failed_is_refused(self):

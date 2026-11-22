@@ -59,7 +59,7 @@ _ARTIFACT_CORRECTION = re.compile(
     r"target_base_sha=([0-9a-f]{40})\n"
     r"target_role=(integration_qa|appsec)\n"
     r"disposition=INVALIDATED\n"
-    r"reason_code=legacy_artifact_schema_invalid\n?\Z"
+    r"reason_code=(legacy_artifact_schema_invalid|owner_authorized_exact_artifact_invalidation)\n?\Z"
 )
 _LEGACY_ARTIFACT_ALLOWLIST = {
     6901547471: {
@@ -123,6 +123,28 @@ _LEGACY_ARTIFACT_ALLOWLIST = {
         "report_encoding": "valid",
     },
 }
+_OWNER_AUTHORIZED_EXACT_INVALIDATIONS = {
+    6948174348: {
+        "target_comment_id": 6945646697,
+        "target_body_sha256": "f21e60bcc35288d3b2501a5afb99f19f996e82e1bac22bfa7c6e264834af8b27",
+        "target_pr": 417,
+        "target_head_sha": "3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f",
+        "target_base_sha": "822f284575306c8a5474c37ac87672df24a70ae6",
+        "target_role": "integration_qa",
+        "disposition": "INVALIDATED",
+        "reason_code": "owner_authorized_exact_artifact_invalidation",
+    },
+    6948176008: {
+        "target_comment_id": 6945647897,
+        "target_body_sha256": "4c6d2f0c7490fdcf26b2cdfe9e66c812b1b4af490fcb8bddd30849d71addeeaa",
+        "target_pr": 417,
+        "target_head_sha": "3f0f84ad26a5fe7b6fd01ce4be711a416ddb230f",
+        "target_base_sha": "822f284575306c8a5474c37ac87672df24a70ae6",
+        "target_role": "appsec",
+        "disposition": "INVALIDATED",
+        "reason_code": "owner_authorized_exact_artifact_invalidation",
+    },
+}
 
 
 class AdmissionRefused(ValueError):
@@ -150,7 +172,8 @@ def _owner_comment(comment: object, owner: str) -> bool:
 
 def render_artifact_correction(*, target_comment_id: int, target_body_sha256: str,
                                target_pr: int, target_head_sha: str,
-                               target_base_sha: str, target_role: str) -> str:
+                               target_base_sha: str, target_role: str,
+                               reason_code: str = "legacy_artifact_schema_invalid") -> str:
     """Render an exact-scope invalidation for one pinned historical artifact."""
     body = (f"{ARTIFACT_CORRECTION_PREFIX}\n"
             f"target_comment_id={target_comment_id}\n"
@@ -159,7 +182,7 @@ def render_artifact_correction(*, target_comment_id: int, target_body_sha256: st
             f"target_head_sha={target_head_sha}\n"
             f"target_base_sha={target_base_sha}\n"
             f"target_role={target_role}\n"
-            "disposition=INVALIDATED\nreason_code=legacy_artifact_schema_invalid\n")
+            f"disposition=INVALIDATED\nreason_code={reason_code}\n")
     if _ARTIFACT_CORRECTION.fullmatch(body) is None:
         raise AdmissionRefused("artifact_correction_invalid")
     return body
@@ -208,46 +231,65 @@ def _authorized_artifact_corrections(comments: list[object], *, owner: str
         match = _ARTIFACT_CORRECTION.fullmatch(body)
         if match is None:
             raise AdmissionRefused("artifact_correction_invalid")
-        raw_id, digest, raw_pr, head_sha, base_sha, role = match.groups()
+        raw_id, digest, raw_pr, head_sha, base_sha, role, reason_code = match.groups()
         target_id, target_pr = int(raw_id), int(raw_pr)
         target = by_id.get(target_id)
-        allowed = _LEGACY_ARTIFACT_ALLOWLIST.get(target_id)
-        if (allowed is None or not isinstance(target, Mapping)
+        if (not isinstance(target, Mapping)
                 or not _owner_comment(target, owner)
-                or not isinstance(target.get("body"), str)
-                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
-                != allowed["body_sha256"]
-                or hashlib.sha256(target["body"].encode("utf-8")).hexdigest() != digest):
+                or not isinstance(target.get("body"), str)):
+            raise AdmissionRefused("artifact_correction_target_invalid")
+        target_digest = hashlib.sha256(target["body"].encode("utf-8")).hexdigest()
+        if target_digest != digest:
             raise AdmissionRefused("artifact_correction_target_invalid")
         if (target.get("id") != target_id or comment["id"] <= target_id
                 or comment["created_at"] <= target["created_at"]):
             raise AdmissionRefused("artifact_correction_not_append_only")
-        fields = _artifact_fields(target["body"])
-        if (fields is None or _AGENT.fullmatch(fields["agent"]) is not None
-                or fields["agent"] != allowed["agent"]
-                or (int(fields["pr"]), fields["head_sha"], fields["base_sha"],
-                    fields["role"], fields["agent"], fields["report_sha256"])
-                != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
-                    allowed["role"], allowed["agent"], allowed["report_sha256"])
-                or (target_pr, head_sha, base_sha, role)
-                != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
-                    allowed["role"])):
-            raise AdmissionRefused("artifact_correction_subject_mismatch")
-        try:
-            raw = base64.b64decode(fields["report_base64"], validate=True)
-        except (ValueError, base64.binascii.Error):
-            if allowed["report_encoding"] != "invalid_base64":
-                raise AdmissionRefused("artifact_correction_report_invalid") from None
+
+        if reason_code == "owner_authorized_exact_artifact_invalidation":
+            exact_rule = _OWNER_AUTHORIZED_EXACT_INVALIDATIONS.get(comment["id"])
+            if exact_rule is None:
+                raise AdmissionRefused("artifact_correction_invalid")
+            if (target_id != exact_rule["target_comment_id"]
+                    or target_digest != exact_rule["target_body_sha256"]):
+                raise AdmissionRefused("artifact_correction_target_invalid")
+            if (target_pr, head_sha, base_sha, role) != (
+                exact_rule["target_pr"], exact_rule["target_head_sha"],
+                exact_rule["target_base_sha"], exact_rule["target_role"],
+            ):
+                raise AdmissionRefused("artifact_correction_subject_mismatch")
+        elif reason_code == "legacy_artifact_schema_invalid":
+            allowed = _LEGACY_ARTIFACT_ALLOWLIST.get(target_id)
+            if allowed is None or target_digest != allowed["body_sha256"]:
+                raise AdmissionRefused("artifact_correction_target_invalid")
+            fields = _artifact_fields(target["body"])
+            if (fields is None or _AGENT.fullmatch(fields["agent"]) is not None
+                    or fields["agent"] != allowed["agent"]
+                    or (int(fields["pr"]), fields["head_sha"], fields["base_sha"],
+                        fields["role"], fields["agent"], fields["report_sha256"])
+                    != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
+                        allowed["role"], allowed["agent"], allowed["report_sha256"])
+                    or (target_pr, head_sha, base_sha, role)
+                    != (allowed["pr"], allowed["head_sha"], allowed["base_sha"],
+                        allowed["role"])):
+                raise AdmissionRefused("artifact_correction_subject_mismatch")
+            try:
+                raw = base64.b64decode(fields["report_base64"], validate=True)
+            except (ValueError, base64.binascii.Error):
+                if allowed["report_encoding"] != "invalid_base64":
+                    raise AdmissionRefused("artifact_correction_report_invalid") from None
+            else:
+                if (allowed["report_encoding"] != "valid"
+                        or hashlib.sha256(raw).hexdigest() != allowed["report_sha256"]):
+                    raise AdmissionRefused("artifact_correction_report_invalid")
         else:
-            if (allowed["report_encoding"] != "valid"
-                    or hashlib.sha256(raw).hexdigest() != allowed["report_sha256"]):
-                raise AdmissionRefused("artifact_correction_report_invalid")
+            raise AdmissionRefused("artifact_correction_invalid")
+
         if target_id in corrections:
             raise AdmissionRefused("artifact_correction_ambiguous")
         corrections[target_id] = {
             "id": comment["id"], "created_at": comment["created_at"],
             "body_sha256": digest, "pr": target_pr, "head_sha": head_sha,
-            "base_sha": base_sha, "role": role,
+            "base_sha": base_sha, "role": role, "reason_code": reason_code,
         }
     return corrections
 
@@ -268,10 +310,10 @@ def _verified_report_artifacts(comments: Iterable[object], *, pr_number: int,
         # an otherwise valid release by posting artifact-looking text.
         if not _owner_comment(comment, owner):
             continue
+        if comment.get("id") in corrections:
+            continue
         match = _ARTIFACT.fullmatch(body)
         if match is None:
-            if comment.get("id") in corrections:
-                continue
             raise AdmissionRefused("review_artifact_invalid")
         role, record_pr, record_sha, record_base, agent, digest, encoded = match.groups()
         if int(record_pr) != pr_number or record_sha != head_sha or record_base != base_sha:
