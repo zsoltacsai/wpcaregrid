@@ -22,7 +22,7 @@ from scripts.release_admission_v3 import (
     render_artifact_correction,
     verify_release_admission,
 )
-from scripts.release_review_policy_v3 import render_record
+from scripts.release_review_policy_v3_2 import render_record
 
 OWNER = "zsoltacsai"
 CANDIDATE = "a" * 40
@@ -526,6 +526,18 @@ class ReleaseAdmissionV3Tests(unittest.TestCase):
                     MALFORMED_APPSEC_417, CORRECTION_APPSEC_417] + fixture()["ledger_comments"]
         args = fixture()
         args["ledger_comments"] = comments
+        result = verify_release_admission(**args)
+        self.assertEqual(result["result"], "PASS")
+
+    def test_owner_authorized_record_corrections_and_infra_review_pass(self):
+        infra_record = render_record(role="infrastructure", pr=426, head_sha="9" * 40,
+                                     agent="hagrid-infra-test", decision="PASS",
+                                     evidence_sha256="1" * 64)
+        infra_comment = {"id": 6978459031, "created_at": "2026-11-18T12:23:34Z",
+                         "author_association": "OWNER", "user": {"login": OWNER},
+                         "body": infra_record}
+        args = fixture()
+        args["ledger_comments"] = [infra_comment] + args["ledger_comments"]
         result = verify_release_admission(**args)
         self.assertEqual(result["result"], "PASS")
 
