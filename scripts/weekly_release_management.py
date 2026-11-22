@@ -52,11 +52,16 @@ class PolicyError(ValueError):
     """A missing or invalid weekly release input."""
 
 
-def _read_json(path: Path) -> Any:
+def _read_json(path: Path, *, diagnostic_name: str | None = None) -> Any:
     try:
         raw = path.read_bytes()
     except OSError:
         raise PolicyError("input_unavailable") from None
+    if diagnostic_name is not None:
+        if diagnostic_name not in ("open-pulls", "dependabot-alerts"):
+            raise PolicyError("input_diagnostic_name_invalid")
+        print(f"CANDIDATE_JSON_READ name={diagnostic_name} bytes={len(raw)} limit={MAX_JSON_BYTES}",
+              file=sys.stderr)
     if len(raw) > MAX_JSON_BYTES:
         raise PolicyError("input_too_large")
     try:
@@ -529,7 +534,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "intake":
-            result = classify_dependency_updates(_read_json(args.pull_requests), _read_json(args.alerts))
+            result = classify_dependency_updates(
+                _read_json(args.pull_requests, diagnostic_name="open-pulls"),
+                _read_json(args.alerts, diagnostic_name="dependabot-alerts"))
             result["markdown"] = dependency_markdown(result)
             _write_json(args.output, result)
             return 0 if result["status"] == "PASS" else 2

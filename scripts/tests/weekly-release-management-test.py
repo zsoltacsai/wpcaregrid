@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
+import contextlib
+import tempfile
 import json
 import unittest
 from pathlib import Path
@@ -42,6 +45,38 @@ def alert(number: int, package: str, severity: str, ecosystem: str = "composer")
 
 
 class WeeklyReleaseManagementTest(unittest.TestCase):
+    def test_raw_byte_diagnostic_uses_exact_read_and_preserves_limit(self):
+        self.assertEqual(weekly.MAX_JSON_BYTES, 8_000_000)
+        for name, size in (("open-pulls", 313203), ("dependabot-alerts", 4),
+                           ("open-pulls", 8_000_000), ("open-pulls", 8_000_001)):
+            raw = b"[]" + b" " * (size - 2)
+            stderr = io.StringIO()
+            with patch.object(Path, "read_bytes", return_value=raw) as read:
+                with contextlib.redirect_stderr(stderr):
+                    if size > weekly.MAX_JSON_BYTES:
+                        with self.assertRaisesRegex(weekly.PolicyError, "^input_too_large$"):
+                            weekly._read_json(Path("/private/input"), diagnostic_name=name)
+                    else:
+                        self.assertEqual(weekly._read_json(Path("/private/input"),
+                                                         diagnostic_name=name), [])
+                read.assert_called_once()
+            self.assertEqual(stderr.getvalue(),
+                             f"CANDIDATE_JSON_READ name={name} bytes={size} limit=8000000\n")
+
+    def test_intake_emits_both_read_diagnostics_on_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ("private-pulls", "private-alerts", "out")]
+            paths[0].write_bytes(b"[]" + b" " * 313201)
+            paths[1].write_bytes(b"[[]]")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                rc = weekly.main(["intake", "--pull-requests", str(paths[0]),
+                                  "--alerts", str(paths[1]), "--output", str(paths[2])])
+            self.assertEqual(rc, 0)
+            self.assertEqual(stderr.getvalue(),
+                             "CANDIDATE_JSON_READ name=open-pulls bytes=313203 limit=8000000\n"
+                             "CANDIDATE_JSON_READ name=dependabot-alerts bytes=4 limit=8000000\n")
+
     def test_critical_and_high_security_prs_sort_ahead_of_routine(self):
         result = weekly.classify_dependency_updates(
             [pr(12, "laravel/framework"), pr(13, "laravel/pail"), pr(14, "vite", "npm")],
