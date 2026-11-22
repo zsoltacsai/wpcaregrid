@@ -21,9 +21,9 @@ from typing import Iterable, Mapping
 # protected source directory; normal package imports remain available to tests.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from release_review_policy_v3 import ReviewRefused, verify_agent_release_reviews
+    from release_review_policy_v3_2 import ReviewRefused, verify_agent_release_reviews
 else:
-    from .release_review_policy_v3 import ReviewRefused, verify_agent_release_reviews
+    from .release_review_policy_v3_2 import ReviewRefused, verify_agent_release_reviews
 
 PRIMARY_BRANCH = "claude/ecstatic-wozniak-oemyuf"
 REQUIRED_CI_JOBS = (
