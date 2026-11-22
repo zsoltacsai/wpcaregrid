@@ -2,6 +2,10 @@
 """Static guards for scheduled dependency intake and dormant deployment jobs."""
 
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +37,30 @@ assert "GH_API_REQUEST=%s STATE=END RC=%s" in candidate
 assert '2>"$stderr_file"' in candidate
 assert "HTTP=%s" in candidate and '"$stderr_file"' in candidate
 assert "    permissions:\n      contents: read\n      pull-requests: read\n      security-events: read\n      vulnerability-alerts: read\n      issues: read\n      actions: read" in candidate
+
+# Exercise the exact diagnostic snippet without reading or disclosing input content.
+size_start = candidate.index("          python3 - \"$RUNNER_TEMP/open-pulls.json\"")
+size_end = candidate.index("          PY_INPUT_BYTES", size_start)
+assert size_end < candidate.index("python3 scripts/weekly_release_management.py intake")
+size_probe = textwrap.dedent(candidate[size_start:size_end].split("\n", 1)[1])
+assert "os.stat(" in size_probe
+for forbidden in ("open(", "read(", "read_bytes(", "read_text(", "traceback"):
+    assert forbidden not in size_probe
+with tempfile.TemporaryDirectory() as temporary:
+    inputs = [Path(temporary) / name for name in ("pulls", "alerts")]
+    inputs[0].write_bytes(b"private-pull")
+    inputs[1].write_bytes(b"private-alert")
+    result = subprocess.run([sys.executable, "-c", size_probe, *map(str, inputs)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0
+    assert result.stdout == ("CANDIDATE_INPUT_BYTES name=open-pulls size=12\n"
+                             "CANDIDATE_INPUT_BYTES name=dependabot-alerts size=13\n")
+    assert result.stderr == ""
+    inputs[1].unlink()
+    result = subprocess.run([sys.executable, "-c", size_probe, *map(str, inputs)],
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert result.stdout == result.stderr == ""
 
 staging = workflow.split("  staging-deploy:\n", 1)[1].split("  production-deploy:\n", 1)[0]
 assert "vars.WPCG_WEEKLY_STAGING_ENABLED == 'true'" in staging
