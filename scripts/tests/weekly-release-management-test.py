@@ -11,6 +11,7 @@ import sys
 import tempfile
 import tracemalloc
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -631,6 +632,198 @@ class LedgerStreamingTest(unittest.TestCase):
         self.assertGreater(large.stat().st_size, 3 * small.stat().st_size)
         self.assertLess(large_peak, 3 * small_peak)
         self.assertLess(large_peak, 40_000_000)
+
+    def _sample_ci_runs(self, sha="a" * 40, run_id=1001, conclusion="success", branch=None, event="push"):
+        return {"workflow_runs": [{
+            "id": run_id, "name": "CI", "head_sha": sha,
+            "head_branch": branch or weekly.PRIMARY_BRANCH,
+            "event": event, "status": "completed", "conclusion": conclusion,
+            "created_at": "2026-11-22T20:00:00Z", "updated_at": "2026-11-22T20:30:00Z"
+        }]}
+
+    def _sample_ci_jobs(self, job_id=2001, conclusion="success", omit_step=None, failed_step=None):
+        steps = []
+        step_num = 1
+        for key, name in weekly.CI_STAGING_REQUIRED_STEPS.items():
+            if key == omit_step:
+                continue
+            step_conclusion = "failure" if key == failed_step else "success"
+            steps.append({
+                "number": step_num, "name": name,
+                "status": "completed", "conclusion": step_conclusion
+            })
+            step_num += 1
+        return {"jobs": [{
+            "id": job_id, "name": "Server tests (PHP 8.5, mysql)",
+            "status": "completed", "conclusion": conclusion, "steps": steps
+        }]}
+
+    def test_build_ci_staging_equivalent_receipt_positive(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha, run_id=5555)
+        jobs = self._sample_ci_jobs(job_id=6666)
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        self.assertEqual(receipt["schema"], weekly.CI_STAGING_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["candidate_sha"], sha)
+        self.assertEqual(receipt["ci_workflow_run_id"], 5555)
+        self.assertEqual(receipt["job"]["id"], 6666)
+        self.assertEqual(receipt["synthetic_only_scope"], True)
+        self.assertEqual(receipt["production_data_used"], False)
+        self.assertEqual(receipt["runtimes"]["php_version"], "8.5")
+        self.assertEqual(receipt["runtimes"]["mysql_version"], "8.4")
+        self.assertEqual(len(receipt["required_steps"]), len(weekly.CI_STAGING_REQUIRED_STEPS))
+        self.assertTrue(weekly.SHA256_RE.fullmatch(receipt["receipt_digest_sha256"]))
+
+    def test_build_ci_staging_equivalent_receipt_rejects_missing_exact_run(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha="b" * 40)
+        jobs = self._sample_ci_jobs()
+        with self.assertRaisesRegex(weekly.PolicyError, "exact_ci_run_missing_or_not_successful"):
+            weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+
+    def test_build_ci_staging_equivalent_receipt_rejects_failed_server_job(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs(conclusion="failure")
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_server_tests_job_missing_or_not_successful"):
+            weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+
+    def test_build_ci_staging_equivalent_receipt_rejects_missing_step(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs(omit_step="http_smoke_marketing_only")
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_step_http_smoke_marketing_only_missing_or_failed"):
+            weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+
+    def test_build_ci_staging_equivalent_receipt_rejects_failed_step(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs(failed_step="migration_recovery_rehearsal")
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_step_migration_recovery_rehearsal_missing_or_failed"):
+            weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+
+    def test_validate_ci_staging_equivalent_receipt_positive(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        result = weekly.validate_ci_staging_equivalent_receipt(receipt, sha)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["candidate_sha"], sha)
+        self.assertEqual(result["schema"], weekly.CI_STAGING_RECEIPT_SCHEMA)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_tampered_digest(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt["ci_workflow_run_id"] = 99999
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_digest_invalid"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_sha_mismatch(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_sha_mismatch"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, "b" * 40)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_unsupported_schema(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt["schema"] = "wpcg-unsupported-schema-v99"
+        receipt["receipt_digest_sha256"] = weekly.compute_ci_staging_receipt_digest(receipt)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_schema_unsupported"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_scope_violation(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt["production_data_used"] = True
+        receipt["receipt_digest_sha256"] = weekly.compute_ci_staging_receipt_digest(receipt)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_scope_invalid"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_runtime_violation(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt["runtimes"]["php_version"] = "8.4"
+        receipt["receipt_digest_sha256"] = weekly.compute_ci_staging_receipt_digest(receipt)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_runtime_invalid"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_expired(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        now = datetime(2026, 11, 22, 20, 0, 0, tzinfo=timezone.utc) + timedelta(days=9)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_expired"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha, now=now)
+
+    def test_validate_ci_staging_equivalent_receipt_rejects_future_skew(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt_time = datetime.fromisoformat(receipt["created_at"])
+        past_time = receipt_time - timedelta(minutes=10)
+        with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_future_skew"):
+            weekly.validate_ci_staging_equivalent_receipt(receipt, sha, now=past_time)
+
+    def test_candidate_manifest_with_ci_staging_receipt(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha, run_id=123)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        with patch.object(weekly, "_git", side_effect=[sha, sha]):
+            result = weekly.candidate_manifest(sha, "100", "123", ci_staging_receipt=receipt)
+        self.assertEqual(result["candidate_sha"], sha)
+        self.assertEqual(result["staging_status"], "STAGING_EQUIVALENT_CI_VERIFIED")
+        self.assertEqual(result["freeze_status"], "FROZEN")
+        self.assertEqual(result["production_status"], "DISABLED")
+        self.assertEqual(result["ci_staging_run_id"], 123)
+        self.assertEqual(result["ci_staging_receipt_digest_sha256"], receipt["receipt_digest_sha256"])
+
+    def test_candidate_manifest_rejects_tampered_ci_staging_receipt(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha, run_id=123)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        receipt["candidate_sha"] = "c" * 40
+        with patch.object(weekly, "_git", side_effect=[sha, sha]):
+            with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_sha_mismatch"):
+                weekly.candidate_manifest(sha, "100", "123", ci_staging_receipt=receipt)
+
+    def test_verify_latest_staging_deployment_with_ci_receipt(self):
+        sha = "a" * 40
+        runs = self._sample_ci_runs(sha=sha, run_id=888)
+        jobs = self._sample_ci_jobs()
+        receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
+        res = weekly.verify_latest_staging_deployment(None, sha, ci_receipt=receipt)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["environment"], "staging-equivalent-ci")
+        self.assertEqual(res["ci_workflow_run_id"], 888)
+        self.assertEqual(res["receipt_digest_sha256"], receipt["receipt_digest_sha256"])
+
+    def test_production_gate_remains_held_even_with_staging_smoke_match(self):
+        sha = "a" * 40
+        gate = weekly.production_gate(first_launch_sha="", recurring_enabled="false",
+                                      candidate_sha=sha, staging_sha=sha,
+                                      staging_smoke_sha=sha, recovery_receipt=None,
+                                      deployment_lock_clear="false", incident_clear="false")
+        self.assertEqual(gate["status"], "HOLD")
+        self.assertEqual(gate["deployment_executed"], False)
+        self.assertFalse(gate["checks"]["first_launch_completed"])
+        self.assertFalse(gate["checks"]["recurring_policy_activated"])
+        self.assertFalse(gate["checks"]["recovery_receipt_exact_sha"])
 
 
 if __name__ == "__main__":

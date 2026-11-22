@@ -81,6 +81,18 @@ def _ledger_string_end(text: str, start: int) -> int | None:
         position = quote + 1
 LOCKFILES = ("composer.lock", "wordpress/composer.lock", "package-lock.json")
 RECEIPT_SCHEMA = "wpcg-release-recovery-receipt-v1"
+CI_STAGING_RECEIPT_SCHEMA = "wpcg-staging-equivalent-ci-receipt-v1"
+CI_STAGING_REQUIRED_STEPS = {
+    "migration_recovery_rehearsal": "Gated interrupted staging migration recovery rehearsal (isolated MySQL 8.4.11)",
+    "migrations_and_rollback": "Migrations from an empty database, full rollback, and again",
+    "production_caches_build": "Production caches build (config, routes, views, events)",
+    "isolated_backup_verification": "Mandatory isolated MySQL backup-import verification",
+    "mysql_process_concurrency_gate": "Required MySQL process-concurrency gate",
+    "seed_synthetic_legal_documents": "Seed synthetic published legal documents for marketing-only smoke",
+    "system_check": "System check (runs, never prints secrets)",
+    "http_smoke_marketing_only": "HTTP smoke test against a running server (production caches)",
+    "http_smoke_application_mode": "HTTP smoke test in application mode (isolated loopback server)"
+}
 
 
 class PolicyError(ValueError):
@@ -592,7 +604,186 @@ def _git(*args: str) -> str:
         raise PolicyError("git_identity_invalid") from None
 
 
-def candidate_manifest(sha: str, workflow_run_id: str, ci_run_id: str) -> dict[str, Any]:
+def compute_ci_staging_receipt_digest(receipt: dict[str, Any]) -> str:
+    payload = dict(receipt)
+    payload.pop("receipt_digest_sha256", None)
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def build_ci_staging_equivalent_receipt(ci_runs_data: Any, ci_jobs_data: Any,
+                                        candidate_sha: str) -> dict[str, Any]:
+    if not SHA_RE.fullmatch(candidate_sha):
+        raise PolicyError("candidate_sha_invalid")
+
+    if isinstance(ci_runs_data, dict):
+        runs = ci_runs_data.get("workflow_runs")
+        if not isinstance(runs, list):
+            raise PolicyError("ci_runs_data_invalid")
+    elif isinstance(ci_runs_data, list):
+        runs = _pages(ci_runs_data)
+    else:
+        raise PolicyError("ci_runs_data_invalid")
+
+    matching_runs = [r for r in runs if isinstance(r, dict)
+                     and r.get("head_sha") == candidate_sha
+                     and r.get("head_branch") == PRIMARY_BRANCH
+                     and r.get("event") == "push"
+                     and r.get("name") == "CI"
+                     and r.get("status") == "completed"
+                     and r.get("conclusion") == "success"]
+    if not matching_runs:
+        raise PolicyError("exact_ci_run_missing_or_not_successful")
+    ci_run = max(matching_runs, key=lambda r: _timestamp(r.get("created_at")))
+    ci_run_id = ci_run.get("id")
+    if type(ci_run_id) is not int or ci_run_id <= 0:
+        raise PolicyError("ci_run_identity_invalid")
+
+    if isinstance(ci_jobs_data, dict):
+        jobs = ci_jobs_data.get("jobs")
+        if not isinstance(jobs, list):
+            raise PolicyError("ci_jobs_data_invalid")
+    elif isinstance(ci_jobs_data, list):
+        jobs = _pages(ci_jobs_data)
+    else:
+        raise PolicyError("ci_jobs_data_invalid")
+
+    matching_jobs = [j for j in jobs if isinstance(j, dict)
+                     and j.get("name") == "Server tests (PHP 8.5, mysql)"
+                     and j.get("status") == "completed"
+                     and j.get("conclusion") == "success"]
+    if not matching_jobs:
+        raise PolicyError("ci_server_tests_job_missing_or_not_successful")
+    server_job = matching_jobs[0]
+    job_id = server_job.get("id")
+    if type(job_id) is not int or job_id <= 0:
+        raise PolicyError("ci_job_identity_invalid")
+
+    steps = server_job.get("steps")
+    if not isinstance(steps, list):
+        raise PolicyError("ci_job_steps_invalid")
+    step_map = {s.get("name"): s for s in steps if isinstance(s, dict)}
+
+    required_steps = {}
+    for key, step_name in CI_STAGING_REQUIRED_STEPS.items():
+        step = step_map.get(step_name)
+        if not step or step.get("status") != "completed" or step.get("conclusion") != "success":
+            raise PolicyError(f"ci_step_{key}_missing_or_failed")
+        step_num = step.get("number")
+        if type(step_num) is not int or step_num <= 0:
+            raise PolicyError(f"ci_step_{key}_number_invalid")
+        required_steps[key] = {
+            "number": step_num,
+            "name": step_name,
+            "status": "completed",
+            "conclusion": "success"
+        }
+
+    receipt = {
+        "schema": CI_STAGING_RECEIPT_SCHEMA,
+        "repository": REPOSITORY,
+        "candidate_sha": candidate_sha,
+        "ci_workflow_run_id": ci_run_id,
+        "ci_workflow_name": "CI",
+        "ci_event": "push",
+        "ci_branch": PRIMARY_BRANCH,
+        "ci_run_created_at": ci_run.get("created_at"),
+        "ci_run_updated_at": ci_run.get("updated_at"),
+        "environment_evidence": "isolated_ci_synthetic",
+        "synthetic_only_scope": True,
+        "production_data_used": False,
+        "runtimes": {
+            "php_version": "8.5",
+            "mysql_version": "8.4"
+        },
+        "job": {
+            "id": job_id,
+            "name": server_job["name"],
+            "status": "completed",
+            "conclusion": "success"
+        },
+        "required_steps": required_steps,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    receipt["receipt_digest_sha256"] = compute_ci_staging_receipt_digest(receipt)
+    return receipt
+
+
+def validate_ci_staging_equivalent_receipt(receipt: Any, candidate_sha: str,
+                                           *, now: datetime | None = None) -> dict[str, Any]:
+    if not isinstance(receipt, dict):
+        raise PolicyError("ci_staging_receipt_invalid")
+    if receipt.get("schema") != CI_STAGING_RECEIPT_SCHEMA:
+        raise PolicyError("ci_staging_receipt_schema_unsupported")
+    if receipt.get("repository") != REPOSITORY:
+        raise PolicyError("ci_staging_receipt_repository_mismatch")
+    if receipt.get("candidate_sha") != candidate_sha or not SHA_RE.fullmatch(candidate_sha):
+        raise PolicyError("ci_staging_receipt_sha_mismatch")
+    if receipt.get("ci_branch") != PRIMARY_BRANCH:
+        raise PolicyError("ci_staging_receipt_branch_invalid")
+    if receipt.get("ci_workflow_name") != "CI":
+        raise PolicyError("ci_staging_receipt_workflow_invalid")
+    if receipt.get("ci_event") != "push":
+        raise PolicyError("ci_staging_receipt_event_invalid")
+    if receipt.get("environment_evidence") != "isolated_ci_synthetic":
+        raise PolicyError("ci_staging_receipt_environment_invalid")
+    if receipt.get("synthetic_only_scope") is not True or receipt.get("production_data_used") is not False:
+        raise PolicyError("ci_staging_receipt_scope_invalid")
+
+    runtimes = receipt.get("runtimes")
+    if not isinstance(runtimes, dict) or runtimes.get("php_version") != "8.5" or runtimes.get("mysql_version") != "8.4":
+        raise PolicyError("ci_staging_receipt_runtime_invalid")
+
+    job = receipt.get("job")
+    if (not isinstance(job, dict) or type(job.get("id")) is not int or job["id"] <= 0
+            or job.get("name") != "Server tests (PHP 8.5, mysql)"
+            or job.get("status") != "completed" or job.get("conclusion") != "success"):
+        raise PolicyError("ci_staging_receipt_job_invalid")
+
+    steps = receipt.get("required_steps")
+    if not isinstance(steps, dict):
+        raise PolicyError("ci_staging_receipt_steps_invalid")
+    for key, expected_name in CI_STAGING_REQUIRED_STEPS.items():
+        step = steps.get(key)
+        if (not isinstance(step, dict) or step.get("name") != expected_name
+                or type(step.get("number")) is not int or step["number"] <= 0
+                or step.get("status") != "completed" or step.get("conclusion") != "success"):
+            raise PolicyError(f"ci_staging_receipt_step_{key}_invalid")
+
+    created_str = receipt.get("created_at")
+    if not isinstance(created_str, str):
+        raise PolicyError("ci_staging_receipt_timestamp_invalid")
+    created = _timestamp(created_str)
+    current = now or datetime.now(timezone.utc)
+    if current - created > timedelta(days=8):
+        raise PolicyError("ci_staging_receipt_expired")
+    if created > current + timedelta(seconds=300):
+        raise PolicyError("ci_staging_receipt_future_skew")
+
+    digest = receipt.get("receipt_digest_sha256")
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+        raise PolicyError("ci_staging_receipt_digest_invalid")
+    expected_digest = compute_ci_staging_receipt_digest(receipt)
+    if digest != expected_digest:
+        raise PolicyError("ci_staging_receipt_digest_invalid")
+
+    ci_workflow_run_id = receipt.get("ci_workflow_run_id")
+    if type(ci_workflow_run_id) is not int or ci_workflow_run_id <= 0:
+        raise PolicyError("ci_staging_receipt_run_identity_invalid")
+
+    return {
+        "status": "PASS",
+        "schema": CI_STAGING_RECEIPT_SCHEMA,
+        "candidate_sha": candidate_sha,
+        "ci_workflow_run_id": ci_workflow_run_id,
+        "receipt_digest_sha256": digest,
+        "created_at": created.isoformat(),
+    }
+
+
+def candidate_manifest(sha: str, workflow_run_id: str, ci_run_id: str,
+                       *, ci_staging_receipt: dict[str, Any] | None = None,
+                       now: datetime | None = None) -> dict[str, Any]:
     if (not SHA_RE.fullmatch(sha) or _git("rev-parse", "HEAD") != sha
             or _git("rev-parse", f"refs/remotes/origin/{PRIMARY_BRANCH}") != sha):
         raise PolicyError("candidate_sha_mismatch")
@@ -604,14 +795,25 @@ def candidate_manifest(sha: str, workflow_run_id: str, ci_run_id: str) -> dict[s
         if not path.is_file() or path.is_symlink():
             raise PolicyError("lockfile_missing")
         hashes[relpath] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {"schema": "wpcg-release-candidate-v1", "repository": REPOSITORY,
-            "primary_branch": PRIMARY_BRANCH, "candidate_sha": sha,
-            "workflow_run_id": int(workflow_run_id), "ci_run_id": int(ci_run_id),
-            "lockfile_sha256": hashes,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "staging_status": "HOLD", "production_status": "DISABLED",
-            "freeze_status": "NOT_FROZEN",
-            "note": "Freeze requires exact-SHA staging deployment, smoke and recovery receipts."}
+    manifest = {"schema": "wpcg-release-candidate-v1", "repository": REPOSITORY,
+                "primary_branch": PRIMARY_BRANCH, "candidate_sha": sha,
+                "workflow_run_id": int(workflow_run_id), "ci_run_id": int(ci_run_id),
+                "lockfile_sha256": hashes,
+                "created_at": (now or datetime.now(timezone.utc)).isoformat(),
+                "staging_status": "HOLD", "production_status": "DISABLED",
+                "freeze_status": "NOT_FROZEN",
+                "note": "Freeze requires exact-SHA staging deployment, smoke and recovery receipts."}
+
+    if ci_staging_receipt is not None:
+        validated = validate_ci_staging_equivalent_receipt(ci_staging_receipt, sha, now=now)
+        manifest["staging_status"] = "STAGING_EQUIVALENT_CI_VERIFIED"
+        manifest["freeze_status"] = "FROZEN"
+        manifest["ci_staging_run_id"] = validated["ci_workflow_run_id"]
+        manifest["ci_staging_receipt_digest_sha256"] = validated["receipt_digest_sha256"]
+        manifest["note"] = ("Freeze admitted via exact-SHA CI staging-equivalent receipt. "
+                            "Physical staging host deployment and production promotion remain HOLD/DISABLED.")
+
+    return manifest
 
 
 def validate_recovery_receipt(path: Path, *, environment: str, candidate_sha: str,
@@ -694,11 +896,20 @@ def _timestamp(value: Any) -> datetime:
     return parsed
 
 
-def verify_latest_staging_deployment(deployment_data: Any, candidate_sha: str,
-                                     *, now: datetime | None = None) -> dict[str, Any]:
-    deployments = _pages(deployment_data)
+def verify_latest_staging_deployment(deployment_data: Any | None, candidate_sha: str,
+                                     *, ci_receipt: Any | None = None,
+                                     now: datetime | None = None) -> dict[str, Any]:
     if not SHA_RE.fullmatch(candidate_sha):
         raise PolicyError("candidate_sha_invalid")
+    if ci_receipt is not None:
+        validated = validate_ci_staging_equivalent_receipt(ci_receipt, candidate_sha, now=now)
+        return {"status": "PASS", "environment": "staging-equivalent-ci", "candidate_sha": candidate_sha,
+                "ci_workflow_run_id": validated["ci_workflow_run_id"],
+                "receipt_digest_sha256": validated["receipt_digest_sha256"],
+                "deployment_id": None, "created_at": validated["created_at"]}
+    if deployment_data is None:
+        raise PolicyError("staging_deployment_missing")
+    deployments = _pages(deployment_data)
     staging = [item for item in deployments if item.get("environment") == "staging"]
     if not staging:
         raise PolicyError("staging_deployment_missing")
@@ -792,6 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     candidate.add_argument("--sha", required=True)
     candidate.add_argument("--workflow-run-id", required=True)
     candidate.add_argument("--ci-run-id", required=True)
+    candidate.add_argument("--ci-staging-receipt", type=Path)
     candidate.add_argument("--output", type=Path, required=True)
     subject = sub.add_parser("review-subject")
     subject.add_argument("--candidate-sha", required=True)
@@ -816,7 +1028,8 @@ def main(argv: list[str] | None = None) -> int:
     recovery.add_argument("--output", type=Path, required=True)
     staging_deployment = sub.add_parser("staging-deployment")
     staging_deployment.add_argument("--candidate-sha", required=True)
-    staging_deployment.add_argument("--deployments", type=Path, required=True)
+    staging_deployment.add_argument("--deployments", type=Path)
+    staging_deployment.add_argument("--ci-receipt", type=Path)
     staging_deployment.add_argument("--output", type=Path, required=True)
     staging_status = sub.add_parser("staging-status")
     staging_status.add_argument("--candidate-sha", required=True)
@@ -827,6 +1040,15 @@ def main(argv: list[str] | None = None) -> int:
     ci.add_argument("--candidate-sha", required=True)
     ci.add_argument("--runs", type=Path, required=True)
     ci.add_argument("--output", type=Path, required=True)
+    gen_receipt = sub.add_parser("generate-ci-staging-receipt")
+    gen_receipt.add_argument("--candidate-sha", required=True)
+    gen_receipt.add_argument("--ci-runs", type=Path, required=True)
+    gen_receipt.add_argument("--ci-jobs", type=Path, required=True)
+    gen_receipt.add_argument("--output", type=Path, required=True)
+    val_receipt = sub.add_parser("validate-ci-staging-receipt")
+    val_receipt.add_argument("--candidate-sha", required=True)
+    val_receipt.add_argument("--receipt", type=Path, required=True)
+    val_receipt.add_argument("--output", type=Path, required=True)
     host_gate = sub.add_parser("production-host-preflight")
     host_gate.add_argument("--candidate-sha", required=True)
     host_gate.add_argument("--first-launch-sha", default="")
@@ -845,7 +1067,9 @@ def main(argv: list[str] | None = None) -> int:
             _write_json(args.output, result)
             return 0 if result["status"] == "PASS" else 2
         if args.command == "candidate":
-            result = candidate_manifest(args.sha, args.workflow_run_id, args.ci_run_id)
+            ci_receipt = _read_json(args.ci_staging_receipt) if args.ci_staging_receipt else None
+            result = candidate_manifest(args.sha, args.workflow_run_id, args.ci_run_id,
+                                        ci_staging_receipt=ci_receipt)
             _write_json(args.output, result)
             return 0
         if args.command == "review-subject":
@@ -886,8 +1110,24 @@ def main(argv: list[str] | None = None) -> int:
                       "rollback_sha": receipt["rollback_sha"]}
             _write_json(args.output, result)
             return 0
+        if args.command == "generate-ci-staging-receipt":
+            result = build_ci_staging_equivalent_receipt(_read_json(args.ci_runs),
+                                                          _read_json(args.ci_jobs),
+                                                          args.candidate_sha)
+            _write_json(args.output, result)
+            return 0
+        if args.command == "validate-ci-staging-receipt":
+            result = validate_ci_staging_equivalent_receipt(_read_json(args.receipt),
+                                                            args.candidate_sha)
+            _write_json(args.output, result)
+            return 0
         if args.command == "staging-deployment":
-            result = verify_latest_staging_deployment(_read_json(args.deployments), args.candidate_sha)
+            deployments = _read_json(args.deployments) if args.deployments else None
+            ci_receipt = _read_json(args.ci_receipt) if args.ci_receipt else None
+            if deployments is None and ci_receipt is None:
+                raise PolicyError("staging_deployment_missing")
+            result = verify_latest_staging_deployment(deployments, args.candidate_sha,
+                                                      ci_receipt=ci_receipt)
             _write_json(args.output, result)
             return 0
         if args.command == "staging-status":

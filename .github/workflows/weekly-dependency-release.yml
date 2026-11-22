@@ -278,17 +278,30 @@ jobs:
           python3 scripts/weekly_release_management.py ci-run --candidate-sha "$GITHUB_SHA" \
             --runs "$RUNNER_TEMP/ci-runs.json" --output "$RUNNER_TEMP/exact-ci-run.json" >/dev/null
           ci_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["workflow_run_id"])' "$RUNNER_TEMP/exact-ci-run.json")"
+          gh_api_read exact-ci-jobs "$RUNNER_TEMP/ci-jobs.json" "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id/jobs?per_page=100"
+          python3 scripts/weekly_release_management.py generate-ci-staging-receipt \
+            --candidate-sha "$GITHUB_SHA" \
+            --ci-runs "$RUNNER_TEMP/ci-runs.json" \
+            --ci-jobs "$RUNNER_TEMP/ci-jobs.json" \
+            --output "$RUNNER_TEMP/staging-equivalent-ci-receipt.json" >/dev/null
+          python3 scripts/weekly_release_management.py validate-ci-staging-receipt \
+            --candidate-sha "$GITHUB_SHA" \
+            --receipt "$RUNNER_TEMP/staging-equivalent-ci-receipt.json" \
+            --output "$RUNNER_TEMP/staging-equivalent-ci-validation.json" >/dev/null
           python3 scripts/weekly_release_management.py candidate --sha "$GITHUB_SHA" \
             --workflow-run-id "$GITHUB_RUN_ID" --ci-run-id "$ci_run_id" \
+            --ci-staging-receipt "$RUNNER_TEMP/staging-equivalent-ci-receipt.json" \
             --output "$RUNNER_TEMP/release-candidate.json" >/dev/null
-          python3 - "$RUNNER_TEMP/release-candidate.json" "$RUNNER_TEMP/review-subject.json" "$RUNNER_TEMP/release-admission.json" <<'PY'
+          python3 - "$RUNNER_TEMP/release-candidate.json" "$RUNNER_TEMP/review-subject.json" "$RUNNER_TEMP/release-admission.json" "$RUNNER_TEMP/staging-equivalent-ci-receipt.json" <<'PY'
           import hashlib, json, pathlib, sys
           manifest=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))
           manifest['merged_pr_subject']=json.loads(pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))
           manifest['v3_admission_sha256']=hashlib.sha256(pathlib.Path(sys.argv[3]).read_bytes()).hexdigest()
+          manifest['ci_staging_receipt_sha256']=hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest()
           pathlib.Path(sys.argv[1]).write_text(json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
           PY
           sha256sum "$RUNNER_TEMP/release-candidate.json" > "$RUNNER_TEMP/release-candidate.json.sha256"
+          sha256sum "$RUNNER_TEMP/staging-equivalent-ci-receipt.json" > "$RUNNER_TEMP/staging-equivalent-ci-receipt.json.sha256"
           echo "ready=true" >> "$GITHUB_OUTPUT"
           echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/release-candidate.json" >> "$GITHUB_STEP_SUMMARY"
@@ -300,6 +313,8 @@ jobs:
           path: |
             ${{ runner.temp }}/release-candidate.json
             ${{ runner.temp }}/release-candidate.json.sha256
+            ${{ runner.temp }}/staging-equivalent-ci-receipt.json
+            ${{ runner.temp }}/staging-equivalent-ci-receipt.json.sha256
           if-no-files-found: error
           retention-days: 90
 
