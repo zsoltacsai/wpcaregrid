@@ -539,8 +539,8 @@ class ContractTests(unittest.TestCase):
         pin = CONTRACT.confinement_pin()
         self.assertEqual(pin.package_version, "1.0.7")
         self.assertEqual(pin.sha256sums_sha256,
-                         "3e839c69a597ad4884c663b76fa6a2447d4b030cbbf5a1e174843ccb83db0947")
-        self.assertEqual(pin.package_tree, "1d0685561b33e26ff33394911c6d6f9892721ea9")
+                         "089fbf681c7bbecd27c61a6eedbcab3ef36940f61f3a06629d9add4d7842233c")
+        self.assertEqual(pin.package_tree, "56969ab240920ebb193c395eb1bb65be1260edb6")
         self.assertEqual(len(CONTRACT.CONFINEMENT_FILES), 14)
         self.assertEqual(set(pin.file_sha256), set(CONTRACT.CONFINEMENT_FILES))
         self.assertEqual(CONTRACT.TRANSIENT_ROLES, ("production-deploy-cli", "production-build-cli"))

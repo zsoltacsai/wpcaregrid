@@ -50,6 +50,8 @@ GENERIC_FD = (re.compile(r"^(socket|pipe):\[\d+\]$"), re.compile(r"^anon_inode:"
 CONTROL_PREFIXES = ("/etc/wpcaregrid-deploy", "/home", "/root", "/var/lib/mysql", "/run/mysqld")
 # Production and staging-next both run php-fpm8.5, so nothing here (or in the class mapping below) may infer an environment from
 # an executable or PHP version: the role is the (label, unit) pair, and descriptors are attributed by tree and by pool path.
+# On stg1.wpcaregrid.com (production-preparation host), staging-next (php8.5-fpm.service) designates the co-located www-data peer
+# required to be confined under Invariant I; it does not represent the future separate staging VPS.
 # The /run/php entries are exact pool socket/pid paths: GENERIC_FD allows /run/php, so without them another role's FastCGI
 # socket path would pass as "generic".
 RUNTIME_PREFIXES = {

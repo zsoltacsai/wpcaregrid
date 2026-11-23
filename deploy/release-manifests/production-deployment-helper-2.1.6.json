@@ -15,20 +15,20 @@
   "transaction_module": "scripts/deployment_transaction_v2.py",
   "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
   "environment_contract": "scripts/deployment_environment_contract_2_1_6.py",
-  "environment_contract_sha256": "859e634f9b417d0c207d976aa65c9acea06f52752e8ca1c0f9d429fddd40745a",
+  "environment_contract_sha256": "f8827f71171481f2a7876e35899fb1f8498ea4c223eb7b6edc57a007dc7fba2c",
   "release_review_policy_module": "scripts/release_review_policy_v3_1.py",
   "release_review_policy_sha256": "5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f",
-  "helper_artifact_sha256": "3838458f029e34317aa0bab08a606e835d3e5b374db8464d61e63ce505d86158",
+  "helper_artifact_sha256": "a7a9e878ec0c00050ee404cbc19979c8723c093fae76a9eae34edbfd426bece4",
   "controller": "scripts/production_deploy_controller_2_1_6.py",
-  "controller_sha256": "bde9742e0127eba18d4b5e55d37aedf5029fe77bf0264c4795d07887a96e011f",
+  "controller_sha256": "59344dfea8e94c42e57d8c9201016ffe96dc353a61e0215d640d2df5babc1e28",
   "root_installer": "scripts/install_production_helper_2_1_6.py",
-  "root_installer_sha256": "ee6f563ae89f03892cf61316b9bac6e1c78b73ba9eaf208c11d22d81ee19d375",
+  "root_installer_sha256": "f892515b4968aa4168f9ce79cb1e2452b4cfd9ab3196f0d12daafbca9aa3d4ea",
   "policy_schema": 2,
   "php_fpm_confinement_pin": {
     "schema": 3,
     "package_version": "1.0.7",
-    "sha256sums_sha256": "3e839c69a597ad4884c663b76fa6a2447d4b030cbbf5a1e174843ccb83db0947",
-    "package_tree": "1d0685561b33e26ff33394911c6d6f9892721ea9",
+    "sha256sums_sha256": "089fbf681c7bbecd27c61a6eedbcab3ef36940f61f3a06629d9add4d7842233c",
+    "package_tree": "56969ab240920ebb193c395eb1bb65be1260edb6",
     "files": 14,
     "services": [
       "production",
@@ -41,7 +41,7 @@
       "production-deploy-cli",
       "production-build-cli"
     ],
-    "binding_sha256": "3baf6315c3ea3ce806b6408f70878b9f9b6cfc9492d47c9c1fdc58a5d8dbe047"
+    "binding_sha256": "64a5ed015323fd576ec679169163591fdcb6483eef9cc1d7f7358a15fab9a6a7"
   },
   "phase_b_default": "DISABLED",
   "production_activation": "BLOCKED_UNTIL_CONFINEMENT_PIN_APPROVED_POLICY_AND_RECOVERY_EVIDENCE",

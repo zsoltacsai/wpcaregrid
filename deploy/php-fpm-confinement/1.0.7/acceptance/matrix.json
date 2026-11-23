@@ -2440,7 +2440,7 @@
     "staging-next": true
   },
   "role_runtime": {
-    "note": "Production and staging-next both run /usr/sbin/php-fpm8.5, so the executable never identifies an environment. Every class distinction comes from the systemd unit (cgroup), the AppArmor label and the pool/socket paths below. The acceptance tools map a process by (label, unit) only and refuse any matrix in which two roles share a unit, an own socket or a pool directory.",
+    "note": "Production and staging-next both run /usr/sbin/php-fpm8.5, so the executable never identifies an environment. Every class distinction comes from the systemd unit (cgroup), the AppArmor label and the pool/socket paths below. On stg1.wpcaregrid.com (production-preparation host), staging-next (php8.5-fpm.service) designates the co-located host peer running under www-data (33/33) that must be confined under Invariant I before production secrets exist; it does not represent the future separate staging VPS. The acceptance tools map a process by (label, unit) only and refuse any matrix in which two roles share a unit, an own socket or a pool directory.",
     "roles": {
       "production": {
         "fpm_binary": "/usr/sbin/php-fpm8.5",

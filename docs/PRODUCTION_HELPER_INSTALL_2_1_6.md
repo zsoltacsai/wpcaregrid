@@ -4,7 +4,7 @@ Status: **source only. Not installed, not enabled, not release-ready.** Nothing 
 
 ## Owner decision and purpose
 
-WP CareGrid **production runs PHP 8.5** in the dedicated unit `wpcaregrid-production-php8.5-fpm.service` (FPM configuration `/etc/php/8.5/fpm-wpcaregrid-production/`, socket `/run/php/wpcaregrid-production-php8.5-fpm.sock`, CLI `/usr/bin/php8.5`). Production helper **2.1.4 is immutable** and stays bound to confinement package 1.0.5 (PHP 8.4); it cannot admit the 1.0.7 layout. Helper 2.1.6 is the narrowest versioned successor: it binds the merged package `deploy/php-fpm-confinement/1.0.7/` (`docs/PHP_FPM_CONFINEMENT_GO20_PHP85.md`) and changes **only what PHP 8.5 requires**. Legacy staging stays on PHP 8.4, staging-next on PHP 8.5; no new Linux user, group or FPM UID (`www-data` 33/33 under the confinement model).
+WP CareGrid **production runs PHP 8.5** in the dedicated unit `wpcaregrid-production-php8.5-fpm.service` (FPM configuration `/etc/php/8.5/fpm-wpcaregrid-production/`, socket `/run/php/wpcaregrid-production-php8.5-fpm.sock`, CLI `/usr/bin/php8.5`). Production helper **2.1.4 is immutable** and stays bound to confinement package 1.0.5 (PHP 8.4); it cannot admit the 1.0.7 layout. Helper 2.1.6 is the narrowest versioned successor: it binds the merged package `deploy/php-fpm-confinement/1.0.7/` (`docs/PHP_FPM_CONFINEMENT_GO20_PHP85.md`) and changes **only what PHP 8.5 requires**. Production and the future separate staging VPS both run PHP 8.5; PHP 8.4 is not installed on either host. On `stg1.wpcaregrid.com` (production preparation host), `staging-next` (`php8.5-fpm.service`) represents the co-located same-UID peer that must be confined under Invariant I; no new Linux user, group or FPM UID (`www-data` 33/33 under the confinement model).
 
 Frozen and untouched by this change: every 2.1.0–2.1.4 helper file and manifest, the staging helper, `scripts/deployment_transaction_v2.py`, `scripts/release_review_policy_v3_1.py` and confinement packages 1.0.1–1.0.7. 2.1.6 imports/pins the two shared modules by hash exactly as 2.1.4 does; it duplicates no logic.
 
@@ -12,7 +12,7 @@ Frozen and untouched by this change: every 2.1.0–2.1.4 helper file and manifes
 
 | Area | 2.1.4 | 2.1.6 |
 | --- | --- | --- |
-| Confinement pin | package 1.0.5 (tree `e8e59b769ed6c6acd85a3bf259364bace5ec374b`) | package **1.0.7**: `package_version` `1.0.7`, `SHA256SUMS` SHA-256 `3e839c69a597ad4884c663b76fa6a2447d4b030cbbf5a1e174843ccb83db0947`, `package_tree` `1d0685561b33e26ff33394911c6d6f9892721ea9` (`git rev-parse HEAD:deploy/php-fpm-confinement/1.0.7`) |
+| Confinement pin | package 1.0.5 (tree `e8e59b769ed6c6acd85a3bf259364bace5ec374b`) | package **1.0.7**: `package_version` `1.0.7`, `SHA256SUMS` SHA-256 `089fbf681c7bbecd27c61a6eedbcab3ef36940f61f3a06629d9add4d7842233c`, `package_tree` `56969ab240920ebb193c395eb1bb65be1260edb6` (`git rev-parse HEAD:deploy/php-fpm-confinement/1.0.7`) |
 | Production unit / pool / socket | `wpcaregrid-production-php8.4-fpm.service`, `/etc/php/8.4/fpm-wpcaregrid-production/`, `…php8.4-fpm.sock` | `wpcaregrid-production-php8.5-fpm.service`, `/etc/php/8.5/fpm-wpcaregrid-production/{php-fpm.conf,pool.d/wpcaregrid-production.conf}`, `/run/php/wpcaregrid-production-php8.5-fpm.sock` |
 | Policy `php_version` | `8.4` | `8.5` (`8.4` now refuses `production_php_version_invalid`) |
 | Production FPM executable class | `/usr/sbin/php-fpm8.4`, `/usr/bin/kill` | `/usr/sbin/php-fpm8.5`, `/usr/bin/kill` |
@@ -35,7 +35,7 @@ Production and staging-next now both run `/usr/sbin/php-fpm8.5`. The contract th
 
 ### Binding
 
-`CONFINEMENT_PIN` in `scripts/deployment_environment_contract_2_1_6.py` is a `ConfinementPin(package_version, sha256sums_sha256, package_tree, file_sha256)` for package 1.0.7 with the schema-3 binding: **14** installed files (`CONFINEMENT_FILES`, taken from `binding.json` `installed_files` with the per-file hashes from `SHA256SUMS`), **five** service roles (`production`, `staging-next`, `nginx`, `jobs-supervisor`, `jobs-scheduler`) and **two** transient roles (`production-deploy-cli`, `production-build-cli`). Canonical binding digest (`sha256` of `confinement_binding()` with sorted keys and compact separators): `3baf6315c3ea3ce806b6408f70878b9f9b6cfc9492d47c9c1fdc58a5d8dbe047`. The manifest, controller and installer carry that digest; the installer writes it into its receipt; a pin that does not match refuses with `confinement_package_pin_invalid`.
+`CONFINEMENT_PIN` in `scripts/deployment_environment_contract_2_1_6.py` is a `ConfinementPin(package_version, sha256sums_sha256, package_tree, file_sha256)` for package 1.0.7 with the schema-3 binding: **14** installed files (`CONFINEMENT_FILES`, taken from `binding.json` `installed_files` with the per-file hashes from `SHA256SUMS`), **five** service roles (`production`, `staging-next`, `nginx`, `jobs-supervisor`, `jobs-scheduler`) and **two** transient roles (`production-deploy-cli`, `production-build-cli`). Canonical binding digest (`sha256` of `confinement_binding()` with sorted keys and compact separators): `64a5ed015323fd576ec679169163591fdcb6483eef9cc1d7f7358a15fab9a6a7`. The manifest, controller and installer carry that digest; the installer writes it into its receipt; a pin that does not match refuses with `confinement_package_pin_invalid`.
 
 ## Security properties preserved unchanged
 
@@ -49,11 +49,11 @@ Root-console-only invocation (no sudoers file, `SUDO_*`/`PKEXEC_UID`/`DOAS_USER`
 | `scripts/wpcaregrid-deploy-production-priv-2_1_6.py` | `c19441f7f9ab087046c7ff22f906915201a6e692dc9bbcca4c9e7b5cba2908ea` |
 | `scripts/deployment_backend_v2_1_6.py` | `7ca36c87707dbe0a9b8fe5f9428ef02de2b79bf34d87f5ec1ff98a35d0d28cc0` |
 | `scripts/deployment_transaction_v2.py` | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_6.py` | `859e634f9b417d0c207d976aa65c9acea06f52752e8ca1c0f9d429fddd40745a` |
+| `scripts/deployment_environment_contract_2_1_6.py` | `f8827f71171481f2a7876e35899fb1f8498ea4c223eb7b6edc57a007dc7fba2c` |
 | `scripts/release_review_policy_v3_1.py` | `5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f` |
-| helper artifact digest | `3838458f029e34317aa0bab08a606e835d3e5b374db8464d61e63ce505d86158` |
-| `scripts/production_deploy_controller_2_1_6.py` | `bde9742e0127eba18d4b5e55d37aedf5029fe77bf0264c4795d07887a96e011f` |
-| `scripts/install_production_helper_2_1_6.py` | `ee6f563ae89f03892cf61316b9bac6e1c78b73ba9eaf208c11d22d81ee19d375` |
+| helper artifact digest | `a7a9e878ec0c00050ee404cbc19979c8723c093fae76a9eae34edbfd426bece4` |
+| `scripts/production_deploy_controller_2_1_6.py` | `59344dfea8e94c42e57d8c9201016ffe96dc353a61e0215d640d2df5babc1e28` |
+| `scripts/install_production_helper_2_1_6.py` \| `f892515b4968aa4168f9ce79cb1e2452b4cfd9ab3196f0d12daafbca9aa3d4ea` |
 <!-- PINS:END -->
 
 The six installer `SOURCE_HASHES` are the entrypoint, backend, transaction module, environment contract, review-policy module and controller rows above (the controller is installed as `production_deploy_controller.py`). Manifest: `deploy/release-manifests/production-deployment-helper-2.1.6.json`. Tests: `scripts/tests/production-helper-2-1-5-full-test.py`, `scripts/tests/production-helper-2-1-5-coexistence-test.py`.

@@ -215,7 +215,7 @@
     "pre": "production role excluded; production unit has no process; no non-fixture production file"
   },
   "rules": {
-    "class_identity": "a process class is the pair (AppArmor label, systemd unit/cgroup); production and staging-next both run /usr/sbin/php-fpm8.5, so the executable, argv0 and PHP version never identify an environment",
+    "class_identity": "a process class is the pair (AppArmor label, systemd unit/cgroup); production and staging-next both run /usr/sbin/php-fpm8.5, so the executable, argv0 and PHP version never identify an environment. On stg1.wpcaregrid.com (production-preparation host), staging-next (php8.5-fpm.service) identifies the co-located www-data host peer required to be confined under Invariant I, distinct from the future separate staging VPS.",
     "deploy_cli_network": "unix-stream connect to the exact MySQL socket only; no TCP",
     "exec_path_attachments": [],
     "package_owner_mode": {

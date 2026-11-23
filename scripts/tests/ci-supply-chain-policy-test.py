@@ -43,7 +43,14 @@ def validate_run_expressions(content, label="workflow"):
 
 
 def assert_no_deployment(content):
-    assert not re.search(r"(?i)\b(?:scripts/deploy-staging\.sh|deploy-production|deploy-staging)\b", content), "deployment command introduced into CI workflow"
+    sanitized_lines = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if re.match(r"^python3\s+-m\s+py_compile(?:\s+[^&;|`$]+)+$", stripped):
+            continue
+        sanitized_lines.append(line)
+    sanitized = "\n".join(sanitized_lines)
+    assert not re.search(r"(?i)\b(?:scripts/deploy-staging\.sh|deploy-production|deploy-staging)\b", sanitized), "deployment command introduced into CI workflow"
 
 
 def validate_weekly_deployment_workflow(content):
@@ -190,6 +197,10 @@ def main():
         expect_rejected(lambda content: (validate_workflow_controls(content), validate_sqlite_regression_gate(content)), mutated, reason)
     deployed = workflow + "\n      - name: forbidden\n        run: scripts/deploy-staging.sh\n"
     expect_rejected(lambda content: assert_no_deployment(content), deployed, "deployment command in CI")
+    deployed_prod = workflow + "\n      - name: forbidden\n        run: python3 scripts/wpcaregrid-deploy-production-priv-2_1_6.py\n"
+    expect_rejected(lambda content: assert_no_deployment(content), deployed_prod, "execution of production deploy helper")
+    deployed_chained = workflow + "\n      - name: forbidden\n        run: python3 -m py_compile scripts/foo.py && deploy-production\n"
+    expect_rejected(lambda content: assert_no_deployment(content), deployed_chained, "chained deployment command after compile")
 
     for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
         content = path.read_text(encoding="utf-8")

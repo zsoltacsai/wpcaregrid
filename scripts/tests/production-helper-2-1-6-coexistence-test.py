@@ -39,8 +39,8 @@ BACKEND, CONTRACT, ENTRY, CONTROLLER, INSTALLER = FULL.BACKEND, FULL.CONTRACT, F
 OLD_CONTRACT = _load("deployment_environment_contract_2_1_4_for_coexistence",
                      ROOT / "scripts/deployment_environment_contract_2_1_4.py")
 PACKAGE = ROOT / "deploy/php-fpm-confinement/1.0.7"
-SUMS_SHA256 = "3e839c69a597ad4884c663b76fa6a2447d4b030cbbf5a1e174843ccb83db0947"
-TREE_107 = "1d0685561b33e26ff33394911c6d6f9892721ea9"
+SUMS_SHA256 = "089fbf681c7bbecd27c61a6eedbcab3ef36940f61f3a06629d9add4d7842233c"
+TREE_107 = "56969ab240920ebb193c395eb1bb65be1260edb6"
 TREE_106 = "6d239b64d5637971bf28ec7a2de6d7a5686804df"
 TREE_105 = "e8e59b769ed6c6acd85a3bf259364bace5ec374b"
 
@@ -134,7 +134,7 @@ class PinBindsPackage107Tests(unittest.TestCase):
         digest = CONTRACT.confinement_binding_sha256()
         raw = json.dumps(CONTRACT.confinement_binding(), sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(digest, sha256(raw))
-        self.assertEqual(digest, "3baf6315c3ea3ce806b6408f70878b9f9b6cfc9492d47c9c1fdc58a5d8dbe047")
+        self.assertEqual(digest, "64a5ed015323fd576ec679169163591fdcb6483eef9cc1d7f7358a15fab9a6a7")
         self.assertEqual(OLD_CONTRACT.confinement_binding_sha256(),
                          "0c189479fca557e8b47a7bfdeddaf753d96a75c24c3a58321cdf81ac2507cee0")
         self.assertNotEqual(digest, OLD_CONTRACT.confinement_binding_sha256())
