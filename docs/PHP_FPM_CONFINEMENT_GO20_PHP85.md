@@ -54,11 +54,13 @@ Packages are immutable: **1.0.0–1.0.5 are frozen** and unchanged by this relea
 | 1.0.3 | `dcf18aa07cbdb8bcddde8f2a0527a13701ab0316` |
 | 1.0.4 | `71dc6c8150a0a8f0658dd0a3a6fb62e0baf41912` |
 | 1.0.5 | `e8e59b769ed6c6acd85a3bf259364bace5ec374b` |
-| **1.0.6** (this release) | `6d239b64d5637971bf28ec7a2de6d7a5686804df` |
+| 1.0.6 | `6d239b64d5637971bf28ec7a2de6d7a5686804df` |
+| **1.0.7** (this release) | `1d0685561b33e26ff33394911c6d6f9892721ea9` |
 
 Pin for the helper successor: `SHA256SUMS` of 1.0.6 has SHA-256 `bf6e734ef0489c34006862c706a6d0fc59d62b8c18b00bbe04a276512c0a5e18`.
+Pin for helper 2.1.6: `SHA256SUMS` of 1.0.7 has SHA-256 `3e839c69a597ad4884c663b76fa6a2447d4b030cbbf5a1e174843ccb83db0947`, git tree `1d0685561b33e26ff33394911c6d6f9892721ea9`, binding digest `3baf6315c3ea3ce806b6408f70878b9f9b6cfc9492d47c9c1fdc58a5d8dbe047`.
 
-**Not bound by any helper:** package 1.0.6 is not bound by any helper yet. Production helper 2.1.4 and `scripts/deployment_environment_contract_2_1_4.py` are untouched and stay bound to package 1.0.5 (PHP 8.4 production). A separate helper 2.1.5 successor will bind 1.0.6 later; until then 1.0.6 must not be installed on a host that runs helper 2.1.4, because the helper checks unit names, profile hashes and the PHP 8.4 interpreter of 1.0.5.
+**Helper binding:** package 1.0.5 is bound by helper 2.1.4. Package 1.0.6 was prepared for helper 2.1.5 (not bound). Package 1.0.7 is bound by helper 2.1.6 (`scripts/deployment_environment_contract_2_1_6.py`, `scripts/wpcaregrid-deploy-production-priv-2_1_6.py`). Production helper 2.1.4 and `scripts/deployment_environment_contract_2_1_4.py` are untouched and stay bound to package 1.0.5 (PHP 8.4 production). Until activated, 1.0.7 must not be installed on a host that runs helper 2.1.4.
 
 ## Installation deltas against GO-13
 
@@ -81,15 +83,15 @@ No kernel load, no cache, no root required:
 ```bash
 apparmor_parser -Q -K -I <dir> <profile>
 # e.g. from the repository root, one profile:
-apparmor_parser -Q -K -I deploy/php-fpm-confinement/1.0.6/apparmor deploy/php-fpm-confinement/1.0.6/apparmor/wpcaregrid-php-fpm-production
+apparmor_parser -Q -K -I deploy/php-fpm-confinement/1.0.7/apparmor deploy/php-fpm-confinement/1.0.7/apparmor/wpcaregrid-php-fpm-production
 # or every profile of the package:
-pkg=deploy/php-fpm-confinement/1.0.6
+pkg=deploy/php-fpm-confinement/1.0.7
 for profile in "$pkg"/apparmor/wpcaregrid-*; do
   apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
 done
 ```
 
-`-Q` skips the kernel load, `-K` skips the cache, `-I <dir>` resolves `#include <abstractions/wpcaregrid-php-fpm-common>`. A local run without `apparmor_parser` proves nothing about syntax. CI covers 1.0.6 twice: the real-parser class in `scripts/tests/php-fpm-confinement-test.py` (it compiles every profile and every derived probe profile of the current package, with `PHP_FPM_CONFINEMENT_REQUIRE_PARSER=1`) and the explicit compile-only step above in `.github/workflows/ci.yml`.
+`-Q` skips the kernel load, `-K` skips the cache, `-I <dir>` resolves `#include <abstractions/wpcaregrid-php-fpm-common>`. A local run without `apparmor_parser` proves nothing about syntax. CI covers 1.0.7 twice: the real-parser class in `scripts/tests/php-fpm-confinement-test.py` (it compiles every profile and every derived probe profile of the current package, with `PHP_FPM_CONFINEMENT_REQUIRE_PARSER=1`) and the explicit compile-only step above in `.github/workflows/ci.yml`.
 
 ## Unchanged by this release
 
