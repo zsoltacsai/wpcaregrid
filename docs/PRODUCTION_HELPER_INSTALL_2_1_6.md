@@ -52,8 +52,8 @@ Root-console-only invocation (no sudoers file, `SUDO_*`/`PKEXEC_UID`/`DOAS_USER`
 | `scripts/deployment_environment_contract_2_1_6.py` | `f8827f71171481f2a7876e35899fb1f8498ea4c223eb7b6edc57a007dc7fba2c` |
 | `scripts/release_review_policy_v3_1.py` | `5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f` |
 | helper artifact digest | `a7a9e878ec0c00050ee404cbc19979c8723c093fae76a9eae34edbfd426bece4` |
-| `scripts/production_deploy_controller_2_1_6.py` | `59344dfea8e94c42e57d8c9201016ffe96dc353a61e0215d640d2df5babc1e28` |
-| `scripts/install_production_helper_2_1_6.py` \| `f892515b4968aa4168f9ce79cb1e2452b4cfd9ab3196f0d12daafbca9aa3d4ea` |
+| `scripts/production_deploy_controller_2_1_6.py` | `442877df080f8463ecce561728f0e8844345168727ddedeeaca00d93594a5b0f` |
+| `scripts/install_production_helper_2_1_6.py` | `bfa63f7d6a551cb63175628c4b2f7e4b3a61a4502d121afbe722e6983c643073` |
 <!-- PINS:END -->
 
 The six installer `SOURCE_HASHES` are the entrypoint, backend, transaction module, environment contract, review-policy module and controller rows above (the controller is installed as `production_deploy_controller.py`). Manifest: `deploy/release-manifests/production-deployment-helper-2.1.6.json`. Tests: `scripts/tests/production-helper-2-1-5-full-test.py`, `scripts/tests/production-helper-2-1-5-coexistence-test.py`.
