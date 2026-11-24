@@ -15,8 +15,8 @@ checked, never unmasked.
 """
 from __future__ import annotations
 
-# Newest stage first: edge/jobs (Stage 3), then staging-next FPM (Stage 2).
-PEERS_NEWEST_FIRST = ("jobs-scheduler", "jobs-supervisor", "nginx", "staging-next")
+# Production-only rollback: fence ingress first, then the dedicated production FPM.
+PEERS_NEWEST_FIRST = ("nginx", "production")
 PRODUCTION_CLI_LABELS = (
     "wpcaregrid-php-cli-production-deploy (enforce)",
     "wpcaregrid-php-cli-production-build (enforce)",

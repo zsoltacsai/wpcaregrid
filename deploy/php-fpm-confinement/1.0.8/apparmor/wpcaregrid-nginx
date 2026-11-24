@@ -32,6 +32,9 @@ profile wpcaregrid-nginx flags=(attach_disconnected) {
   /etc/nginx/mime.types r,
   /etc/nginx/fastcgi_params r,
   /etc/nginx/modules-enabled/{,**} r,
+  /etc/nginx/sites-enabled/ r,
+  /etc/nginx/sites-enabled/ x,
+  /etc/nginx/sites-available/ x,
   /etc/nginx/sites-enabled/wpcaregrid-production r,
   /etc/nginx/sites-available/wpcaregrid-production r,
   /etc/mime.types r,
@@ -46,9 +49,6 @@ profile wpcaregrid-nginx flags=(attach_disconnected) {
   # Public web roots only, on resolved paths. `current` and legacy symlinks resolve into these.
   /var/www/wpcaregrid-production/releases/*/public/{,**} r,
 
-
-  # Deployment gate markers: existence checks only, exact files.
-  /var/lib/wpcaregrid-deploy/production/state/maintenance r,
 
   # FastCGI upstream sockets only.
   /run/php/wpcaregrid-production-php8.5-fpm.sock rw,

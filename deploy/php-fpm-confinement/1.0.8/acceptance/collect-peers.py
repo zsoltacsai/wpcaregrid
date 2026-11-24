@@ -35,6 +35,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import time
 
@@ -163,31 +164,105 @@ def identity(snap: dict) -> frozenset:
 
 
 def production_surface(roots: list, canary: str, public_glob: str) -> dict:
-    """Which production files exist that are not the exact fixture canary (never reads other content)."""
-    real, fixtures, present = [], 0, False
-    for root in roots:
-        if not os.path.isdir(root):
-            continue
-        present = True
-        for current, dirs, files in os.walk(root, followlinks=False):
-            if fnmatch.fnmatch(current, public_glob) or fnmatch.fnmatch(current, public_glob + "/*"):
-                dirs[:] = []
+    """Inventory the production surface without following links or hiding walk errors.
+
+    Only regular files below the explicitly public webroot glob are exempt. Symlinks,
+    special files, unreadable entries and traversal failures are recorded as real and
+    make the inventory incomplete; they can never be mistaken for an empty surface.
+    """
+    real, fixtures, present, complete, reasons = [], 0, False, True, []
+    canary_bytes = canary.encode()
+
+    def walk(directory_fd: int, path: str) -> None:
+        nonlocal fixtures, complete
+        try:
+            with os.scandir(directory_fd) as scan:
+                names = sorted(entry.name for entry in scan)
+        except OSError as error:
+            complete = False
+            reasons.append(f"cannot enumerate {path}: {error.__class__.__name__}")
+            real.append(path)
+            return
+        for name in names:
+            item = os.path.join(path, name)
+            try:
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as error:
+                complete = False
+                reasons.append(f"cannot stat {item}: {error.__class__.__name__}")
+                real.append(item)
                 continue
-            for name in files:
-                path = os.path.join(current, name)
+            if stat.S_ISLNK(info.st_mode):
+                real.append(item)
+            elif stat.S_ISDIR(info.st_mode):
                 try:
-                    info = os.lstat(path)
-                    if os.path.islink(path):
-                        continue
-                    if info.st_size == len(canary):
-                        with open(path, "rb") as handle:
-                            if handle.read() == canary.encode():
+                    child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                                       dir_fd=directory_fd)
+                    try:
+                        opened = os.fstat(child_fd)
+                        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                            raise OSError("directory changed during inventory")
+                        walk(child_fd, item)
+                    finally:
+                        os.close(child_fd)
+                except OSError as error:
+                    complete = False
+                    reasons.append(f"cannot safely descend into {item}: {error.__class__.__name__}")
+                    real.append(item)
+            elif stat.S_ISREG(info.st_mode):
+                is_public = fnmatch.fnmatch(item, public_glob + "/*")
+                if is_public:
+                    continue
+                try:
+                    if info.st_size == len(canary_bytes):
+                        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+                        try:
+                            opened = os.fstat(fd)
+                            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                                raise OSError("file changed during inventory")
+                            if os.read(fd, len(canary_bytes) + 1) == canary_bytes:
                                 fixtures += 1
                                 continue
-                    real.append(path)
-                except OSError:
-                    real.append(path)  # unreadable counts as real: never assume it is a fixture
-    return {"roots_present": present, "real_files": sorted(real), "fixture_files": fixtures}
+                        finally:
+                            os.close(fd)
+                except OSError as error:
+                    complete = False
+                    reasons.append(f"cannot read {item}: {error.__class__.__name__}")
+                real.append(item)
+            else:
+                real.append(item)
+
+    for root in roots:
+        try:
+            info = os.lstat(root)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            complete = False
+            reasons.append(f"cannot inspect root {root}: {error.__class__.__name__}")
+            real.append(root)
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            complete = False
+            reasons.append(f"root is not a real directory: {root}")
+            real.append(root)
+            continue
+        present = True
+        try:
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                opened = os.fstat(root_fd)
+                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                    raise OSError("root changed during inventory")
+                walk(root_fd, root)
+            finally:
+                os.close(root_fd)
+        except OSError as error:
+            complete = False
+            reasons.append(f"cannot safely open root {root}: {error.__class__.__name__}")
+            real.append(root)
+    return {"roots_present": present, "complete": complete, "reasons": reasons,
+            "real_files": sorted(set(real)), "fixture_files": fixtures}
 
 
 def collect(units: dict, proc: str = "/proc", cgroup: str = "/sys/fs/cgroup", uid: int = TARGET_UID, *, matrix_sha256: str = "",

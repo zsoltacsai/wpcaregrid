@@ -114,13 +114,13 @@ class ConfinementPin:
 # hashes are re-derived from the package bytes. No intermediate/unset pin exists.
 CONFINEMENT_PIN: ConfinementPin | None = ConfinementPin(
     package_version="1.0.8",
-    sha256sums_sha256="b4816748b9881bb793067589c0fd3f14d346d5a6d3e061eeafae8552d8a5bd13",
-    package_tree="547c3fae6ea2269b33ec8d1d365d4cc0d06bbe7a",
+    sha256sums_sha256="00d9492e56bc5f3fe53c42f90068a253db59820c264b95a971e1a15d8d317751",
+    package_tree="6fe9f64efa43b4a1ce86eed6fe4550c29164a0fc",
     file_sha256=MappingProxyType({
         '/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common':
             '995c8f7ce449342bd033bc1258c13a588d3485dbd3788277224c8cb217b5fc35',
         '/etc/apparmor.d/wpcaregrid-nginx':
-            'df6a273ba45222d083231aece817517adf3b154c146504569d9dd472ae993a69',
+            '2d5dd5f340e04b1bcd30ddbb93e67c7c4641078376826fc89b545577ce1ada78',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-build':
             'ffc05f34fec57b2ce3f68cd9833d786ea0bff0b404e720c40b08a6f5c713db56',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-deploy':
@@ -584,7 +584,7 @@ _HELPER_KEYS = frozenset({"pid", "starttime", "cgroup", "deploy_cli_profile_mode
                           "build_cli_profile_mode", "build_cli_cmdline_sha256"})
 _FENCE_KEYS = frozenset({"units", "supervisor", "markers"})
 _FENCE_UNIT_KEYS = frozenset({"load_state", "active_state", "unit_file_state"})
-_FENCE_SUPERVISOR_KEYS = frozenset({"config_complete", "runtime_available", "programs"})
+_FENCE_SUPERVISOR_KEYS = frozenset({"unit_state", "config_complete", "runtime_available", "programs"})
 _FENCE_PROGRAM_KEYS = frozenset({"name", "state", "autostart"})
 _FENCE_MARKER_KEYS = frozenset({"type", "uid", "gid", "mode", "nlink", "sha256"})
 # Program states the collector may report. Only STOPPED (runtime) or SUPERVISOR_INACTIVE
@@ -923,9 +923,26 @@ def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object,
             or type(supervisor["runtime_available"]) is not bool \
             or not isinstance(supervisor["programs"], (list, tuple)):
         raise EnvironmentRefused("confinement_observation_invalid")
-    supervisor_service = services.get("jobs-supervisor")
-    supervisor_active = isinstance(supervisor_service, Mapping) and supervisor_service.get("active_state") != "inactive"
-    if supervisor["config_complete"] is not True or (supervisor_active and supervisor["runtime_available"] is not True):
+    supervisor_unit = supervisor["unit_state"]
+    if not isinstance(supervisor_unit, Mapping) or set(supervisor_unit) != _FENCE_UNIT_KEYS \
+            or not all(isinstance(supervisor_unit[key], str) for key in _FENCE_UNIT_KEYS):
+        raise EnvironmentRefused("confinement_observation_invalid")
+    if supervisor["config_complete"] is not True:
+        raise EnvironmentRefused("confinement_production_jobs_unverifiable")
+    absent = (supervisor_unit["load_state"] == "not-found"
+              and supervisor_unit["active_state"] == "inactive"
+              and supervisor_unit["unit_file_state"] == "not-found")
+    active = (supervisor_unit["load_state"] == "loaded"
+              and supervisor_unit["active_state"] == "active"
+              and supervisor_unit["unit_file_state"] not in {"", "not-found", "masked"})
+    if absent:
+        if supervisor["runtime_available"] is not False or supervisor["programs"]:
+            raise EnvironmentRefused("confinement_production_jobs_unverifiable")
+    elif active:
+        if supervisor["runtime_available"] is not True:
+            raise EnvironmentRefused("confinement_production_jobs_unverifiable")
+    else:
+        # Transitional, failed, malformed and loaded-inactive states never mean "no jobs".
         raise EnvironmentRefused("confinement_production_jobs_unverifiable")
     names = set()
     for program in supervisor["programs"]:
@@ -934,9 +951,7 @@ def _verify_production_jobs_fenced(contract: EnvironmentContract, fence: object,
                 or type(program["autostart"]) is not bool or program["name"] in names:
             raise EnvironmentRefused("confinement_observation_invalid")
         names.add(program["name"])
-        stopped = program["state"] == "STOPPED" or (
-            program["state"] == "SUPERVISOR_INACTIVE" and not supervisor_active
-            and supervisor["runtime_available"] is False)
+        stopped = active and program["state"] == "STOPPED"
         # Absent is preferred; a defined production program must be exactly stopped and never autostart.
         if not stopped or program["autostart"] is not False:
             raise EnvironmentRefused("confinement_production_jobs_not_fenced")

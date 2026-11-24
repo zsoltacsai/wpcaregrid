@@ -1883,14 +1883,6 @@
           "expect": "deny",
           "id": "exec-php84-cli",
           "path": "/usr/bin/php8.4"
-        },
-        {
-          "access": "r",
-          "expect": "deny",
-          "id": "staging-next-pool-config-read",
-          "optional": true,
-          "optional_reason": "the packaged pool.d/www.conf may be absent or unreadable to www-data on the host; the check is then reported UNPROVEN, never PASS",
-          "path": "/etc/php/8.5/fpm/pool.d/www.conf"
         }
       ],
       "environment": "production",

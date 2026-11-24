@@ -34,6 +34,7 @@ import hashlib
 import json
 import re
 import sys
+from pathlib import PurePosixPath
 
 DENIED = (errno.EACCES, errno.EPERM)
 EFAULT = errno.EFAULT
@@ -151,14 +152,39 @@ def fd_ok(role: str, target: str) -> bool:
     if any(under(target, p) for p in CONTROL_PREFIXES):
         return False
     if role == "nginx":
-        # An allowlist: sockets, logs, its own state and TLS material, and files under a public web root. A
-        # descriptor to application code, config, storage or an .env is never legitimate for nginx.
-        return bool(GENERIC_FD[0].match(target) or GENERIC_FD[1].match(target) or GENERIC_FD[2].match(target)
-                    or GENERIC_FD[3].match(target) or target in ("/etc/nginx/nginx.conf", "/etc/nginx/mime.types", "/etc/nginx/fastcgi_params")
-                    or target.startswith(("/etc/nginx/modules-enabled/", "/etc/nginx/sites-enabled/wpcaregrid-production",
-                                          "/etc/letsencrypt/live/wpcaregrid.com/", "/etc/letsencrypt/archive/wpcaregrid.com/",
-                                          "/usr/", "/var/log/nginx/", "/var/lib/nginx/", "/run/nginx"))
-                    or "/public/" in target + "/")
+        # The descriptor target is a kernel-reported path. Reject path tricks first,
+        # then use component-boundary allowlists; broad /usr or arbitrary /public
+        # prefixes would let unrelated files pass the live inventory.
+        if not target.startswith("/") or "\x00" in target or "//" in target \
+                or any(part in (".", "..") for part in target.split("/")):
+            return bool(GENERIC_FD[0].fullmatch(target) or GENERIC_FD[1].match(target)
+                        or GENERIC_FD[2].fullmatch(target))
+        if GENERIC_FD[0].fullmatch(target) or GENERIC_FD[1].match(target) or GENERIC_FD[2].fullmatch(target):
+            return True
+        if target in {"/etc/nginx/nginx.conf", "/etc/nginx/mime.types", "/etc/nginx/fastcgi_params",
+                      "/etc/nginx/sites-available/wpcaregrid-production", "/etc/nginx/sites-enabled/wpcaregrid-production",
+                      "/etc/mime.types", "/etc/localtime", "/run/nginx.pid"}:
+            return True
+        if under(target, "/etc/nginx/modules-enabled") and target.endswith(".conf"):
+            return True
+        if under(target, "/usr/lib/nginx/modules") and target.count("/") == 5:
+            return True
+        if under(target, "/usr/lib/x86_64-linux-gnu") and len(PurePosixPath(target).parts) == 5:
+            return True
+        if under(target, "/usr/share/nginx") and len(PurePosixPath(target).parts) >= 4:
+            return True
+        if under(target, "/var/log/nginx") or under(target, "/var/lib/nginx") or under(target, "/run/nginx"):
+            return True
+        if target in {"/run/php/wpcaregrid-production-php8.5-fpm.sock"}:
+            return True
+        if under(target, "/etc/letsencrypt/archive/wpcaregrid.com"):
+            return bool(re.fullmatch(r"/etc/letsencrypt/archive/wpcaregrid\.com/(fullchain|privkey)[0-9]+\.pem", target))
+        if target in {"/etc/letsencrypt/live/wpcaregrid.com/fullchain.pem",
+                      "/etc/letsencrypt/live/wpcaregrid.com/privkey.pem"}:
+            return True
+        parts = PurePosixPath(target).parts
+        return (len(parts) >= 8 and parts[:4] == ("/", "var", "www", "wpcaregrid-production")
+                and parts[4] == "releases" and parts[6] == "public")
     return fd_allowed(role, target)
 
 
@@ -273,9 +299,10 @@ def check_inventory(v: Verdict, matrix: dict, inv: dict, phase: str, required_ro
                                                         for p in inv["processes"]):
             v.fail(f"inventory:{phase}", "the production unit already has processes: the pre-production gate requires it absent")
         surface = inv.get("production_surface")
-        if not isinstance(surface, dict) or surface.get("real_files"):
+        if not isinstance(surface, dict) or surface.get("complete") is not True or surface.get("real_files"):
             v.fail(f"inventory:{phase}", "real (non-fixture) production files exist or the scan is missing: production secrets must not "
-                   f"exist before every peer is confined ({(surface or {}).get('real_files', [])[:3]})")
+                   f"exist before every peer is confined ({(surface or {}).get('real_files', [])[:3]}; "
+                   f"scan_reasons={(surface or {}).get('reasons', [])[:3]})")
     return by_pid
 
 

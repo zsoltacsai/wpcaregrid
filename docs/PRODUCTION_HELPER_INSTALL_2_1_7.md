@@ -16,10 +16,10 @@ Ubuntu 26.04 compatibility is checked in an isolated CI runner with AppArmor par
 | Artifact | SHA-256 |
 | --- | --- |
 | `scripts/wpcaregrid-deploy-production-priv-2_1_7.py` | `1d3f9fa36d6a71b1528038a1aab461cc37213ef584bad684a5e60db8d6cef0f3` |
-| `scripts/deployment_backend_v2_1_7.py` | `210eeade24a710bc9f4fe34c41ab0bf340063be18bb4caac68ebe498f7ac7c97` |
+| `scripts/deployment_backend_v2_1_7.py` | `5f5e6955c6b35a98d2dbc36c2cd0dd117bb2c17021977269066bb81dc1c54c24` |
 | `scripts/deployment_transaction_v2.py` | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_7.py` | `e78e89a323c793a32c128fadeafc24edb402023aaffafad4b683cf475050b0e0` |
+| `scripts/deployment_environment_contract_2_1_7.py` | `f22f40c11b086ba4ab67f34b76a2ad7ae98e3c1e689bfb708625ba3517305e70` |
 | `scripts/release_review_policy_v3_1.py` | `5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f` |
-| `helper artifact digest` | `5dc47ef67e66c1d2477d24dd75d518a7bdc862800fed876187cd28021310710f` |
-| `scripts/production_deploy_controller_2_1_7.py` | `5057175b40c0fc788bd456bbdd513442469cad6f460d0b0055821562e838d36d` |
-| `scripts/install_production_helper_2_1_7.py` | `a9c01502f3fd529bff458b2424807461cc370e5854633c7dc88db3902432d40a` |
+| `scripts/production_deploy_controller_2_1_7.py` | `0e7f99db19563181b67fd4b7a2306ea0ea7a1894f10054c910b2dcff4dde5739` |
+| `scripts/install_production_helper_2_1_7.py` | `f7993ee2bc7755fb0a1a46a7e66c1196dc729d095b20ec6de706e8ec98177f2b` |
+| `helper artifact digest` | `bc689bbef1256b04aa7733febe7e08ff5549e3e0ddfea11d835525633f97fb6a` |
