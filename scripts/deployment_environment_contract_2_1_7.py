@@ -114,13 +114,13 @@ class ConfinementPin:
 # hashes are re-derived from the package bytes. No intermediate/unset pin exists.
 CONFINEMENT_PIN: ConfinementPin | None = ConfinementPin(
     package_version="1.0.8",
-    sha256sums_sha256="00d9492e56bc5f3fe53c42f90068a253db59820c264b95a971e1a15d8d317751",
-    package_tree="6fe9f64efa43b4a1ce86eed6fe4550c29164a0fc",
+    sha256sums_sha256="3eadc4ea34ef8e4d6dee238abd17afc887e23bff0ef12a55eeea10e361198c18",
+    package_tree="f903608c9b07dddad339fecac74ab613806d3970",
     file_sha256=MappingProxyType({
         '/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common':
             '995c8f7ce449342bd033bc1258c13a588d3485dbd3788277224c8cb217b5fc35',
         '/etc/apparmor.d/wpcaregrid-nginx':
-            '2d5dd5f340e04b1bcd30ddbb93e67c7c4641078376826fc89b545577ce1ada78',
+            '0fcb54303fbd75174593ca18f780c499e34b6646413254297a97374d9f64f787',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-build':
             'ffc05f34fec57b2ce3f68cd9833d786ea0bff0b404e720c40b08a6f5c713db56',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-deploy':

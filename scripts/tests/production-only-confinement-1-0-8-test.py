@@ -51,8 +51,8 @@ class ProductionOnlyPackage(unittest.TestCase):
    self.assertNotIn(broad,profile)
   self.assertIn('/run/php/php8.4-fpm.{sock,pid}',profile)
   self.assertIn('/etc/nginx/sites-enabled/ r,',profile)
-  self.assertIn('/etc/nginx/sites-enabled/ x,',profile)
-  self.assertIn('/etc/nginx/sites-available/ x,',profile)
+  self.assertNotIn('/etc/nginx/sites-enabled/ x,',profile)
+  self.assertNotIn('/etc/nginx/sites-available/ x,',profile)
   self.assertNotIn('/var/lib/wpcaregrid-deploy/production/state/maintenance r,',profile)
   m=json.loads((PKG/'acceptance/matrix.json').read_text())
   checks={c['id']:c for c in m['profiles']['wpcaregrid-nginx']['checks']}

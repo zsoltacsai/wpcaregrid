@@ -33,8 +33,6 @@ profile wpcaregrid-nginx flags=(attach_disconnected) {
   /etc/nginx/fastcgi_params r,
   /etc/nginx/modules-enabled/{,**} r,
   /etc/nginx/sites-enabled/ r,
-  /etc/nginx/sites-enabled/ x,
-  /etc/nginx/sites-available/ x,
   /etc/nginx/sites-enabled/wpcaregrid-production r,
   /etc/nginx/sites-available/wpcaregrid-production r,
   /etc/mime.types r,
