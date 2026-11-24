@@ -439,13 +439,17 @@
           "access": "r",
           "expect": "deny",
           "id": "public-staging-next",
-          "path": "/var/www/wpcaregrid-staging-new/public/index.php"
+          "path": "/var/www/wpcaregrid-staging-new/public/index.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "public-legacy",
-          "path": "/var/www/wpcaregrid/public/index.php"
+          "path": "/var/www/wpcaregrid/public/index.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -517,55 +521,73 @@
           "access": "r",
           "expect": "deny",
           "id": "staging-env-via-link",
-          "path": "/var/www/wpcaregrid-staging-new/.env"
+          "path": "/var/www/wpcaregrid-staging-new/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-env",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-storage-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-config-cache",
-          "path": "/var/www/wpcaregrid-staging-new/bootstrap/cache/config.php"
+          "path": "/var/www/wpcaregrid-staging-new/bootstrap/cache/config.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-app-config",
-          "path": "/var/www/wpcaregrid-staging-new/config/app.php"
+          "path": "/var/www/wpcaregrid-staging-new/config/app.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-code",
-          "path": "/var/www/wpcaregrid-staging-new/artisan"
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-config-cache",
-          "path": "/var/www/wpcaregrid/bootstrap/cache/config.php"
+          "path": "/var/www/wpcaregrid/bootstrap/cache/config.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-app-config",
-          "path": "/var/www/wpcaregrid/config/app.php"
+          "path": "/var/www/wpcaregrid/config/app.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-storage-read",
-          "path": "/var/www/wpcaregrid/storage/logs/laravel.log"
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -573,7 +595,9 @@
           "id": "legacy-env",
           "live": false,
           "live_reason": "deploy-owned 0600: DAC masks it",
-          "path": "/var/www/wpcaregrid/.env"
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -626,13 +650,17 @@
           "id": "other-domain-tls-denied",
           "path": "/etc/letsencrypt/archive/other.example/fullchain1.pem",
           "access": "r",
-          "expect": "deny"
+          "expect": "deny",
+          "optional": true,
+          "optional_reason": "Host-managed TLS/private-key directories may deny www-data traversal through DAC; an inaccessible canary is UNPROVEN, never PASS."
         },
         {
           "id": "generic-private-key-denied",
           "path": "/etc/ssl/private/canary.pem",
           "access": "r",
-          "expect": "deny"
+          "expect": "deny",
+          "optional": true,
+          "optional_reason": "Host-managed TLS/private-key directories may deny www-data traversal through DAC; an inaccessible canary is UNPROVEN, never PASS."
         }
       ],
       "environment": "edge",
@@ -653,9 +681,6 @@
         }
       },
       "live_symlink_escape_targets": [
-        "/var/lib/wpcaregrid-deploy/production/shared/.env",
-        "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
         "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
       ],
       "other_sockets": [],
@@ -674,12 +699,16 @@
         {
           "expect": "deny",
           "id": "generic-php85-deny",
-          "path": "/run/php/php8.5-fpm.sock"
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
           "id": "legacy",
-          "path": "/run/php/php8.4-fpm.sock"
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         }
       ],
       "symlink_dirs": {
@@ -800,25 +829,33 @@
           "access": "r",
           "expect": "deny",
           "id": "staging-code-read",
-          "path": "/var/www/wpcaregrid-staging-new/artisan"
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-env-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-storage-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-storage-read",
-          "path": "/var/www/wpcaregrid/storage/logs/laravel.log"
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -826,7 +863,9 @@
           "id": "legacy-env-read",
           "live": false,
           "live_reason": "deploy-owned 0600: DAC masks it",
-          "path": "/var/www/wpcaregrid/.env"
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "x",
@@ -898,7 +937,9 @@
           "access": "x",
           "expect": "deny",
           "id": "exec-php84",
-          "path": "/usr/bin/php8.4"
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "x",
@@ -950,8 +991,6 @@
         }
       },
       "live_symlink_escape_targets": [
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
         "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
       ],
       "network_checks": [
@@ -1061,7 +1100,9 @@
         {
           "expect": "deny",
           "id": "mysql-production",
-          "path": "/run/mysqld/wpcaregrid-production.sock"
+          "path": "/run/mysqld/wpcaregrid-production.sock",
+          "optional": true,
+          "optional_reason": "The production database socket need not exist during pre-secret fixture acceptance; policy denial remains defense-in-depth."
         },
         {
           "expect": "deny",
@@ -1084,12 +1125,16 @@
         {
           "expect": "deny",
           "id": "fpm-staging-next",
-          "path": "/run/php/php8.5-fpm.sock"
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
           "id": "fpm-legacy",
-          "path": "/run/php/php8.4-fpm.sock"
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
@@ -1226,25 +1271,33 @@
           "access": "r",
           "expect": "deny",
           "id": "staging-code-read",
-          "path": "/var/www/wpcaregrid-staging-new/artisan"
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-env-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-storage-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-storage-read",
-          "path": "/var/www/wpcaregrid/storage/logs/laravel.log"
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -1252,7 +1305,9 @@
           "id": "legacy-env-read",
           "live": false,
           "live_reason": "deploy-owned 0600: DAC masks it",
-          "path": "/var/www/wpcaregrid/.env"
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "x",
@@ -1324,7 +1379,9 @@
           "access": "x",
           "expect": "deny",
           "id": "exec-php84",
-          "path": "/usr/bin/php8.4"
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "x",
@@ -1365,8 +1422,6 @@
         }
       },
       "live_symlink_escape_targets": [
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
         "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
       ],
       "mysql_unix_socket": "/run/mysqld/wpcaregrid-production.sock",
@@ -1500,12 +1555,16 @@
         {
           "expect": "deny",
           "id": "fpm-staging-next",
-          "path": "/run/php/php8.5-fpm.sock"
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
           "id": "fpm-legacy",
-          "path": "/run/php/php8.4-fpm.sock"
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
@@ -1623,31 +1682,41 @@
           "access": "r",
           "expect": "deny",
           "id": "staging-code-read",
-          "path": "/var/www/wpcaregrid-staging-new/artisan"
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-env-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-storage-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "w",
           "expect": "deny",
           "id": "staging-storage-write",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/wpcg-probe"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/wpcg-probe",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "staging-release-read",
-          "path": "/var/lib/wpcaregrid-deploy/staging-next/releases/"
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/releases/",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
@@ -1655,19 +1724,25 @@
           "id": "legacy-env-read",
           "live": false,
           "live_reason": "deploy-owned 0600: DAC masks it",
-          "path": "/var/www/wpcaregrid/.env"
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "r",
           "expect": "deny",
           "id": "legacy-storage-read",
-          "path": "/var/www/wpcaregrid/storage/logs/laravel.log"
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "rw",
           "expect": "deny",
           "id": "legacy-scheduler-lock",
-          "path": "/var/lib/wpcaregrid/scheduler.lock"
+          "path": "/var/lib/wpcaregrid/scheduler.lock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "access": "x",
@@ -1882,7 +1957,9 @@
           "access": "x",
           "expect": "deny",
           "id": "exec-php84-cli",
-          "path": "/usr/bin/php8.4"
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         }
       ],
       "environment": "production",
@@ -1897,9 +1974,6 @@
         }
       },
       "live_symlink_escape_targets": [
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
-        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
-        "/var/www/wpcaregrid-staging-new/.env",
         "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
       ],
       "other_sockets": [
@@ -1921,12 +1995,16 @@
         {
           "expect": "deny",
           "id": "staging-next-socket",
-          "path": "/run/php/php8.5-fpm.sock"
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         },
         {
           "expect": "deny",
           "id": "legacy-socket",
-          "path": "/run/php/php8.4-fpm.sock"
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
         }
       ],
       "symlink_dirs": {

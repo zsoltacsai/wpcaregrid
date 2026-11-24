@@ -20,6 +20,6 @@ Ubuntu 26.04 compatibility is checked in an isolated CI runner with AppArmor par
 | `scripts/deployment_transaction_v2.py` | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
 | `scripts/deployment_environment_contract_2_1_7.py` | `b6ffe3229e7b6ee1ca5651e44df373fc1cb58c12dd569eb3dabcea3e17f20096` |
 | `scripts/release_review_policy_v3_1.py` | `5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f` |
-| `scripts/production_deploy_controller_2_1_7.py` | `bde0903123b5ddfc63a77d00925341e137a5f9887d3896e8d7fbfa890d1c3e51` |
-| `scripts/install_production_helper_2_1_7.py` | `0b91e6f225ccb395dec8ef04367684d1422696e8b7e1d8fcedd4d2a015e11c21` |
-| `helper artifact digest` | `73b21d1229c177a4a1620f4602bcedd8a5a6b3b914142323ffb2714ca7dec2c7` |
+| `scripts/production_deploy_controller_2_1_7.py` | `e4812af978320c248dc8bb726d3c5ea9f3eae18d44c55b8fa6b9aa67d644f894` |
+| `scripts/install_production_helper_2_1_7.py` | `791c42107ebdfab8dd0c4ee0da0edb5971227cfbebe0debb8d440c04f7145c19` |
+| `helper artifact digest` | `7bae9c4c8973b0424fd6c5ea0425f76ee86f3e2af888450cf0cf8bb5ed578e4e` |

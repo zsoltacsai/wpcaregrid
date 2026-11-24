@@ -32,6 +32,9 @@ profile wpcaregrid-nginx flags=(attach_disconnected) {
   /etc/nginx/mime.types r,
   /etc/nginx/fastcgi_params r,
   /etc/nginx/modules-enabled/{,**} r,
+  # Ubuntu's packaged nginx.conf always globs conf.d; permit directory enumeration only.
+  /etc/nginx/conf.d/ r,
+  /etc/nginx/snippets/ r,
   /etc/nginx/sites-enabled/ r,
   /etc/nginx/sites-enabled/wpcaregrid-production r,
   /etc/nginx/sites-available/wpcaregrid-production r,

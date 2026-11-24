@@ -53,6 +53,8 @@ class ProductionOnlyPackage(unittest.TestCase):
   self.assertIn('/etc/nginx/sites-enabled/ r,',profile)
   self.assertNotIn('/etc/nginx/sites-enabled/ x,',profile)
   self.assertNotIn('/etc/nginx/sites-available/ x,',profile)
+  self.assertIn('/etc/nginx/conf.d/ r,',profile)
+  self.assertIn('/etc/nginx/snippets/ r,',profile)
   self.assertNotIn('/var/lib/wpcaregrid-deploy/production/state/maintenance r,',profile)
   m=json.loads((PKG/'acceptance/matrix.json').read_text())
   checks={c['id']:c for c in m['profiles']['wpcaregrid-nginx']['checks']}
@@ -61,6 +63,45 @@ class ProductionOnlyPackage(unittest.TestCase):
   self.assertEqual(checks['production-tls-private-key']['expect'],'allow')
   self.assertEqual(checks['other-domain-tls-denied']['expect'],'deny')
   self.assertNotIn('staging-next-pool-config-read', {c['id'] for c in m['profiles']['wpcaregrid-php-fpm-production']['checks']})
+
+ def test_production_only_acceptance_has_no_unreachable_mandatory_host_targets(self):
+  m=json.loads((PKG/'acceptance/matrix.json').read_text())
+  absent=('/var/www/wpcaregrid-staging-new','/var/lib/wpcaregrid-deploy/staging-next',
+          '/var/www/wpcaregrid/','/var/lib/wpcaregrid/','/usr/bin/php8.4',
+          '/run/php/php8.4-fpm.sock','/run/php/php8.5-fpm.sock')
+  for role,spec in m['profiles'].items():
+   for check in spec.get('checks',[]):
+    if any(token in check.get('path','') for token in absent):
+     self.assertTrue(check.get('optional'),(role,check))
+   for sock in spec.get('sockets',[]):
+    if any(token in sock.get('path','') for token in absent):
+     self.assertTrue(sock.get('optional'),(role,sock))
+   self.assertEqual(spec['live_symlink_escape_targets'],['/etc/wpcaregrid-deploy/wpcg-fixture-canary'])
+  nginx={c['id']:c for c in m['profiles']['wpcaregrid-nginx']['checks']}
+  self.assertTrue(nginx['generic-private-key-denied']['optional'])
+  self.assertTrue(nginx['other-domain-tls-denied']['optional'])
+  build=next(p for p in m['profiles'].values() if p.get('profile_role')=='production-build-cli')
+  self.assertTrue(next(s for s in build['sockets'] if s['id']=='mysql-production')['optional'])
+
+ def test_transient_production_cli_may_open_its_scoped_files_but_not_foreign_paths(self):
+  p=PKG/'acceptance/verify-acceptance.py';spec=importlib.util.spec_from_file_location('verify108_transient',p);v=importlib.util.module_from_spec(spec);sys.modules[spec.name]=v;spec.loader.exec_module(v)
+  matrix=json.loads((PKG/'acceptance/matrix.json').read_text()); digest=hashlib.sha256((PKG/'acceptance/matrix.json').read_bytes()).hexdigest()
+  units={u:{'present':True,'pids':[]} for u in matrix['inventory_units']}
+  for unit in matrix['role_units'].values(): units[unit]['present']=False
+  for proc in matrix['transient_classes']:
+   candidate={'schema':2,'complete':True,'scans':2,'matrix_sha256':digest,'boot_id':'a'*32,'units':units,'processes':[{
+    'pid':992,'label':proc['label'],'unit':None,'comm':'php8.5','uids':proc['uids'],'gids':proc['gids'],'groups':proc['groups'],
+    'exe':proc['exe'],'argv0':proc['argv0'],'cgroup':'0::/user.slice/user-0.slice/session-1.scope',
+    'cmdline_sha256':'a'*64,'age_s':1,'fds':['/var/www/wpcaregrid-production/releases/abc/artisan']}]}
+   verdict=v.Verdict();v.check_inventory(verdict,matrix,candidate,'post',[],'post',digest,'a'*32)
+   self.assertFalse(verdict.failures,verdict.failures)
+   if proc['class']=='production-db-probe':
+    candidate['processes'][0]['fds'].append('/run/mysqld/wpcaregrid-production.sock')
+    verdict=v.Verdict();v.check_inventory(verdict,matrix,candidate,'post',[],'post',digest,'a'*32)
+    self.assertFalse(verdict.failures,verdict.failures)
+   candidate['processes'][0]['fds'].append('/var/lib/wpcaregrid-deploy/staging-next/shared/.env')
+   verdict=v.Verdict();v.check_inventory(verdict,matrix,candidate,'post',[],'post',digest,'a'*32)
+   self.assertTrue(any('descriptor' in failure for failure in verdict.failures),verdict.failures)
 
  def test_nginx_descriptor_policy_uses_narrow_component_boundaries(self):
   path=PKG/'acceptance/verify-acceptance.py';spec=importlib.util.spec_from_file_location('verify108_fd',path);v=importlib.util.module_from_spec(spec);sys.modules[spec.name]=v;spec.loader.exec_module(v)

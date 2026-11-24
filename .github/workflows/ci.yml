@@ -142,6 +142,7 @@ jobs:
           python3 scripts/tests/production-helper-2-1-7-full-test.py
           python3 scripts/tests/production-helper-2-1-7-test.py
           python3 scripts/tests/production-helper-2-1-7-coexistence-test.py
+          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-7-test.py
 
       - name: GO-20 confinement 1.0.7 compile-only AppArmor parser check (no kernel load)
         run: |

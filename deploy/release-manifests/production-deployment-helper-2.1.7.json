@@ -3,7 +3,7 @@
   "profile": "production",
   "helper_version": "2.1.7",
   "compatibility_contract": "wpcaregrid-deployment-profile-v2.2",
-  "supersedes_helper_version": "2.1.5",
+  "supersedes_helper_version": "2.1.6",
   "release_review_policy": "V3.1",
   "privileged_invocation": "root-console-direct",
   "transfer_identity": "deploy",
@@ -15,20 +15,20 @@
   "transaction_module": "scripts/deployment_transaction_v2.py",
   "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
   "environment_contract": "scripts/deployment_environment_contract_2_1_7.py",
-  "environment_contract_sha256": "b6ffe3229e7b6ee1ca5651e44df373fc1cb58c12dd569eb3dabcea3e17f20096",
+  "environment_contract_sha256": "b638144c1d4e8acc7c7be9ac1cc9d85e455d98aba195d6fc8f135029445a81f9",
   "release_review_policy_module": "scripts/release_review_policy_v3_1.py",
   "release_review_policy_sha256": "5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f",
-  "helper_artifact_sha256": "73b21d1229c177a4a1620f4602bcedd8a5a6b3b914142323ffb2714ca7dec2c7",
+  "helper_artifact_sha256": "7bae9c4c8973b0424fd6c5ea0425f76ee86f3e2af888450cf0cf8bb5ed578e4e",
   "controller": "scripts/production_deploy_controller_2_1_7.py",
-  "controller_sha256": "bde0903123b5ddfc63a77d00925341e137a5f9887d3896e8d7fbfa890d1c3e51",
+  "controller_sha256": "e4812af978320c248dc8bb726d3c5ea9f3eae18d44c55b8fa6b9aa67d644f894",
   "root_installer": "scripts/install_production_helper_2_1_7.py",
-  "root_installer_sha256": "0b91e6f225ccb395dec8ef04367684d1422696e8b7e1d8fcedd4d2a015e11c21",
+  "root_installer_sha256": "791c42107ebdfab8dd0c4ee0da0edb5971227cfbebe0debb8d440c04f7145c19",
   "policy_schema": 2,
   "php_fpm_confinement_pin": {
     "schema": 3,
     "package_version": "1.0.8",
-    "sha256sums_sha256": "54af45277f9c58bca9519407f3464309289ae557fc54bf0d59699bf5403bbc81",
-    "package_tree": "fbe5e49ae9c2807d6fd79cf72d1bf2a97d315088",
+    "sha256sums_sha256": "aa637d9f151639773d3315ab32ae05462c9b5f87edd290e28f7438acb3d2a0f2",
+    "package_tree": "b302b62cf640a2ddd0a803003365335c5f11222f",
     "files": 9,
     "services": [
       "production",
@@ -38,7 +38,7 @@
       "production-deploy-cli",
       "production-build-cli"
     ],
-    "binding_sha256": "56eeb8c79937f3a5d3f5955ef3126d1bf00ab24976fe200ba76cc5601242bb34"
+    "binding_sha256": "0f1079aa444c2793c85588fa49b314dcfce7a115e0015450efc5f144bed2f9fe"
   },
   "phase_b_default": "DISABLED",
   "production_activation": "BLOCKED_UNTIL_CONFINEMENT_PIN_APPROVED_POLICY_AND_RECOVERY_EVIDENCE",
@@ -49,6 +49,7 @@
   },
   "coexists_with_helper_versions": [
     "2.1.4",
-    "2.1.5"
+    "2.1.5",
+    "2.1.6"
   ]
 }

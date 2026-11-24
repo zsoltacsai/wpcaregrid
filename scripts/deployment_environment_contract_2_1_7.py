@@ -29,7 +29,7 @@ Differences from the original contract:
 
 The confinement pin (``CONFINEMENT_PIN``) binds the approved and merged
 Workstream B package **1.0.8**: its Git tree object, ``SHA256SUMS`` digest, the
-exact seventeen installed files, the seven service roles and both transient
+exact nine installed files, the two service roles and both transient
 production CLI classes. There is no unset/placeholder pin. A pin that does not
 exactly match this module still refuses with ``confinement_package_pin_invalid``.
 
@@ -114,13 +114,13 @@ class ConfinementPin:
 # hashes are re-derived from the package bytes. No intermediate/unset pin exists.
 CONFINEMENT_PIN: ConfinementPin | None = ConfinementPin(
     package_version="1.0.8",
-    sha256sums_sha256="54af45277f9c58bca9519407f3464309289ae557fc54bf0d59699bf5403bbc81",
-    package_tree="fbe5e49ae9c2807d6fd79cf72d1bf2a97d315088",
+    sha256sums_sha256="aa637d9f151639773d3315ab32ae05462c9b5f87edd290e28f7438acb3d2a0f2",
+    package_tree="b302b62cf640a2ddd0a803003365335c5f11222f",
     file_sha256=MappingProxyType({
         '/etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common':
             '995c8f7ce449342bd033bc1258c13a588d3485dbd3788277224c8cb217b5fc35',
         '/etc/apparmor.d/wpcaregrid-nginx':
-            '0fcb54303fbd75174593ca18f780c499e34b6646413254297a97374d9f64f787',
+            '92b29c304d437d84e7a49ae5476d1e6015de5a0ef9df0dc5a30ccefc2bd33eb9',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-build':
             'ffc05f34fec57b2ce3f68cd9833d786ea0bff0b404e720c40b08a6f5c713db56',
         '/etc/apparmor.d/wpcaregrid-php-cli-production-deploy':

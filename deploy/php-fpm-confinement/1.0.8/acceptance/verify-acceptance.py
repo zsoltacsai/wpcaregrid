@@ -55,6 +55,8 @@ CONTROL_PREFIXES = ("/etc/wpcaregrid-deploy", "/home", "/root", "/var/lib/mysql"
 RUNTIME_PREFIXES = {
     "production": ("/run/php/wpcaregrid-production-php8.5-fpm.sock", "/etc/php/8.5/fpm-wpcaregrid-production"),
 }
+FOREIGN_PREFIXES = ("/var/www/wpcaregrid-staging-new", "/var/lib/wpcaregrid-deploy/staging-next",
+                    "/var/www/wpcaregrid", "/var/lib/wpcaregrid")
 ROLE_PREFIXES = {
     "production": ("/var/www/wpcaregrid-production", "/var/lib/wpcaregrid-deploy/production", "/var/log/wpcaregrid-production")
                   + RUNTIME_PREFIXES["production"],
@@ -254,8 +256,10 @@ def check_inventory(v: Verdict, matrix: dict, inv: dict, phase: str, required_ro
             if not isinstance(proc.get("age_s"), (int, float)) or proc["age_s"] > cls["max_age_seconds"]:
                 bad.append(f"age {proc.get('age_s')!r}s is not short-lived (limit {cls['max_age_seconds']}s)")
             for target in proc["fds"]:
-                if any(under(target, p) for p in CONTROL_PREFIXES + ROLE_PREFIXES["production"]
-                       + RUNTIME_PREFIXES["production"]):
+                db_socket = target == "/run/mysqld/wpcaregrid-production.sock"
+                allowed_db_socket = cls["class"] == "production-db-probe" and db_socket
+                if (any(under(target, p) for p in FOREIGN_PREFIXES + RUNTIME_PREFIXES["production"])
+                        or (any(under(target, p) for p in CONTROL_PREFIXES) and not allowed_db_socket)):
                     bad.append(f"descriptor {target!r}")
             if bad:
                 v.fail(f"inventory:{phase}", f"pid {proc['pid']} carries the {cls['class']} label but is not the permitted class: " + "; ".join(bad))
