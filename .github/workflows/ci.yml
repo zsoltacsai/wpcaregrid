@@ -31,6 +31,32 @@ env:
   PHP_EXTENSIONS: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, pdo_mysql, mysqli, fileinfo, openssl, curl, posix, pcntl, bcmath
 
 jobs:
+  production_only_confinement_ubuntu26:
+    name: Production-only confinement on Ubuntu 26.04 (isolated CI)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install parser and systemd validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apparmor apparmor-utils nginx php8.5-fpm
+      - name: Compile 1.0.8 AppArmor profiles without loading them
+        run: |
+          set -euo pipefail
+          pkg=deploy/php-fpm-confinement/1.0.8
+          for profile in "$pkg"/apparmor/wpcaregrid-*; do
+            apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
+          done
+      - name: Validate production units with Ubuntu 26.04 systemd
+        run: |
+          set -euo pipefail
+          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.8/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
+          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.8/systemd/wpcaregrid-production-php8.5-fpm.service
+      - name: Production-only package, acceptance, and immutable-byte tests
+        run: python3 scripts/tests/production-only-confinement-1-0-8-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
@@ -107,6 +133,15 @@ jobs:
           PHP_FPM_CONFINEMENT_REQUIRE_PARSER: "1"
           PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY: "1"
         run: python3 scripts/tests/php-fpm-confinement-test.py
+
+      - name: Production-only confinement 1.0.8 offline acceptance and immutable-byte tests
+        run: python3 scripts/tests/production-only-confinement-1-0-8-test.py
+
+      - name: Production helper 2.1.7 focused contract and integrity tests
+        run: |
+          python3 scripts/tests/production-helper-2-1-7-full-test.py
+          python3 scripts/tests/production-helper-2-1-7-test.py
+          python3 scripts/tests/production-helper-2-1-7-coexistence-test.py
 
       - name: GO-20 confinement 1.0.7 compile-only AppArmor parser check (no kernel load)
         run: |
