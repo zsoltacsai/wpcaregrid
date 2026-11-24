@@ -764,7 +764,9 @@ class LedgerStreamingTest(unittest.TestCase):
         runs = self._sample_ci_runs(sha=sha)
         jobs = self._sample_ci_jobs()
         receipt = weekly.build_ci_staging_equivalent_receipt(runs, jobs, sha)
-        now = datetime(2026, 11, 22, 20, 0, 0, tzinfo=timezone.utc) + timedelta(days=9)
+        # Age the just-created receipt itself so the expiry test stays deterministic
+        # regardless of when CI runs it.
+        now = datetime.fromisoformat(receipt["created_at"]) + timedelta(days=9)
         with self.assertRaisesRegex(weekly.PolicyError, "ci_staging_receipt_expired"):
             weekly.validate_ci_staging_equivalent_receipt(receipt, sha, now=now)
 
