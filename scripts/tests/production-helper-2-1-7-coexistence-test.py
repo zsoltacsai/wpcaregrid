@@ -37,5 +37,15 @@ class Helper217Coexistence(unittest.TestCase):
  def test_docs_pin_table_matches_installer_hash(self):
   doc=(ROOT/'docs/PRODUCTION_HELPER_INSTALL_2_1_7.md').read_text();start=doc.index('<!-- PINS:BEGIN -->') if '<!-- PINS:BEGIN -->' in doc else doc.rfind('| Artifact | SHA-256 |')
   block=doc[start:]
-  self.assertIn(f"`{hashlib.sha256((ROOT/'scripts/install_production_helper_2_1_7.py').read_bytes()).hexdigest()}`",block)
+  manifest=json.loads((ROOT/'deploy/release-manifests/production-deployment-helper-2.1.7.json').read_text())
+  paths={'entrypoint_sha256':'scripts/wpcaregrid-deploy-production-priv-2_1_7.py',
+         'backend_sha256':'scripts/deployment_backend_v2_1_7.py','transaction_module_sha256':'scripts/deployment_transaction_v2.py',
+         'environment_contract_sha256':'scripts/deployment_environment_contract_2_1_7.py',
+         'release_review_policy_sha256':'scripts/release_review_policy_v3_1.py',
+         'controller_sha256':'scripts/production_deploy_controller_2_1_7.py',
+         'root_installer_sha256':'scripts/install_production_helper_2_1_7.py'}
+  for key,path in paths.items():
+   digest=hashlib.sha256((ROOT/path).read_bytes()).hexdigest()
+   self.assertEqual(manifest[key],digest,key)
+   self.assertIn(f'| `{path}` | `{digest}` |',block)
 if __name__=='__main__':unittest.main(verbosity=2)

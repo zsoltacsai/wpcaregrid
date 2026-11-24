@@ -1,0 +1,2085 @@
+{
+  "canary": "WPCG-FIXTURE-CANARY-v1\n",
+  "fixtures": {
+    "files": [
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/etc/wpcaregrid-deploy/wpcg-fixture-canary",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/home/wpcg-fixture/canary",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/etc/shadow-wpcg-fixture",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/var/lib/mysql-wpcg-fixture/canary",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/run/mysqld/wpcg-fixture-canary",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/artisan",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0640",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0660",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "0640",
+        "path": "/var/log/wpcaregrid-production/php-fpm.log",
+        "uid": 33
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/public/index.php",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0640",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/bootstrap/cache/config.php",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0644",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/config/app.php",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0640",
+        "path": "/var/lib/wpcaregrid-deploy/production/state/maintenance",
+        "uid": 0
+      },
+      {
+        "path": "/etc/ssl/private/canary.pem",
+        "uid": 0,
+        "gid": 0,
+        "mode": "0600"
+      }
+    ],
+    "mkdirs": [
+      {
+        "path": "/etc/letsencrypt",
+        "mode": "0755",
+        "uid": 0,
+        "gid": 0
+      },
+      {
+        "path": "/etc/letsencrypt/archive",
+        "mode": "0755",
+        "uid": 0,
+        "gid": 0
+      },
+      {
+        "path": "/etc/letsencrypt/live",
+        "mode": "0755",
+        "uid": 0,
+        "gid": 0
+      },
+      {
+        "path": "/etc/ssl",
+        "mode": "0755",
+        "uid": 0,
+        "gid": 0
+      },
+      {
+        "path": "/etc/ssl/private",
+        "mode": "0755",
+        "uid": 0,
+        "gid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/etc/wpcaregrid-deploy",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/home/wpcg-fixture",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/lib/mysql-wpcg-fixture",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/run/mysqld",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/lib/wpcaregrid-deploy",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production/releases",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/lib/wpcaregrid-deploy/production",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/cache",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/log/wpcaregrid-production",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/incoming",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/inbox",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/state",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/receipts",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "0750",
+        "path": "/var/lib/wpcaregrid-deploy/production/database-backups",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/public",
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/bootstrap",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/bootstrap/cache",
+        "uid": 33
+      },
+      {
+        "gid": 0,
+        "mode": "0755",
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/config",
+        "uid": 0
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/app",
+        "uid": 33
+      },
+      {
+        "gid": 33,
+        "mode": "2770",
+        "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/sessions",
+        "uid": 33
+      }
+    ],
+    "symlinks": [
+      {
+        "path": "/var/www/wpcaregrid-production/current",
+        "target": "releases/wpcg-fixture"
+      },
+      {
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/.env",
+        "target": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+      },
+      {
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/storage",
+        "target": "/var/lib/wpcaregrid-deploy/production/shared/storage"
+      },
+      {
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/vendor",
+        "target": "/var/lib/wpcaregrid-deploy/production/shared/vendor"
+      },
+      {
+        "path": "/var/www/wpcaregrid-production/releases/wpcg-fixture/public/storage",
+        "target": "/var/lib/wpcaregrid-deploy/production/shared/storage"
+      }
+    ]
+  },
+  "peer_entries": [
+    "environ",
+    "cmdline",
+    "maps",
+    "mem",
+    "fd/",
+    "fdinfo/",
+    "root/",
+    "cwd/",
+    "exe",
+    "ns/mnt",
+    "auxv"
+  ],
+  "permitted_group33_holders": [],
+  "permitted_group33_holders_note": "uids of trusted operator identities allowed to hold gid/supplementary group 33 unconfined; empty on purpose (a reviewed decision, never a default)",
+  "phases": {
+    "post": {
+      "description": "after production FPM starts while route remains closed: production and Nginx enforced peers only",
+      "excluded_roles": []
+    },
+    "pre": {
+      "description": "before production FPM unit exists: no production secret or route; Nginx may be accepted as the only service peer",
+      "excluded_roles": [
+        "production"
+      ]
+    }
+  },
+  "production_fence": {
+    "keep_traversable": [
+      "/var/www/wpcaregrid-production",
+      "/var/www/wpcaregrid-production/releases"
+    ],
+    "named_secret_paths": [
+      "/var/lib/wpcaregrid-deploy/production/shared/.env",
+      "/var/lib/wpcaregrid-deploy/production/shared/storage",
+      "/var/www/wpcaregrid-production/releases/*/.env",
+      "/var/www/wpcaregrid-production/releases/*/bootstrap/cache",
+      "/var/log/wpcaregrid-production"
+    ],
+    "public_exempt": "/var/www/wpcaregrid-production/releases/*/public",
+    "roots": [
+      "/var/www/wpcaregrid-production",
+      "/var/lib/wpcaregrid-deploy/production",
+      "/var/log/wpcaregrid-production"
+    ],
+    "route_opening_requires": [
+      "peer_live_acceptance_pass",
+      "secret_gate_pass",
+      "database_application_gate_pass",
+      "separate_owner_route_go"
+    ],
+    "secret_creation_requires": [
+      "peer_live_acceptance_pass"
+    ],
+    "production_jobs": "fenced_until_separate_approved_plan",
+    "current_release_link": "/var/www/wpcaregrid-production/current"
+  },
+  "profiles": {
+    "wpcaregrid-nginx": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "public-production",
+          "path": "/var/www/wpcaregrid-production/current/public/index.php"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "public-staging-next",
+          "path": "/var/www/wpcaregrid-staging-new/public/index.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "public-legacy",
+          "path": "/var/www/wpcaregrid/public/index.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "no-production-state-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/maintenance",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-env-via-link",
+          "path": "/var/www/wpcaregrid-production/current/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-env",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "production-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-public-storage-link",
+          "path": "/var/www/wpcaregrid-production/current/public/storage/logs/laravel.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-config-cache",
+          "path": "/var/www/wpcaregrid-production/current/bootstrap/cache/config.php"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-app-config",
+          "path": "/var/www/wpcaregrid-production/current/config/app.php"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-code",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-backups",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-log",
+          "path": "/var/log/wpcaregrid-production/php-fpm.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env-via-link",
+          "path": "/var/www/wpcaregrid-staging-new/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-config-cache",
+          "path": "/var/www/wpcaregrid-staging-new/bootstrap/cache/config.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-app-config",
+          "path": "/var/www/wpcaregrid-staging-new/config/app.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-code",
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-config-cache",
+          "path": "/var/www/wpcaregrid/bootstrap/cache/config.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-app-config",
+          "path": "/var/www/wpcaregrid/config/app.php",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-storage-read",
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env",
+          "live": false,
+          "live_reason": "deploy-owned 0600: DAC masks it",
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-control-plane",
+          "optional": true,
+          "path": "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-home",
+          "optional": true,
+          "path": "/home/wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-shadow",
+          "optional": true,
+          "path": "/etc/shadow-wpcg-fixture"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-datadir",
+          "optional": true,
+          "path": "/var/lib/mysql-wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-run",
+          "optional": true,
+          "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "id": "production-tls-certificate",
+          "path": "/etc/letsencrypt/archive/wpcaregrid.com/fullchain1.pem",
+          "access": "r",
+          "expect": "allow",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "id": "production-tls-private-key",
+          "path": "/etc/letsencrypt/archive/wpcaregrid.com/privkey1.pem",
+          "access": "r",
+          "expect": "allow",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "id": "other-domain-tls-denied",
+          "path": "/etc/letsencrypt/archive/other.example/fullchain1.pem",
+          "access": "r",
+          "expect": "deny",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "id": "generic-private-key-denied",
+          "path": "/etc/ssl/private/canary.pem",
+          "access": "r",
+          "expect": "deny",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        }
+      ],
+      "environment": "edge",
+      "file": "apparmor/wpcaregrid-nginx",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/.env": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/public/storage": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/app/public",
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/storage": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage",
+          "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1/vendor": "/var/lib/wpcaregrid-deploy/staging-next/shared/vendor",
+          "/var/www/wpcaregrid-production/current": "/var/www/wpcaregrid-production/releases/wpcg-fixture",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/.env": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/public/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/vendor": "/var/lib/wpcaregrid-deploy/production/shared/vendor",
+          "/var/www/wpcaregrid-staging-new": "/var/lib/wpcaregrid-deploy/staging-next/releases/rel1"
+        }
+      },
+      "live_symlink_escape_targets": [
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ],
+      "other_sockets": [],
+      "own_socket": "",
+      "peer_roles": [
+        "production"
+      ],
+      "profile_role": "nginx",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "production",
+          "optional": false,
+          "path": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "generic-php85-deny",
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "legacy",
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        }
+      ],
+      "symlink_dirs": {
+        "lexical": [
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/public"
+        ],
+        "real": "/var/www/wpcaregrid-production/releases/wpcg-fixture/public"
+      },
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/production/shared/.env",
+        "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/laravel.log",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ]
+    },
+    "wpcaregrid-php-cli-production-build": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "release-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "release-config-cache-read",
+          "path": "/var/www/wpcaregrid-production/current/bootstrap/cache/config.php"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "shared-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "env-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "vendor-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "cache-write",
+          "path": "/var/www/wpcaregrid-production/current/bootstrap/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "storage-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/storage/framework/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "code-write",
+          "live": false,
+          "live_reason": "root-owned release: DAC also denies; the model proves the rule",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "env-write",
+          "live": false,
+          "live_reason": "root:group 0640: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "vendor-write",
+          "live": false,
+          "live_reason": "root-owned: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "app-config-write",
+          "live": false,
+          "live_reason": "root-owned release: DAC also denies",
+          "path": "/var/www/wpcaregrid-production/current/config/app.php"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "state-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/maintenance"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "backups-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-log-read",
+          "path": "/var/log/wpcaregrid-production/php-fpm.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-storage-read",
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env-read",
+          "live": false,
+          "live_reason": "deploy-owned 0600: DAC masks it",
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-shell",
+          "path": "/usr/bin/dash"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-id",
+          "path": "/usr/bin/id"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-python",
+          "path": "/usr/bin/python3",
+          "probe_scope": "original_profile"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-control-plane",
+          "optional": true,
+          "path": "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-home",
+          "optional": true,
+          "path": "/home/wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-shadow",
+          "optional": true,
+          "path": "/etc/shadow-wpcg-fixture"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-datadir",
+          "optional": true,
+          "path": "/var/lib/mysql-wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-run",
+          "optional": true,
+          "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-app-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/app/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-sessions-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/sessions/wpcg-probe"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php84",
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "x",
+          "expect": "allow",
+          "id": "exec-own-php85",
+          "live": false,
+          "live_reason": "the real command runs under the profile in acceptance step 7a; the probe profile executes python, not php",
+          "path": "/usr/bin/php8.5"
+        }
+      ],
+      "commands_disabled": [
+        {
+          "id": "phase-b-migration-runner",
+          "reason": "Phase B stays disabled and is not authorized: it needs database DDL, AppArmor cannot tell DDL from a query on the allowed unix socket, and its current runner uses TCP host/port, which this profile never allows. It needs its own conversion and review before it could ever be enabled."
+        }
+      ],
+      "commands_supported": [
+        {
+          "argv": [
+            "/usr/bin/php8.5",
+            "artisan",
+            "package:discover",
+            "--ansi",
+            "--no-interaction"
+          ],
+          "id": "package-discover",
+          "network": "none"
+        },
+        {
+          "argv": [
+            "/usr/bin/php8.5",
+            "artisan",
+            "config:cache",
+            "--no-interaction"
+          ],
+          "id": "config-cache",
+          "network": "none"
+        }
+      ],
+      "environment": "production-build-cache-cli",
+      "file": "apparmor/wpcaregrid-php-cli-production-build",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/www/wpcaregrid-production/current": "/var/www/wpcaregrid-production/releases/wpcg-fixture",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/.env": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/vendor": "/var/lib/wpcaregrid-deploy/production/shared/vendor"
+        }
+      },
+      "live_symlink_escape_targets": [
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ],
+      "network_checks": [
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-stream-bind",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-bind",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "connect",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-connect-loopback",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "connect",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-stream-connect-loopback",
+          "optional": true,
+          "optional_reason": "the host may have no ::1; the inet6 create check above still proves the family is refused",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-seqpacket-create",
+          "type": "SOCK_SEQPACKET"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-raw-create",
+          "type": "SOCK_RAW"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_NETLINK",
+          "id": "netlink-raw-create",
+          "type": "SOCK_RAW"
+        }
+      ],
+      "notes": "Offline package:discover/config:cache only; all network families and every unix socket are denied.",
+      "other_sockets": [],
+      "own_socket": "",
+      "peer_roles": [
+        "production",
+        "nginx"
+      ],
+      "profile_role": "production-build-cli",
+      "sockets": [
+        {
+          "expect": "deny",
+          "id": "mysql-production",
+          "path": "/run/mysqld/wpcaregrid-production.sock",
+          "optional": true,
+          "optional_reason": "The production DB socket may not exist during pre-secret fixture acceptance; absence is UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "mysql-restore",
+          "optional": true,
+          "path": "/run/mysqld/wpcaregrid-production-restore.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "mysql-vendor-main",
+          "optional": true,
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "banner": "WPCG-SIBLING-CANARY-v1\n",
+          "expect": "deny",
+          "id": "mysql-sibling-canary",
+          "path": "/run/mysqld/wpcaregrid-acceptance-canary.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-staging-next",
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-legacy",
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-production",
+          "optional": true,
+          "path": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "journal-stdout",
+          "path": "/run/systemd/journal/stdout"
+        },
+        {
+          "expect": "deny",
+          "id": "dbus-system",
+          "optional": true,
+          "path": "/run/dbus/system_bus_socket"
+        }
+      ],
+      "symlink_dirs": {
+        "lexical": [
+          "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+        ],
+        "real": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+      },
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+        "/var/www/wpcaregrid-staging-new/.env",
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ]
+    },
+    "wpcaregrid-php-cli-production-deploy": {
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "release-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "release-config-cache-read",
+          "path": "/var/www/wpcaregrid-production/current/bootstrap/cache/config.php"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "shared-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "env-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "vendor-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "cache-write",
+          "path": "/var/www/wpcaregrid-production/current/bootstrap/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/storage/framework/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "code-write",
+          "live": false,
+          "live_reason": "root-owned release: DAC also denies; the model proves the rule",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "env-write",
+          "live": false,
+          "live_reason": "root:group 0640: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "vendor-write",
+          "live": false,
+          "live_reason": "root-owned: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "app-config-write",
+          "live": false,
+          "live_reason": "root-owned release: DAC also denies",
+          "path": "/var/www/wpcaregrid-production/current/config/app.php"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "state-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/maintenance"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "backups-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "production-log-read",
+          "path": "/var/log/wpcaregrid-production/php-fpm.log"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-storage-read",
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env-read",
+          "live": false,
+          "live_reason": "deploy-owned 0600: DAC masks it",
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-shell",
+          "path": "/usr/bin/dash"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-id",
+          "path": "/usr/bin/id"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-python",
+          "path": "/usr/bin/python3",
+          "probe_scope": "original_profile"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-control-plane",
+          "optional": true,
+          "path": "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-home",
+          "optional": true,
+          "path": "/home/wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-shadow",
+          "optional": true,
+          "path": "/etc/shadow-wpcg-fixture"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-datadir",
+          "optional": true,
+          "path": "/var/lib/mysql-wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-run",
+          "optional": true,
+          "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-app-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/app/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "storage-sessions-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/sessions/wpcg-probe"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php84",
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "x",
+          "expect": "allow",
+          "id": "exec-own-php85",
+          "live": false,
+          "live_reason": "the real command runs under the profile in acceptance step 7a; the probe profile executes python, not php",
+          "path": "/usr/bin/php8.5"
+        }
+      ],
+      "commands_disabled": [
+        {
+          "id": "phase-b-migration-runner",
+          "reason": "Phase B stays disabled and is not authorized: it needs database DDL, AppArmor cannot tell DDL from a query on the allowed unix socket, and its current runner uses TCP host/port, which this profile never allows. It needs its own conversion and review before it could ever be enabled."
+        }
+      ],
+      "commands_supported": [
+        {
+          "argv": [
+            "/usr/bin/php8.5",
+            "-r",
+            "<fixed config-only probe>"
+          ],
+          "id": "runtime-identity-probe",
+          "network": "unix stream connect to /run/mysqld/wpcaregrid-production.sock only",
+          "note": "connects with unix_socket set to exactly that path; no host/port, no TCP fallback; the helper must verify the observed mysqld socket and keep the exact server-UUID check"
+        }
+      ],
+      "environment": "production-db-probe",
+      "file": "apparmor/wpcaregrid-php-cli-production-deploy",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/www/wpcaregrid-production/current": "/var/www/wpcaregrid-production/releases/wpcg-fixture",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/.env": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/vendor": "/var/lib/wpcaregrid-deploy/production/shared/vendor"
+        }
+      },
+      "live_symlink_escape_targets": [
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ],
+      "mysql_unix_socket": "/run/mysqld/wpcaregrid-production.sock",
+      "network_checks": [
+        {
+          "action": "create",
+          "expect": "allow",
+          "family": "AF_UNIX",
+          "id": "unix-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-stream-bind",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "bind",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-bind",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "connect",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-stream-connect-loopback",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-stream-create",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "connect",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-stream-connect-loopback",
+          "optional": true,
+          "optional_reason": "the host may have no ::1; the inet6 create check above still proves the family is refused",
+          "type": "SOCK_STREAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET",
+          "id": "inet-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_INET6",
+          "id": "inet6-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-dgram-create",
+          "type": "SOCK_DGRAM"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-seqpacket-create",
+          "type": "SOCK_SEQPACKET"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_UNIX",
+          "id": "unix-raw-create",
+          "type": "SOCK_RAW"
+        },
+        {
+          "action": "create",
+          "expect": "deny",
+          "family": "AF_NETLINK",
+          "id": "netlink-raw-create",
+          "type": "SOCK_RAW"
+        }
+      ],
+      "notes": "Read-only runtime identity probe. Exact MySQL unix socket only; no application-tree writes.",
+      "other_sockets": [],
+      "own_socket": "",
+      "peer_roles": [
+        "production",
+        "nginx"
+      ],
+      "profile_role": "production-deploy-cli",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "mysql-production",
+          "path": "/run/mysqld/wpcaregrid-production.sock",
+          "optional": true,
+          "optional_reason": "The production DB socket may not exist during pre-secret fixture acceptance; absence is UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "mysql-restore",
+          "optional": true,
+          "path": "/run/mysqld/wpcaregrid-production-restore.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "mysql-vendor-main",
+          "optional": true,
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "banner": "WPCG-SIBLING-CANARY-v1\n",
+          "expect": "deny",
+          "id": "mysql-sibling-canary",
+          "path": "/run/mysqld/wpcaregrid-acceptance-canary.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-staging-next",
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-legacy",
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "fpm-production",
+          "optional": true,
+          "path": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "journal-stdout",
+          "path": "/run/systemd/journal/stdout"
+        },
+        {
+          "expect": "deny",
+          "id": "dbus-system",
+          "optional": true,
+          "path": "/run/dbus/system_bus_socket"
+        }
+      ],
+      "symlink_dirs": {
+        "lexical": [
+          "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+        ],
+        "real": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+      },
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+        "/var/www/wpcaregrid-staging-new/.env",
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ]
+    },
+    "wpcaregrid-php-fpm-production": {
+      "abstract_socket": {
+        "expect": "deny"
+      },
+      "checks": [
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-code-read",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-env-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/.env"
+        },
+        {
+          "access": "r",
+          "expect": "allow",
+          "id": "own-vendor-read",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/framework/cache/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "allow",
+          "id": "own-storage-via-release-link",
+          "path": "/var/www/wpcaregrid-production/current/storage/logs/wpcg-probe"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-code-write",
+          "live": false,
+          "live_reason": "root-owned release: DAC (and a read-only mount) also deny; model proves the rule",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-env-write",
+          "live": false,
+          "live_reason": "root:group 0640: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "own-vendor-write",
+          "live": false,
+          "live_reason": "root-owned: DAC also denies",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/vendor/autoload.php"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "own-code-exec",
+          "live": false,
+          "live_reason": "not a binary",
+          "path": "/var/www/wpcaregrid-production/current/artisan"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "own-storage-exec",
+          "live": false,
+          "live_reason": "not a binary",
+          "path": "/var/lib/wpcaregrid-deploy/production/shared/storage/x"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-code-read",
+          "path": "/var/www/wpcaregrid-staging-new/artisan",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-env-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-storage-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "staging-storage-write",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/wpcg-probe",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "staging-release-read",
+          "path": "/var/lib/wpcaregrid-deploy/staging-next/releases/",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-env-read",
+          "live": false,
+          "live_reason": "deploy-owned 0600: DAC masks it",
+          "path": "/var/www/wpcaregrid/.env",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "legacy-storage-read",
+          "path": "/var/www/wpcaregrid/storage/logs/laravel.log",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "legacy-scheduler-lock",
+          "path": "/var/lib/wpcaregrid/scheduler.lock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-shell",
+          "path": "/usr/bin/dash"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-python",
+          "path": "/usr/bin/python3",
+          "probe_scope": "original_profile"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php-cli",
+          "path": "/usr/bin/php8.5"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-incoming",
+          "path": "/var/lib/wpcaregrid-deploy/production/incoming/",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-inbox",
+          "path": "/var/lib/wpcaregrid-deploy/production/inbox/",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-state",
+          "path": "/var/lib/wpcaregrid-deploy/production/state/",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-receipts",
+          "path": "/var/lib/wpcaregrid-deploy/production/receipts/",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "own-database-backups",
+          "path": "/var/lib/wpcaregrid-deploy/production/database-backups/",
+          "optional": true,
+          "optional_reason": "Host-managed TLS or root-owned helper directories may be absent or DAC-inaccessible before secret placement; inaccessible probes are UNPROVEN, never PASS."
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-profile",
+          "live": false,
+          "live_reason": "root-owned 0700 tree: DAC masks it; fixture-control-plane covers the rule",
+          "path": "/etc/wpcaregrid-deploy/profiles/production-v2.1.2.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "control-plane-credentials",
+          "live": false,
+          "live_reason": "see control-plane-profile",
+          "path": "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-home",
+          "live": false,
+          "live_reason": "home dirs are 0700: DAC masks them; fixture-home covers the rule",
+          "path": "/home/deploy/.private/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "deploy-backups",
+          "live": false,
+          "live_reason": "see deploy-home",
+          "path": "/home/deploy/private-backups/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "root-ssh",
+          "live": false,
+          "live_reason": "/root is 0700: DAC masks it",
+          "path": "/root/.ssh/id_ed25519"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "shadow",
+          "live": false,
+          "live_reason": "root-owned: DAC masks it; fixture-shadow covers the rule",
+          "path": "/etc/shadow"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "mysql-datadir",
+          "live": false,
+          "live_reason": "mysql-owned 0700: DAC masks it; fixture-mysql-datadir covers the rule",
+          "path": "/var/lib/mysql/"
+        },
+        {
+          "access": "rw",
+          "expect": "deny",
+          "id": "mysql-socket",
+          "live": false,
+          "live_reason": "covered by fixture-mysql-run",
+          "path": "/run/mysqld/mysqld.sock"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-environ",
+          "live": false,
+          "live_reason": "pid 1 is root-owned: DAC masks it; peer checks cover /proc",
+          "path": "/proc/1/environ"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-cmdline",
+          "live": false,
+          "live_reason": "see proc-environ",
+          "path": "/proc/1/cmdline"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-mem",
+          "live": false,
+          "live_reason": "see proc-environ",
+          "path": "/proc/1/mem"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-fd",
+          "live": false,
+          "live_reason": "see proc-environ",
+          "path": "/proc/1/fd/"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "proc-root",
+          "live": false,
+          "live_reason": "see proc-environ",
+          "path": "/proc/1/root"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sysrq",
+          "live": false,
+          "live_reason": "root-only: DAC masks it",
+          "path": "/proc/sysrq-trigger"
+        },
+        {
+          "access": "w",
+          "expect": "deny",
+          "id": "proc-sys-write",
+          "live": false,
+          "live_reason": "root-only: DAC masks it",
+          "path": "/proc/sys/vm/drop_caches"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-control-plane",
+          "optional": true,
+          "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
+          "path": "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-home",
+          "optional": true,
+          "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
+          "path": "/home/wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-shadow",
+          "optional": true,
+          "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
+          "path": "/etc/shadow-wpcg-fixture"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-datadir",
+          "optional": true,
+          "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
+          "path": "/var/lib/mysql-wpcg-fixture/canary"
+        },
+        {
+          "access": "r",
+          "expect": "deny",
+          "id": "fixture-mysql-run",
+          "optional": true,
+          "optional_reason": "the real parent directory may not be traversable by www-data; DAC then masks the fixture and the check is reported UNPROVEN, never PASS",
+          "path": "/run/mysqld/wpcg-fixture-canary"
+        },
+        {
+          "access": "x",
+          "expect": "deny",
+          "id": "exec-php84-cli",
+          "path": "/usr/bin/php8.4",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        }
+      ],
+      "environment": "production",
+      "file": "apparmor/wpcaregrid-php-fpm-production",
+      "kind": "allowlist",
+      "layout": {
+        "symlinks": {
+          "/var/www/wpcaregrid-production/current": "/var/www/wpcaregrid-production/releases/wpcg-fixture",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/.env": "/var/lib/wpcaregrid-deploy/production/shared/.env",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/storage": "/var/lib/wpcaregrid-deploy/production/shared/storage",
+          "/var/www/wpcaregrid-production/releases/wpcg-fixture/vendor": "/var/lib/wpcaregrid-deploy/production/shared/vendor"
+        }
+      },
+      "live_symlink_escape_targets": [
+        "/etc/wpcaregrid-deploy/wpcg-fixture-canary"
+      ],
+      "other_sockets": [
+        "/run/php/php8.5-fpm.sock",
+        "/run/php/php8.4-fpm.sock",
+        "/run/php/php-fpm.sock"
+      ],
+      "own_socket": "/run/php/wpcaregrid-production-php8.5-fpm.sock",
+      "peer_roles": [
+        "nginx"
+      ],
+      "profile_role": "production",
+      "sockets": [
+        {
+          "expect": "allow",
+          "id": "own-socket",
+          "path": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+        },
+        {
+          "expect": "deny",
+          "id": "staging-next-socket",
+          "path": "/run/php/php8.5-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        },
+        {
+          "expect": "deny",
+          "id": "legacy-socket",
+          "path": "/run/php/php8.4-fpm.sock",
+          "optional": true,
+          "optional_reason": "The production-only host may not contain this staging/legacy/PHP service artifact; an unreachable target is reported UNPROVEN, never PASS."
+        }
+      ],
+      "symlink_dirs": {
+        "lexical": [
+          "/var/www/wpcaregrid-production/current/storage/logs",
+          "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+        ],
+        "real": "/var/lib/wpcaregrid-deploy/production/shared/storage/logs"
+      },
+      "symlink_escape_targets": [
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/.env",
+        "/var/lib/wpcaregrid-deploy/staging-next/shared/storage/logs/laravel.log",
+        "/var/www/wpcaregrid-staging-new/.env",
+        "/var/www/wpcaregrid/.env",
+        "/etc/wpcaregrid-deploy/credentials/production-database-2.0.0.json"
+      ]
+    }
+  },
+  "role_profiles": {
+    "nginx": "wpcaregrid-nginx",
+    "production": "wpcaregrid-php-fpm-production"
+  },
+  "role_required": {
+    "nginx": true,
+    "production": true
+  },
+  "role_runtime": {
+    "note": "Only production FPM and Nginx are acceptance roles. Inventory also scans php8.5-fpm.service as a forbidden-unit sentinel; any process there is unknown and fails closed. Process identity is the exact (AppArmor label, systemd unit) pair. Every live process with real/effective/supplementary UID/GID 33 is inventoried; unreadable or unmapped peers fail closed.",
+    "roles": {
+      "production": {
+        "fpm_binary": "/usr/sbin/php-fpm8.5",
+        "pool_dir": "/etc/php/8.5/fpm-wpcaregrid-production",
+        "socket": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+      }
+    }
+  },
+  "role_units": {
+    "nginx": "nginx.service",
+    "production": "wpcaregrid-production-php8.5-fpm.service"
+  },
+  "schema": 1,
+  "scm": {
+    "canary": "/home/wpcg-fixture/canary"
+  },
+  "sibling_canary": {
+    "banner": "WPCG-SIBLING-CANARY-v1\n",
+    "mode": "0666",
+    "note": "A harmless root-run listener (sibling-listener.py) that sends only this banner. It makes the sibling-socket negative check provable: the unconfined baseline must read the banner, the confined run must be refused by AppArmor. A host where the listener is absent FAILS the check; it can never pass.",
+    "path": "/run/mysqld/wpcaregrid-acceptance-canary.sock"
+  },
+  "transient_classes": [
+    {
+      "argv0": "/usr/bin/php8.5",
+      "cgroup": "the production root-console helper's session or transient scope; never a *.service unit",
+      "cgroup_regex": "^0::/user\\.slice/user-0\\.slice/session-[0-9]+\\.scope$",
+      "class": "production-db-probe",
+      "cmdline_sha256": "64 hex required; the exact allowlist of fixed argv hashes is enforced by the canonical contract (workstream A)",
+      "exe": "/usr/bin/php8.5",
+      "gids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "groups": [],
+      "label": "wpcaregrid-php-cli-production-deploy (enforce)",
+      "label_required_state": "enforce",
+      "lifetime": "short-lived root-console runtime identity probe only",
+      "max_age_seconds": 960,
+      "phases": [
+        "post"
+      ],
+      "profile": "wpcaregrid-php-cli-production-deploy",
+      "uids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "unit": null
+    },
+    {
+      "argv0": "/usr/bin/php8.5",
+      "cgroup": "the production root-console helper's session or transient scope; never a *.service unit",
+      "cgroup_regex": "^0::/user\\.slice/user-0\\.slice/session-[0-9]+\\.scope$",
+      "class": "production-build-cli",
+      "cmdline_sha256": "64 hex required; the exact allowlist of fixed argv hashes is enforced by the canonical contract (workstream A)",
+      "exe": "/usr/bin/php8.5",
+      "gids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "groups": [],
+      "label": "wpcaregrid-php-cli-production-build (enforce)",
+      "label_required_state": "enforce",
+      "lifetime": "short-lived root-console package:discover/config:cache only",
+      "max_age_seconds": 960,
+      "phases": [
+        "post"
+      ],
+      "profile": "wpcaregrid-php-cli-production-build",
+      "uids": [
+        33,
+        33,
+        33,
+        33
+      ],
+      "unit": null
+    }
+  ],
+  "version": "1.0.9",
+  "inventory_units": [
+    "nginx.service",
+    "wpcaregrid-production-php8.5-fpm.service",
+    "php8.5-fpm.service"
+  ]
+}
