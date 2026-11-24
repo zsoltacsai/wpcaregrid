@@ -47,23 +47,18 @@ jobs:
       - name: Compile production-only AppArmor profiles without loading them
         run: |
           set -euo pipefail
-          for version in 1.0.8 1.0.9 1.0.10 1.0.11; do
-            pkg="deploy/php-fpm-confinement/$version"
-            for profile in "$pkg"/apparmor/wpcaregrid-*; do
-              apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
-            done
+          pkg=deploy/php-fpm-confinement/1.0.12
+          for profile in "$pkg"/apparmor/wpcaregrid-*; do
+            apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
           done
       - name: Validate production units with Ubuntu 26.04 systemd
         run: |
           set -euo pipefail
-          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.11/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
-          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.11/systemd/wpcaregrid-production-php8.5-fpm.service
+          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.12/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
+          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.12/systemd/wpcaregrid-production-php8.5-fpm.service
       - name: Production-only package, acceptance, and immutable-byte tests
         run: |
-          python3 scripts/tests/production-only-confinement-1-0-8-test.py
-          python3 scripts/tests/production-only-confinement-1-0-9-test.py
-          python3 scripts/tests/production-only-confinement-1-0-10-test.py
-          python3 scripts/tests/production-only-confinement-1-0-11-test.py
+          python3 scripts/tests/production-only-confinement-1-0-12-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
@@ -141,47 +136,16 @@ jobs:
           PHP_FPM_CONFINEMENT_REQUIRE_GIT_IDENTITY: "1"
         run: python3 scripts/tests/php-fpm-confinement-test.py
 
-      - name: Production-only confinement 1.0.8 offline acceptance and immutable-byte tests
-        run: python3 scripts/tests/production-only-confinement-1-0-8-test.py
+      - name: Production-only confinement 1.0.12 acceptance and regression tests
+        run: python3 scripts/tests/production-only-confinement-1-0-12-test.py
 
-      - name: Production-only confinement 1.0.9 acceptance and regression tests
-        run: python3 scripts/tests/production-only-confinement-1-0-9-test.py
-
-      - name: Production-only confinement 1.0.10 acceptance and regression tests
-        run: python3 scripts/tests/production-only-confinement-1-0-10-test.py
-
-      - name: Production-only confinement 1.0.11 acceptance and regression tests
-        run: python3 scripts/tests/production-only-confinement-1-0-11-test.py
-
-      - name: Production helper 2.1.7 focused contract and integrity tests
+      - name: Production helper 2.1.11 runtime, contract, and integrity tests
         run: |
-          python3 scripts/tests/production-helper-2-1-7-full-test.py
-          python3 scripts/tests/production-helper-2-1-7-test.py
-          python3 scripts/tests/production-helper-2-1-7-coexistence-test.py
-          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-7-test.py
-
-      - name: Production helper 2.1.8 focused contract and integrity tests
-        run: |
-          python3 scripts/tests/production-helper-2-1-8-full-test.py
-          python3 scripts/tests/production-helper-2-1-8-test.py
-          python3 scripts/tests/production-helper-2-1-8-coexistence-test.py
-          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-8-test.py
-
-      - name: Production helper 2.1.9 runtime, contract, and integrity tests
-        run: |
-          python3 scripts/tests/production-helper-2-1-9-full-test.py
-          python3 scripts/tests/production-helper-2-1-9-test.py
-          python3 scripts/tests/production-helper-2-1-9-coexistence-test.py
-          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-9-test.py
-          python3 scripts/tests/production-helper-2-1-9-runtime-test.py
-
-      - name: Production helper 2.1.10 runtime, contract, and integrity tests
-        run: |
-          python3 scripts/tests/production-helper-2-1-10-full-test.py
-          python3 scripts/tests/production-helper-2-1-10-test.py
-          python3 scripts/tests/production-helper-2-1-10-coexistence-test.py
-          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-10-test.py
-          python3 scripts/tests/production-helper-2-1-10-runtime-test.py
+          python3 scripts/tests/production-helper-2-1-11-full-test.py
+          python3 scripts/tests/production-helper-2-1-11-test.py
+          python3 scripts/tests/production-helper-2-1-11-coexistence-test.py
+          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-11-test.py
+          python3 scripts/tests/production-helper-2-1-11-runtime-test.py
 
       - name: GO-20 confinement 1.0.7 compile-only AppArmor parser check (no kernel load)
         run: |
@@ -290,6 +254,7 @@ jobs:
           php -l scripts/tests/staging-next-php-mysql-router.php
           python3 -m py_compile scripts/recover-staging-deployment.py scripts/wpcaregrid-deploy-priv.py scripts/wpcaregrid_deploy_profiles.py scripts/wpcaregrid-deploy-env-priv.py scripts/deployment_environment_contract.py scripts/deployment_target_binding.py scripts/release_review_policy_v3.py scripts/tests/release-review-policy-v3-test.py scripts/daily_staging_sync_policy.py scripts/staging_next_db_transaction.py scripts/staging_next_deploy_backend.py scripts/staging_next_deploy_controller.py scripts/wpcaregrid-staging-next-deploy-priv.py scripts/install_staging_next_helper_1_4_5.py scripts/staging_next_db_transaction_1_4_6.py scripts/staging_next_deploy_backend_1_4_6.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_6.py scripts/install_staging_next_helper_1_4_6.py scripts/staging_next_db_transaction_1_4_7.py scripts/staging_next_deploy_backend_1_4_7.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_7.py scripts/install_staging_next_helper_1_4_7.py scripts/staging_next_db_transaction_1_4_8.py scripts/staging_next_deploy_backend_1_4_8.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_8.py scripts/install_staging_next_helper_1_4_8.py scripts/tests/staging-next-helper-installer-1-4-8-test.py scripts/staging_next_db_transaction_1_4_9.py scripts/staging_next_deploy_backend_1_4_9.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_9.py scripts/staging_next_db_transaction_1_4_10.py scripts/staging_next_deploy_backend_1_4_10.py scripts/wpcaregrid-staging-next-deploy-priv-1_4_10.py scripts/install_staging_next_helper_1_4_9.py scripts/install_staging_next_helper_1_4_10.py scripts/tests/staging-next-helper-installer-1-4-9-test.py scripts/tests/staging-next-helper-installer-1-4-10-test.py scripts/tests/phase2b-dba-controller-test.py scripts/tests/staging-next-target-binding-integration-test.py scripts/staging-149-preflight.py scripts/tests/staging-149-preflight-test.py scripts/tests/staging-149-stage-sources-test.py scripts/staging-149-stage-on-host.py scripts/tests/staging-149-stage-on-host-test.py scripts/staging-recovery-operator.py scripts/tests/deploy-profile-isolation-test.py scripts/tests/deployment-environment-contract-test.py scripts/tests/deployment-target-binding-test.py scripts/tests/deployment-target-helper-drift-test.py scripts/tests/deployment-environment-transaction-test.py scripts/tests/daily-staging-sync-policy-test.py scripts/tests/staging-next-helper-consistency-test.py scripts/tests/staging-next-helper-installer-test.py scripts/tests/staging-next-helper-installer-1-4-6-test.py scripts/tests/staging-next-helper-installer-1-4-7-test.py scripts/tests/staging-next-release-evidence-test.py scripts/tests/staging-next-deploy-backend-test.py scripts/tests/staging-next-deploy-controller-test.py scripts/tests/staging-next-helper-contract-test.py scripts/tests/staging-next-laravel-deploy-e2e-test.py scripts/tests/staging-recovery-operator-test.py scripts/tests/staging-recovery-mysql-rehearsal.py
           python3 -m py_compile scripts/deployment_backend_v2.py scripts/deployment_transaction_v2.py scripts/production_deploy_controller.py scripts/release_admission_v3.py scripts/production_release_controller_v3.py scripts/install_production_helper_2_0_0.py scripts/deployment_backend_v2_1_0.py scripts/production_deploy_controller_2_1_0.py scripts/install_production_helper_2_1_0.py scripts/deployment_backend_v2_1_1.py scripts/production_deploy_controller_2_1_1.py scripts/install_production_helper_2_1_1.py scripts/deployment_backend_v2_1_2.py scripts/production_deploy_controller_2_1_2.py scripts/install_production_helper_2_1_2.py scripts/tests/production-deployment-profile-isolation-test.py scripts/tests/production-deployment-controller-test.py scripts/tests/production-deployment-artifact-consistency-test.py scripts/tests/production-helper-installer-2-0-0-test.py scripts/tests/production-helper-2-1-0-test.py scripts/tests/production-helper-2-1-1-test.py scripts/tests/production-helper-2-1-2-test.py scripts/deployment_environment_contract_2_1_3.py scripts/deployment_backend_v2_1_3.py scripts/production_deploy_controller_2_1_3.py scripts/install_production_helper_2_1_3.py scripts/tests/production-helper-2-1-3-test.py scripts/deployment_environment_contract_2_1_4.py scripts/deployment_backend_v2_1_4.py scripts/production_deploy_controller_2_1_4.py scripts/install_production_helper_2_1_4.py scripts/release_review_policy_v3_1.py scripts/tests/production-helper-2-1-4-test.py scripts/tests/production-helper-2-1-4-full-test.py scripts/tests/release-review-policy-v3-1-test.py scripts/release_review_policy_v3_2.py scripts/tests/release-review-policy-v3-2-test.py scripts/tests/verify-committed-vite-build.py scripts/provision_wpcaregrid_deploy_parent_dirs_2_1_4.py scripts/tests/root-console-parent-dirs-2-1-4-test.py scripts/deployment_environment_contract_2_1_5.py scripts/deployment_backend_v2_1_5.py scripts/production_deploy_controller_2_1_5.py scripts/install_production_helper_2_1_5.py scripts/tests/production-helper-2-1-5-test.py scripts/tests/production-helper-2-1-5-full-test.py scripts/tests/production-helper-2-1-5-coexistence-test.py scripts/deployment_environment_contract_2_1_6.py scripts/deployment_backend_v2_1_6.py scripts/production_deploy_controller_2_1_6.py scripts/install_production_helper_2_1_6.py scripts/wpcaregrid-deploy-production-priv-2_1_6.py scripts/tests/production-helper-2-1-6-test.py scripts/tests/production-helper-2-1-6-full-test.py scripts/tests/production-helper-2-1-6-coexistence-test.py
+          python3 -m py_compile scripts/deployment_backend_v2_1_11.py scripts/deployment_environment_contract_2_1_11.py scripts/install_production_helper_2_1_11.py scripts/production_deploy_controller_2_1_11.py scripts/wpcaregrid-deploy-production-priv-2_1_11.py scripts/tests/production-only-confinement-1-0-12-test.py scripts/tests/production-helper-2-1-11-test.py scripts/tests/production-helper-2-1-11-full-test.py scripts/tests/production-helper-2-1-11-coexistence-test.py scripts/tests/production-helper-2-1-11-runtime-test.py scripts/tests/production-helper-supervisor-fail-closed-2-1-11-test.py
           python3 scripts/tests/release-artifact-consistency-test.py
 
       - name: Weekly dependency and release management policy tests
