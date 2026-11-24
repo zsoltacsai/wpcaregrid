@@ -86,6 +86,75 @@ class ProductionOnlyPackage(unittest.TestCase):
     scan=c.production_surface([str(root)],'CANARY','/never/public')
    self.assertFalse(scan['complete']); self.assertTrue(scan['reasons'])
 
+ def test_public_webroot_glob_is_component_bounded(self):
+  p=PKG/'acceptance/collect-peers.py';spec=importlib.util.spec_from_file_location('collect108_glob',p);c=importlib.util.module_from_spec(spec);sys.modules[spec.name]=c;spec.loader.exec_module(c)
+  pattern='/var/www/wpcaregrid-production/releases/*/public'
+  self.assertTrue(c.in_public_tree('/var/www/wpcaregrid-production/releases/r1/public/index.php',pattern))
+  self.assertTrue(c.in_public_tree('/var/www/wpcaregrid-production/releases/r1/public/assets/app.css',pattern))
+  self.assertFalse(c.in_public_tree('/var/www/wpcaregrid-production/releases/r1/nested/public/.env',pattern))
+  self.assertFalse(c.in_public_tree('/var/www/wpcaregrid-production/releases/r1/extra/r2/public/.env',pattern))
+  with tempfile.TemporaryDirectory(prefix='wpcg-public-glob-') as tmp:
+   root=Path(tmp)/'var/www/wpcaregrid-production/releases'
+   public=root/'r1/public'; public.mkdir(parents=True); (public/'index.php').write_text('public')
+   nested=root/'r1/nested/public'; nested.mkdir(parents=True); (nested/'.env').write_text('secret')
+   scan=c.production_surface([str(Path(tmp)/'var/www/wpcaregrid-production')],'CANARY',str(root/'*'/'public'))
+   self.assertEqual(scan['real_files'],[str(nested/'.env')])
+
+ def test_fence_inventory_includes_directory_symlinks_and_flags_escape(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_links',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-links-') as tmp:
+   root=Path(tmp); production=root/'srv/prod'; (production/'private').mkdir(parents=True)
+   outside=root/'outside'; outside.mkdir(); (outside/'secret').write_text('secret')
+   (production/'private'/'external-dir').symlink_to(outside,target_is_directory=True)
+   matrix={'production_fence':{'roots':['/srv/prod'],'public_exempt':'/srv/prod/releases/*/public','keep_traversable':['/srv/prod']}}
+   links=[item[0] for item in f.entries(matrix,str(root)) if item[1].endswith('external-dir')]
+   self.assertEqual(links,['/srv/prod/private/external-dir'])
+   self.assertIn('/srv/prod/private/external-dir',f.status(matrix,str(root)))
+
+ def test_fence_acl_metadata_errors_fail_closed(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_acl',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-acl-') as tmp:
+   root=Path(tmp); production=root/'srv/prod'; production.mkdir(parents=True)
+   matrix={'production_fence':{'roots':['/srv/prod'],'public_exempt':'/srv/prod/releases/*/public','keep_traversable':['/srv/prod']}}
+   with patch.object(f.os,'listxattr',side_effect=PermissionError('injected')):
+    self.assertIn('/srv/prod',f.status(matrix,str(root)))
+
+ def test_fence_descriptor_pinning_blocks_path_swap_to_symlink(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_toctou',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-toctou-') as tmp:
+   root=Path(tmp); production=root/'srv/prod'; (production/'private').mkdir(parents=True)
+   victim=root/'victim'; victim.write_text('must not chmod')
+   target=production/'private/data'; target.write_text('secret')
+   before=victim.stat(); target_info=target.stat()
+   matrix={'production_fence':{'roots':['/srv/prod'],'public_exempt':'/srv/prod/releases/*/public','keep_traversable':['/srv/prod']}}
+   real_fchmod=f.os.fchmod
+   def swap_then_fchmod(fd,mode):
+    if f.os.fstat(fd).st_ino==target_info.st_ino:
+     target.unlink(); target.symlink_to(victim)
+    return real_fchmod(fd,mode)
+   with patch.object(f.os,'fchmod',side_effect=swap_then_fchmod):
+    with self.assertRaises(f.Refused): f.fence(matrix,str(root),str(root/'receipt.json'),chown=False)
+   after=victim.stat()
+   self.assertEqual((after.st_uid,after.st_gid,after.st_mode),(before.st_uid,before.st_gid,before.st_mode))
+
+ def test_fence_rejects_symlinked_root_directory(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_root',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-root-') as tmp:
+   base=Path(tmp); actual=base/'actual'; (actual/'srv/prod').mkdir(parents=True)
+   (actual/'srv/prod'/'data').write_text('secret')
+   alias=base/'alias'; alias.symlink_to(actual,target_is_directory=True)
+   with self.assertRaises((f.Refused,OSError)):
+    f._open_entry(str(alias),'/srv/prod/data')
+
+ def test_restore_rejects_receipt_path_traversal(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_receipt',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-receipt-') as tmp:
+   root=Path(tmp); victim=root/'victim'; victim.write_text('untouched')
+   receipt=root/'receipt.json'; receipt.write_text(json.dumps([{'path':'/../../victim','uid':0,'gid':0,'mode':0o600,'dev':1,'ino':1,'acl':{}}])); receipt.chmod(0o600)
+   matrix={'production_fence':{'roots':['/srv/prod'],'public_exempt':'/srv/prod/releases/*/public','keep_traversable':['/srv/prod']}}
+   with self.assertRaises(f.Refused): f.restore(str(root),str(receipt),matrix,chown=False)
+   self.assertEqual(victim.read_text(),'untouched')
+
  def test_fixture_receipt_cannot_escape_or_follow_symlink_ancestors(self):
   p=PKG/'acceptance/fixtures.py';spec=importlib.util.spec_from_file_location('fixtures108_safe',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
   with tempfile.TemporaryDirectory(prefix='wpcg-fixtures-safe-') as tmp:

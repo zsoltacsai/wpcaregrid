@@ -18,8 +18,8 @@ Ubuntu 26.04 compatibility is checked in an isolated CI runner with AppArmor par
 | `scripts/wpcaregrid-deploy-production-priv-2_1_7.py` | `1d3f9fa36d6a71b1528038a1aab461cc37213ef584bad684a5e60db8d6cef0f3` |
 | `scripts/deployment_backend_v2_1_7.py` | `5f5e6955c6b35a98d2dbc36c2cd0dd117bb2c17021977269066bb81dc1c54c24` |
 | `scripts/deployment_transaction_v2.py` | `ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00` |
-| `scripts/deployment_environment_contract_2_1_7.py` | `f11cbbdc207c7356c255b40e81f6877491701918a4dbd8c177cd4ff3c4adc57f` |
+| `scripts/deployment_environment_contract_2_1_7.py` | `ee02c8c2da6d89f1983bb9036e680a7c96f9cbf7e8e639a522987546b96c916e` |
 | `scripts/release_review_policy_v3_1.py` | `5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f` |
-| `scripts/production_deploy_controller_2_1_7.py` | `c447d329909f42848585357ffc3a37d2ec4978be1c7788ee186a96ccf9c5aa0f` |
-| `scripts/install_production_helper_2_1_7.py` | `5c0b5aba1066d9f076427ae67fadec0e016d1c3b36554fe54801dae58755088e` |
-| `helper artifact digest` | `992600ba3cc46c1cc5b8b2eb382badd34023e93aed3a1fd8571d61df929e9808` |
+| `scripts/production_deploy_controller_2_1_7.py` | `c6f0e3a4879bc368f93d39b190e7d979587c54a1413cb36d5bddd9c88ccf0285` |
+| `scripts/install_production_helper_2_1_7.py` | `309c5888b3ef36db4ff9ef7244c277c4acc1a091b0f11adef44e00dcdda5f6de` |
+| `helper artifact digest` | `cf2d248a5ea10343e78a94a7ab6f04ca61feefdfd9a99601fb793bb25235054a` |

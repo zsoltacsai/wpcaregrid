@@ -22,12 +22,19 @@ import base64
 import fnmatch
 import json
 import os
+import posixpath
+import secrets
 import stat
 import sys
 
 TARGET_UID = 33
 TARGET_GID = 33
 ACL_XATTRS = ("system.posix_acl_access", "system.posix_acl_default")
+MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+
+
+class Refused(RuntimeError):
+    pass
 
 
 def _real(root: str, path: str) -> str:
@@ -36,6 +43,26 @@ def _real(root: str, path: str) -> str:
 
 def _virtual(root: str, path: str) -> str:
     return "/" + os.path.relpath(path, root) if root != "/" else path
+
+
+def component_glob_match(path: str, pattern: str) -> bool:
+    """Match a path glob without allowing wildcards to cross `/` boundaries."""
+    path_parts = path.strip("/").split("/") if path != "/" else []
+    pattern_parts = pattern.strip("/").split("/") if pattern != "/" else []
+    return len(path_parts) == len(pattern_parts) and all(
+        fnmatch.fnmatchcase(part, component)
+        for part, component in zip(path_parts, pattern_parts)
+    )
+
+
+def in_public_tree(path: str, public_pattern: str) -> bool:
+    """True for the public root or descendants, with `*` confined to one component."""
+    parts = path.strip("/").split("/") if path != "/" else []
+    pattern_parts = public_pattern.strip("/").split("/") if public_pattern != "/" else []
+    return any(
+        component_glob_match("/" + "/".join(parts[:count]), public_pattern)
+        for count in range(len(pattern_parts), len(parts) + 1)
+    )
 
 
 def exposed(info, *, uid: int = TARGET_UID, gid: int = TARGET_GID) -> bool:
@@ -47,10 +74,7 @@ def exposed(info, *, uid: int = TARGET_UID, gid: int = TARGET_GID) -> bool:
 
 
 def has_acl(path: str) -> bool:
-    try:
-        return any(name in ACL_XATTRS for name in os.listxattr(path, follow_symlinks=False))
-    except OSError:
-        return False
+    return any(name in ACL_XATTRS for name in os.listxattr(path, follow_symlinks=False))
 
 
 def entries(matrix: dict, root: str):
@@ -63,10 +87,17 @@ def entries(matrix: dict, root: str):
             continue
         for current, dirs, files in os.walk(top, followlinks=False):
             virtual = _virtual(root, current)
-            if fnmatch.fnmatch(virtual, public) or fnmatch.fnmatch(virtual, public + "/*"):
+            if in_public_tree(virtual, public):
                 dirs[:] = []
                 continue
-            # `*` in fnmatch also crosses `/`, so count path depth: only releases/<id> itself stays traversable.
+            # os.walk reports directory symlinks in `dirs` but does not descend into them.
+            # Inventory each link explicitly; its resolved target is checked by status().
+            for name in list(dirs):
+                link = os.path.join(current, name)
+                if os.path.islink(link):
+                    dirs.remove(name)
+                    yield _virtual(root, link), link, False, False
+            # Only releases/<one-component-id> stays traversable.
             is_release = (base == "/var/www/wpcaregrid-production" and virtual.startswith(base + "/releases/")
                           and virtual.count("/") == base.count("/") + 2)
             yield virtual, current, True, virtual in keep or is_release
@@ -76,69 +107,298 @@ def entries(matrix: dict, root: str):
 
 def status(matrix: dict, root: str, *, uid: int = TARGET_UID, gid: int = TARGET_GID, require_root_owner: bool = True) -> list:
     found = []
-    for virtual, real, is_dir, keep in entries(matrix, root):
+    protected_roots = matrix["production_fence"]["roots"]
+    public = matrix["production_fence"]["public_exempt"]
+    for virtual, _real_path, is_dir, keep in entries(matrix, root):
         try:
-            info = os.lstat(real)
+            parent_fd, leaf, fd, info = _open_entry(root, virtual)
         except OSError:
             found.append(virtual)  # cannot be inspected: never assume it is fenced
             continue
-        if has_acl(real):
-            found.append(virtual)
-        elif exposed(info, uid=uid, gid=gid) and not (
-                keep and (info.st_mode & 0o777) == 0o755 and (not require_root_owner or (info.st_uid == 0 and info.st_gid == 0))):
-            found.append(virtual)
+        try:
+            if fd is None:
+                target_text = os.readlink(leaf, dir_fd=parent_fd)
+                current_real = _real(root, virtual)
+                target_real = posixpath.normpath(
+                    target_text if posixpath.isabs(target_text)
+                    else posixpath.join(posixpath.dirname(current_real), target_text)
+                )
+                target_virtual = _virtual(root, target_real)
+                scoped = any(target_virtual == base or target_virtual.startswith(base.rstrip("/") + "/")
+                             for base in protected_roots)
+                if not scoped:
+                    found.append(virtual)
+                elif not in_public_tree(target_virtual, public):
+                    target_parent, target_leaf, target_fd, target_info = _open_entry(root, target_virtual)
+                    try:
+                        if target_fd is None:
+                            found.append(virtual)  # nested symlink chains fail closed
+                        elif any(name in ACL_XATTRS for name in os.listxattr(target_fd)) or exposed(target_info, uid=uid, gid=gid):
+                            found.append(virtual)
+                    finally:
+                        if target_fd is not None:
+                            os.close(target_fd)
+                        os.close(target_parent)
+            elif any(name in ACL_XATTRS for name in os.listxattr(fd)) or (
+                    exposed(info, uid=uid, gid=gid) and not (
+                        keep and (info.st_mode & 0o777) == 0o755
+                        and (not require_root_owner or (info.st_uid == 0 and info.st_gid == 0)))):
+                found.append(virtual)
+        except (OSError, ValueError, Refused):
+            found.append(virtual)  # unreadable or unstable entries are not evidence of a clean fence
+        finally:
+            if fd is not None:
+                os.close(fd)
+            os.close(parent_fd)
     return sorted(found)
 
 
+def _open_parent(root: str, virtual: str) -> tuple[int, str]:
+    """Open every parent component without following symlinks; return (parent fd, leaf)."""
+    if not virtual.startswith("/") or posixpath.normpath(virtual) != virtual or "\x00" in virtual:
+        raise Refused(f"unsafe non-canonical path: {virtual!r}")
+    parts = virtual.strip("/").split("/")
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise Refused(f"unsafe path components: {virtual!r}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    if not os.path.isabs(root) or posixpath.normpath(root) != root:
+        raise Refused("root must be an absolute canonical path")
+    # Pin root component-by-component from `/`; opening root in one call only
+    # protects its final component and could follow a symlink in an ancestor.
+    fd = os.open("/", flags)
+    try:
+        for part in root.strip("/").split("/") if root != "/" else ():
+            if part in ("", ".", ".."):
+                raise Refused(f"unsafe root component in {root!r}")
+            before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode):
+                raise Refused(f"non-directory or symlink root component in {root!r}")
+            child = os.open(part, flags, dir_fd=fd)
+            after = os.fstat(child)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                os.close(child)
+                raise Refused(f"root component changed during open: {root!r}")
+            os.close(fd)
+            fd = child
+        for part in parts[:-1]:
+            before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+            if not stat.S_ISDIR(before.st_mode):
+                raise Refused(f"non-directory or symlink path component in {virtual}")
+            child = os.open(part, flags, dir_fd=fd)
+            after = os.fstat(child)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                os.close(child)
+                raise Refused(f"path component changed during open: {virtual}")
+            os.close(fd)
+            fd = child
+        return fd, parts[-1]
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _open_entry(root: str, virtual: str) -> tuple[int, str, int | None, os.stat_result]:
+    """Open an entry relative to a pinned parent; symlink leaves are returned unopened."""
+    parent_fd, leaf = _open_parent(root, virtual)
+    try:
+        before = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(before.st_mode):
+            return parent_fd, leaf, None, before
+        if not (stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode)):
+            raise Refused(f"unsupported special object: {virtual}")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        if stat.S_ISDIR(before.st_mode):
+            flags |= os.O_DIRECTORY
+        fd = os.open(leaf, flags, dir_fd=parent_fd)
+        after = os.fstat(fd)
+        if (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) != (
+                after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode)):
+            os.close(fd)
+            raise Refused(f"entry changed during open: {virtual}")
+        return parent_fd, leaf, fd, after
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def _same_entry(parent_fd: int, leaf: str, info: os.stat_result, virtual: str) -> None:
+    current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    if (current.st_dev, current.st_ino, stat.S_IFMT(current.st_mode)) != (
+            info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)):
+        raise Refused(f"entry changed during operation: {virtual}")
+
+
+def _receipt_parent(receipt: str) -> tuple[int, str]:
+    if not os.path.isabs(receipt) or posixpath.normpath(receipt) != receipt or "\x00" in receipt:
+        raise Refused("receipt path must be absolute and canonical")
+    parts = receipt.strip("/").split("/")
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise Refused("unsafe receipt path components")
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
+            info = os.fstat(child)
+            sticky_safe = bool(info.st_mode & stat.S_ISVTX) and info.st_uid == 0
+            if info.st_uid != os.geteuid() or ((info.st_mode & 0o022) and not sticky_safe):
+                os.close(child)
+                raise Refused("receipt parent must be owned by the effective user and not group/other writable")
+            os.close(fd)
+            fd = child
+        return fd, parts[-1]
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_receipt(parent_fd: int, leaf: str) -> list:
+    fd = os.open(leaf, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid()
+                or (info.st_mode & 0o077)):
+            raise Refused("receipt must be owned, single-link, regular, and mode 0600 or stricter")
+        chunks, size = [], 0
+        while True:
+            chunk = os.read(fd, min(65536, MAX_RECEIPT_BYTES + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > MAX_RECEIPT_BYTES:
+                raise Refused("receipt exceeds size limit")
+        result = json.loads(b"".join(chunks).decode("ascii"))
+        if not isinstance(result, list):
+            raise Refused("receipt schema must be a list")
+        return result
+    finally:
+        os.close(fd)
+
+
+def _validate_receipt(recorded: list, matrix: dict) -> None:
+    roots = matrix["production_fence"]["roots"]
+    public = matrix["production_fence"]["public_exempt"]
+    seen = set()
+    for item in recorded:
+        if not isinstance(item, dict):
+            raise Refused("invalid receipt entry")
+        path = item.get("path")
+        if not isinstance(path, str) or not path.startswith("/") or posixpath.normpath(path) != path or "\x00" in path:
+            raise Refused("receipt contains a non-canonical path")
+        if path in seen:
+            raise Refused("receipt contains a duplicate path")
+        seen.add(path)
+        if not any(path == base or path.startswith(base.rstrip("/") + "/") for base in roots):
+            raise Refused("receipt path is outside production roots")
+        if in_public_tree(path, public):
+            raise Refused("receipt path is in the public exemption")
+        if (not isinstance(item.get("uid"), int) or not isinstance(item.get("gid"), int)
+                or not isinstance(item.get("mode"), int) or not 0 <= item["mode"] <= 0o7777
+                or not isinstance(item.get("dev"), int) or not isinstance(item.get("ino"), int)
+                or not isinstance(item.get("acl"), dict) or set(item["acl"]) - set(ACL_XATTRS)):
+            raise Refused("receipt entry has invalid metadata")
+        for value in item["acl"].values():
+            try:
+                base64.b64decode(value, validate=True)
+            except (ValueError, TypeError):
+                raise Refused("receipt contains invalid ACL data") from None
+
+
+def _write_receipt(parent_fd: int, leaf: str, recorded: list) -> None:
+    payload = json.dumps(recorded, sort_keys=True, separators=(",", ":")).encode("ascii")
+    temporary = f".{leaf}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                 0o600, dir_fd=parent_fd)
+    try:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(fd, payload[offset:])
+        os.fsync(fd)
+        os.replace(temporary, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=parent_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(fd)
+
+
 def fence(matrix: dict, root: str, receipt: str, *, chown: bool = True) -> int:
-    recorded = []
-    if os.path.exists(receipt):
-        with open(receipt, encoding="ascii") as handle:
-            recorded = json.load(handle)
-    known = {item["path"] for item in recorded}
-    for virtual, real, is_dir, keep in entries(matrix, root):
-        info = os.lstat(real)
-        acl = {}
-        for name in ACL_XATTRS:
+    receipt_fd, receipt_leaf = _receipt_parent(receipt)
+    try:
+        try:
+            recorded = _read_receipt(receipt_fd, receipt_leaf)
+        except FileNotFoundError:
+            recorded = []
+        _validate_receipt(recorded, matrix)
+        known = {item["path"]: item for item in recorded}
+        changed = 0
+        for virtual, _real_path, is_dir, keep in entries(matrix, root):
+            parent_fd, leaf, fd, info = _open_entry(root, virtual)
             try:
-                acl[name] = base64.b64encode(os.getxattr(real, name, follow_symlinks=False)).decode("ascii")
-            except OSError:
-                pass
-        if virtual not in known:
-            recorded.append({"path": virtual, "uid": info.st_uid, "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode), "acl": acl})
-            known.add(virtual)
-            with open(receipt, "w", encoding="ascii") as handle:  # write before changing: an interrupted run stays reversible
-                json.dump(recorded, handle, sort_keys=True)
-        if chown:
-            os.lchown(real, 0, 0)
-        if stat.S_ISLNK(info.st_mode):
-            continue
-        for name in acl:
-            try:
-                os.removexattr(real, name, follow_symlinks=False)
-            except OSError:
-                pass
-        os.chmod(real, 0o755 if (is_dir and keep) else (0o700 if is_dir else 0o600))
-    return len(recorded)
+                if fd is None:
+                    # Link leaves are not chmod/chown targets; status() validates their resolved targets.
+                    continue
+                xattrs = os.listxattr(fd)
+                acl = {name: base64.b64encode(os.getxattr(fd, name)).decode("ascii")
+                       for name in ACL_XATTRS if name in xattrs}
+                prior = known.get(virtual)
+                if prior is not None:
+                    if (prior["dev"], prior["ino"]) != (info.st_dev, info.st_ino):
+                        raise Refused(f"receipt inode does not match current tree entry: {virtual}")
+                else:
+                    prior = {"path": virtual, "uid": info.st_uid, "gid": info.st_gid,
+                             "mode": stat.S_IMODE(info.st_mode), "dev": info.st_dev, "ino": info.st_ino, "acl": acl}
+                    recorded.append(prior)
+                    known[virtual] = prior
+                    _validate_receipt(recorded, matrix)
+                    _write_receipt(receipt_fd, receipt_leaf, recorded)
+                _same_entry(parent_fd, leaf, info, virtual)
+                if chown:
+                    os.fchown(fd, 0, 0)
+                for name in acl:
+                    os.removexattr(fd, name)
+                os.fchmod(fd, 0o755 if (is_dir and keep) else (0o700 if is_dir else 0o600))
+                _same_entry(parent_fd, leaf, info, virtual)
+                changed += 1
+            finally:
+                if fd is not None:
+                    os.close(fd)
+                os.close(parent_fd)
+        return changed
+    finally:
+        os.close(receipt_fd)
 
 
-def restore(root: str, receipt: str, *, chown: bool = True) -> int:
-    with open(receipt, encoding="ascii") as handle:
-        recorded = json.load(handle)
-    for item in reversed(recorded):
-        real = _real(root, item["path"])
-        if not os.path.lexists(real):
-            continue
-        if chown:
-            os.lchown(real, item["uid"], item["gid"])
-        if not os.path.islink(real):
-            os.chmod(real, item["mode"])
-            for name, value in item["acl"].items():
-                try:
-                    os.setxattr(real, name, base64.b64decode(value), follow_symlinks=False)
-                except OSError:
-                    pass
-    return len(recorded)
+def restore(root: str, receipt: str, matrix: dict, *, chown: bool = True) -> int:
+    receipt_fd, receipt_leaf = _receipt_parent(receipt)
+    try:
+        recorded = _read_receipt(receipt_fd, receipt_leaf)
+        _validate_receipt(recorded, matrix)
+        restored = 0
+        for item in reversed(recorded):
+            parent_fd, leaf, fd, info = _open_entry(root, item["path"])
+            try:
+                if fd is None or (info.st_dev, info.st_ino) != (item["dev"], item["ino"]):
+                    raise Refused(f"restore target is not the receipted inode: {item['path']}")
+                _same_entry(parent_fd, leaf, info, item["path"])
+                if chown:
+                    os.fchown(fd, item["uid"], item["gid"])
+                os.fchmod(fd, item["mode"])
+                for name, value in item["acl"].items():
+                    os.setxattr(fd, name, base64.b64decode(value, validate=True))
+                _same_entry(parent_fd, leaf, info, item["path"])
+                restored += 1
+            finally:
+                if fd is not None:
+                    os.close(fd)
+                os.close(parent_fd)
+        return restored
+    finally:
+        os.close(receipt_fd)
 
 
 def main(argv: list) -> int:
@@ -160,12 +420,24 @@ def main(argv: list) -> int:
     with open(args[1], encoding="utf-8") as handle:
         matrix = json.load(handle)
     if args[0] == "fence":
-        print(json.dumps({"fenced": fence(matrix, root, receipt, chown=chown)}))
-        return 0
+        try:
+            print(json.dumps({"fenced": fence(matrix, root, receipt, chown=chown)}))
+            return 0
+        except (OSError, ValueError, Refused) as error:
+            print(f"REFUSED: fence failed closed: {error}", file=sys.stderr)
+            return 1
     if args[0] == "restore":
-        print(json.dumps({"restored": restore(root, receipt, chown=chown)}))
-        return 0
-    found = status(matrix, root)
+        try:
+            print(json.dumps({"restored": restore(root, receipt, matrix, chown=chown)}))
+            return 0
+        except (OSError, ValueError, Refused) as error:
+            print(f"REFUSED: restore failed closed: {error}", file=sys.stderr)
+            return 1
+    try:
+        found = status(matrix, root)
+    except (OSError, ValueError, Refused) as error:
+        print(f"REFUSED: status failed closed: {error}", file=sys.stderr)
+        return 1
     print(json.dumps({"exposed": found}))
     return 1 if found else 0
 

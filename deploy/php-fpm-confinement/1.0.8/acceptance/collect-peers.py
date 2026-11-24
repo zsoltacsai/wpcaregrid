@@ -42,6 +42,26 @@ import time
 TARGET_UID = 33
 
 
+def component_glob_match(path: str, pattern: str) -> bool:
+    """Match a path glob by components so `*` never spans a slash."""
+    path_parts = path.strip("/").split("/") if path != "/" else []
+    pattern_parts = pattern.strip("/").split("/") if pattern != "/" else []
+    return len(path_parts) == len(pattern_parts) and all(
+        fnmatch.fnmatchcase(part, component)
+        for part, component in zip(path_parts, pattern_parts)
+    )
+
+
+def in_public_tree(path: str, public_pattern: str) -> bool:
+    """True for a public root or its descendants, with component-bounded wildcards."""
+    parts = path.strip("/").split("/") if path != "/" else []
+    pattern_parts = public_pattern.strip("/").split("/") if public_pattern != "/" else []
+    return any(
+        component_glob_match("/" + "/".join(parts[:count]), public_pattern)
+        for count in range(len(pattern_parts), len(parts) + 1)
+    )
+
+
 def read(path: str) -> str:
     with open(path, "rb") as handle:
         return handle.read().decode("utf-8", "replace")
@@ -210,7 +230,7 @@ def production_surface(roots: list, canary: str, public_glob: str) -> dict:
                     reasons.append(f"cannot safely descend into {item}: {error.__class__.__name__}")
                     real.append(item)
             elif stat.S_ISREG(info.st_mode):
-                is_public = fnmatch.fnmatch(item, public_glob + "/*")
+                is_public = in_public_tree(item, public_glob)
                 if is_public:
                     continue
                 try:
