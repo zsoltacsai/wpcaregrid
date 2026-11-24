@@ -45,7 +45,7 @@ TRANSFER_USER = "deploy"
 SOURCE_CHECKOUT = Path("/var/lib/wpcaregrid-deploy/production/source")
 INCOMING_DIRECTORY = Path("/var/lib/wpcaregrid-deploy/production/incoming")
 HELPER = Path("/usr/local/libexec/wpcaregrid-deploy/production/2.1.7/wpcaregrid-deploy-production-priv")
-HELPER_ARTIFACT_SHA256 = "cf2d248a5ea10343e78a94a7ab6f04ca61feefdfd9a99601fb793bb25235054a"
+HELPER_ARTIFACT_SHA256 = "73b21d1229c177a4a1620f4602bcedd8a5a6b3b914142323ffb2714ca7dec2c7"
 HELPER_VERSION = "2.1.7"
 HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
 # Exact merged Workstream B package 1.0.8 binding, as compiled by the helper's
@@ -54,12 +54,12 @@ HELPER_CONTRACT = "wpcaregrid-deployment-profile-v2.2"
 # service/transient role binding. This controller never loads or edits the package.
 CONFINEMENT_SCHEMA = 3
 CONFINEMENT_PACKAGE_VERSION = "1.0.8"
-CONFINEMENT_SHA256SUMS_SHA256 = "12b3a60f6cb0211a57b048cfe83c9243ab7726704fdcff12dffd0011c8da93e2"
-CONFINEMENT_PACKAGE_TREE = "305dc9f453b8f531bb5db5642d59852741c7c709"
+CONFINEMENT_SHA256SUMS_SHA256 = "54af45277f9c58bca9519407f3464309289ae557fc54bf0d59699bf5403bbc81"
+CONFINEMENT_PACKAGE_TREE = "fbe5e49ae9c2807d6fd79cf72d1bf2a97d315088"
 CONFINEMENT_FILE_COUNT = 9
 CONFINEMENT_SERVICE_ROLES = ("production", "nginx")
 CONFINEMENT_TRANSIENT_ROLES = ("production-deploy-cli", "production-build-cli")
-CONFINEMENT_BINDING_SHA256 = "ba060403dd768e172ef9d082899c28578dcb420162180ad237a1edb59af9dc66"
+CONFINEMENT_BINDING_SHA256 = "56eeb8c79937f3a5d3f5955ef3126d1bf00ab24976fe200ba76cc5601242bb34"
 DELEGATION_VARIABLES = frozenset({
     "SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND", "SUDO_HOME", "PKEXEC_UID", "DOAS_USER",
 })

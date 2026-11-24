@@ -119,6 +119,22 @@ class ProductionOnlyPackage(unittest.TestCase):
    with patch.object(f.os,'listxattr',side_effect=PermissionError('injected')):
     self.assertIn('/srv/prod',f.status(matrix,str(root)))
 
+ def test_fence_walk_errors_refuse_before_partial_status_or_mutation(self):
+  p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_walk',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
+  with tempfile.TemporaryDirectory(prefix='wpcg-fence-walk-') as tmp:
+   root=Path(tmp); production=root/'srv/prod'; private=production/'private'; private.mkdir(parents=True)
+   secret=private/'secret'; secret.write_text('secret'); before=secret.stat()
+   matrix={'production_fence':{'roots':['/srv/prod'],'public_exempt':'/srv/prod/releases/*/public','keep_traversable':['/srv/prod']}}
+   real_scandir=f.os.scandir
+   def failing_scandir(path):
+    if os.fspath(path)==str(private): raise PermissionError('injected descendant scan failure')
+    return real_scandir(path)
+   with patch.object(f.os,'scandir',side_effect=failing_scandir):
+    with self.assertRaises(f.Refused): f.status(matrix,str(root))
+    with self.assertRaises(f.Refused): f.fence(matrix,str(root),str(root/'receipt.json'),chown=False)
+   after=secret.stat()
+   self.assertEqual((after.st_uid,after.st_gid,after.st_mode),(before.st_uid,before.st_gid,before.st_mode))
+
  def test_fence_descriptor_pinning_blocks_path_swap_to_symlink(self):
   p=PKG/'acceptance/fence-production.py';spec=importlib.util.spec_from_file_location('fence108_toctou',p);f=importlib.util.module_from_spec(spec);sys.modules[spec.name]=f;spec.loader.exec_module(f)
   with tempfile.TemporaryDirectory(prefix='wpcg-fence-toctou-') as tmp:

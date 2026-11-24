@@ -83,9 +83,24 @@ def entries(matrix: dict, root: str):
     public, keep = fence["public_exempt"], set(fence["keep_traversable"])
     for base in fence["roots"]:
         top = _real(root, base)
-        if not os.path.lexists(top):
+        try:
+            root_parent, root_leaf, root_fd, root_info = _open_entry(root, base)
+        except FileNotFoundError:
             continue
-        for current, dirs, files in os.walk(top, followlinks=False):
+        try:
+            if root_fd is None or not stat.S_ISDIR(root_info.st_mode):
+                raise Refused(f"production root is not a real directory: {base}")
+        finally:
+            if root_fd is not None:
+                os.close(root_fd)
+            os.close(root_parent)
+
+        def walk_error(error):
+            # os.walk otherwise suppresses scandir failures and can report a
+            # partial tree as if the inventory were complete.
+            raise Refused(f"production tree walk failed at {error.filename}: {error}")
+
+        for current, dirs, files in os.walk(top, followlinks=False, onerror=walk_error):
             virtual = _virtual(root, current)
             if in_public_tree(virtual, public):
                 dirs[:] = []
@@ -336,7 +351,10 @@ def fence(matrix: dict, root: str, receipt: str, *, chown: bool = True) -> int:
         _validate_receipt(recorded, matrix)
         known = {item["path"]: item for item in recorded}
         changed = 0
-        for virtual, _real_path, is_dir, keep in entries(matrix, root):
+        # Complete enumeration before changing any inode. If a subtree cannot
+        # be read, refuse without returning success or leaving a partial fence.
+        all_entries = list(entries(matrix, root))
+        for virtual, _real_path, is_dir, keep in all_entries:
             parent_fd, leaf, fd, info = _open_entry(root, virtual)
             try:
                 if fd is None:
