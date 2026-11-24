@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install parser and systemd validation dependencies
         run: |
           sudo apt-get update
@@ -46,7 +47,7 @@ jobs:
       - name: Compile production-only AppArmor profiles without loading them
         run: |
           set -euo pipefail
-          for version in 1.0.8 1.0.9; do
+          for version in 1.0.8 1.0.9 1.0.10; do
             pkg="deploy/php-fpm-confinement/$version"
             for profile in "$pkg"/apparmor/wpcaregrid-*; do
               apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
@@ -55,12 +56,13 @@ jobs:
       - name: Validate production units with Ubuntu 26.04 systemd
         run: |
           set -euo pipefail
-          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.9/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
-          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.9/systemd/wpcaregrid-production-php8.5-fpm.service
+          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.10/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
+          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.10/systemd/wpcaregrid-production-php8.5-fpm.service
       - name: Production-only package, acceptance, and immutable-byte tests
         run: |
           python3 scripts/tests/production-only-confinement-1-0-8-test.py
           python3 scripts/tests/production-only-confinement-1-0-9-test.py
+          python3 scripts/tests/production-only-confinement-1-0-10-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
@@ -144,6 +146,9 @@ jobs:
       - name: Production-only confinement 1.0.9 acceptance and regression tests
         run: python3 scripts/tests/production-only-confinement-1-0-9-test.py
 
+      - name: Production-only confinement 1.0.10 acceptance and regression tests
+        run: python3 scripts/tests/production-only-confinement-1-0-10-test.py
+
       - name: Production helper 2.1.7 focused contract and integrity tests
         run: |
           python3 scripts/tests/production-helper-2-1-7-full-test.py
@@ -157,6 +162,14 @@ jobs:
           python3 scripts/tests/production-helper-2-1-8-test.py
           python3 scripts/tests/production-helper-2-1-8-coexistence-test.py
           python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-8-test.py
+
+      - name: Production helper 2.1.9 runtime, contract, and integrity tests
+        run: |
+          python3 scripts/tests/production-helper-2-1-9-full-test.py
+          python3 scripts/tests/production-helper-2-1-9-test.py
+          python3 scripts/tests/production-helper-2-1-9-coexistence-test.py
+          python3 scripts/tests/production-helper-supervisor-fail-closed-2-1-9-test.py
+          python3 scripts/tests/production-helper-2-1-9-runtime-test.py
 
       - name: GO-20 confinement 1.0.7 compile-only AppArmor parser check (no kernel load)
         run: |
