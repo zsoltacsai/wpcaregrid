@@ -1,0 +1,66 @@
+# wpcaregrid-php-fpm-confinement 1.0.11 -- NEW dedicated production FPM unit.
+# Install as /etc/systemd/system/wpcaregrid-production-php8.5-fpm.service. The name,
+# socket and pool follow the production profile contract in
+# scripts/deployment_environment_contract.py. Source artifact: not installed.
+# Same PHP 8.5 binary as the packaged php8.5-fpm.service (staging-next), but a different unit,
+# cgroup, AppArmor profile, FPM master configuration, pool and socket: the executable never
+# identifies the environment. This unit never replaces, aliases or conflicts with php8.5-fpm.service.
+[Unit]
+Description=WP CareGrid production PHP 8.5 FastCGI Process Manager (AppArmor-confined)
+After=network.target
+# Fail the start (not skip it) when the host has no AppArmor.
+AssertSecurity=apparmor
+
+[Service]
+Type=notify
+# Same UID/GID as every other pool; no new user or group. Not root, so no capabilities.
+User=www-data
+Group=www-data
+# systemd fails the exec if this profile is not loaded. That is the intended fail-closed behavior.
+AppArmorProfile=wpcaregrid-php-fpm-production
+ExecStartPre=/usr/sbin/php-fpm8.5 --test --fpm-config /etc/php/8.5/fpm-wpcaregrid-production/php-fpm.conf
+ExecStart=/usr/sbin/php-fpm8.5 --nodaemonize --fpm-config /etc/php/8.5/fpm-wpcaregrid-production/php-fpm.conf
+ExecReload=/usr/bin/kill -USR2 $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+
+# No inherited descriptors: nothing is handed over from systemd except journal stdio and the notify socket.
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+FileDescriptorStoreMax=0
+LimitNOFILE=8192
+
+# Second, mount-namespace layer that does not depend on AppArmor. Missing paths are ignored ("-").
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LogsDirectory=wpcaregrid-production
+LogsDirectoryMode=0750
+ReadWritePaths=/run/php /var/lib/wpcaregrid-deploy/production/shared/storage
+InaccessiblePaths=-/var/www/wpcaregrid-staging-new -/var/www/wpcaregrid -/var/lib/wpcaregrid-deploy/staging-next -/var/lib/wpcaregrid -/etc/wpcaregrid-deploy
+InaccessiblePaths=-/etc/php/8.5/fpm/pool.d
+InaccessiblePaths=-/var/lib/wpcaregrid-deploy/production/incoming -/var/lib/wpcaregrid-deploy/production/inbox -/var/lib/wpcaregrid-deploy/production/state -/var/lib/wpcaregrid-deploy/production/receipts -/var/lib/wpcaregrid-deploy/production/database-backups
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "profile": "production",
+  "helper_version": "2.1.10",
+  "compatibility_contract": "wpcaregrid-deployment-profile-v2.2",
+  "supersedes_helper_version": "2.1.9",
+  "release_review_policy": "V3.1",
+  "privileged_invocation": "root-console-direct",
+  "transfer_identity": "deploy",
+  "production_sudoers": null,
+  "entrypoint": "scripts/wpcaregrid-deploy-production-priv-2_1_10.py",
+  "backend": "scripts/deployment_backend_v2_1_10.py",
+  "transaction_module": "scripts/deployment_transaction_v2.py",
+  "release_review_policy_module": "scripts/release_review_policy_v3_1.py",
+  "environment_contract": "scripts/deployment_environment_contract_2_1_10.py",
+  "controller": "scripts/production_deploy_controller_2_1_10.py",
+  "root_installer": "scripts/install_production_helper_2_1_10.py",
+  "entrypoint_sha256": "a021e028f62baafd578b8ef427535f3badf41cda56e3954862028030d53b4742",
+  "backend_sha256": "de81c0553de1f4af63bc708bb9c3d3e0d9748308bb37541ea4a2ce9cc65425c3",
+  "transaction_module_sha256": "ba4c9fd3ea821cb8a1aa5581a74da8c1477b5e30484fc2e09546a26fe60f2d00",
+  "environment_contract_sha256": "f7bc509af549958ddb37925e71e550f83276cb0afc8edce5983d54155fc68b30",
+  "release_review_policy_sha256": "5559217003066b77fb2533c8a113fa6d19c497924add59e1db3e023641143d6f",
+  "controller_sha256": "fda3a7c49cf4ffe5845285125bef69aa7c5793b0d1be1dde19d66a8431183adb",
+  "root_installer_sha256": "27fcde0b274de163414eddeb422ca8019e5a34b4a6c1dad5b88d890454a7b037",
+  "helper_artifact_sha256": "1e21b26753803e8efc46f9c99c409bc95703351c641715e6376cac623f655e77",
+  "policy_schema": 2,
+  "php_fpm_confinement_pin": {
+    "schema": 3,
+    "package_version": "1.0.11",
+    "sha256sums_sha256": "705235852a0b9b83c5069c6ac50bfe87ecf9e47e2c9002b384685ad9a8da3fa9",
+    "package_tree": "62965c45388883773488cf6d11fdd9838fe1883c",
+    "files": 9,
+    "services": [
+      "production",
+      "nginx"
+    ],
+    "transients": [
+      "production-deploy-cli",
+      "production-build-cli"
+    ],
+    "binding_sha256": "c635700bdeffd77c015c5752969cee10b7bcf91bfceecb81f299ce6bf825b376"
+  },
+  "phase_b_default": "DISABLED",
+  "production_activation": "BLOCKED_UNTIL_CONFINEMENT_PIN_APPROVED_POLICY_AND_RECOVERY_EVIDENCE",
+  "php_runtime": {
+    "production": "8.5",
+    "production_unit": "wpcaregrid-production-php8.5-fpm.service",
+    "production_socket": "/run/php/wpcaregrid-production-php8.5-fpm.sock"
+  },
+  "coexists_with_helper_versions": [
+    "2.1.4",
+    "2.1.5",
+    "2.1.6",
+    "2.1.7",
+    "2.1.8",
+    "2.1.9"
+  ]
+}
