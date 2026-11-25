@@ -73,11 +73,11 @@ installed target or the helper transfer directory as the package upload
 destination. Until the Owner records a documented transfer-only destination,
 `PKG` is `UNKNOWN` and Gate 1 is `HOLD`.
 
-An upload, if separately authorized and documented, may only place the package
-bytes in the transfer-only `PKG` directory. It must not write an installed
-target, execute a package file, load an AppArmor profile, reload systemd, or
-install the helper. The root-console installation below reads from `PKG` and is
-the only step that writes the nine installed targets.
+An upload, once the transfer-only destination is documented, may only place the
+package bytes in the transfer-only `PKG` directory. It must not write an
+installed target, execute a package file, load an AppArmor profile, reload
+systemd, or install the helper. The root-console installation below reads from
+`PKG` and is the only step that writes the nine installed targets.
 
 ### Pre-install STOP conditions
 
