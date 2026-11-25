@@ -47,7 +47,7 @@ jobs:
       - name: Compile production-only AppArmor profiles without loading them
         run: |
           set -euo pipefail
-          for pkg in deploy/php-fpm-confinement/1.0.12 deploy/php-fpm-confinement/1.0.13 deploy/php-fpm-confinement/1.0.14; do
+          for pkg in deploy/php-fpm-confinement/1.0.12 deploy/php-fpm-confinement/1.0.13 deploy/php-fpm-confinement/1.0.14 deploy/php-fpm-confinement/1.0.15; do
             for profile in "$pkg"/apparmor/wpcaregrid-*; do
               apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
             done
@@ -62,6 +62,7 @@ jobs:
           python3 scripts/tests/production-only-confinement-1-0-12-test.py
           python3 scripts/tests/production-only-confinement-1-0-13-test.py
           python3 scripts/tests/production-only-confinement-1-0-14-test.py
+          python3 scripts/tests/production-only-confinement-1-0-15-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04

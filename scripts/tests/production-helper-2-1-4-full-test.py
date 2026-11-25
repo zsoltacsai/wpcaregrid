@@ -1058,7 +1058,7 @@ class BackendProfileTests(unittest.TestCase):
             while time.monotonic() < deadline:
                 try:
                     raw = Path(f"/proc/{child_pid}/stat").read_text()
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     break
                 state = raw.rsplit(") ", 1)[1].split()[0]
                 if state in {"Z", "X"}:
