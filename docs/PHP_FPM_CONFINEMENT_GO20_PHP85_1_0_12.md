@@ -44,6 +44,8 @@ The package directory must be complete, must not be a symlink, and must pass:
 PKG="${PKG:?PKG is UNKNOWN until the Owner records the transfer-only destination}"
 test "$(id -u)" -eq 0 || { echo "STOP: root console required"; exit 1; }
 test -d "$PKG" && test ! -L "$PKG" || { echo "STOP: package directory invalid"; exit 1; }
+test "$(realpath -e -- "$PKG")" = "$PKG" \
+  || { echo "STOP: package path is not canonical or contains a symlink"; exit 1; }
 test -f "$PKG/SHA256SUMS" && test ! -L "$PKG/SHA256SUMS" \
   || { echo "STOP: SHA256SUMS missing"; exit 1; }
 test "$(sha256sum "$PKG/SHA256SUMS" | awk '{print $1}')" \
@@ -115,7 +117,8 @@ for target in "${targets[@]}"; do
 done
 for parent in "${parents[@]}"; do
   test -d "$parent" && test ! -L "$parent" \
-    || { echo "STOP: missing/not a real parent directory: $parent"; exit 1; }
+    && test "$(realpath -e -- "$parent")" = "$parent" \
+    || { echo "STOP: missing/non-canonical/symlinked parent directory: $parent"; exit 1; }
 done
 ```
 
