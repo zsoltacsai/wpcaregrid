@@ -34,11 +34,31 @@ Helper 2.1.11 is DEFERRED until after fixture acceptance (Gate 3) and is not par
 of Gate 1. Do not use an installed target or the helper transfer directory as a
 source or staging destination.
 
-### Source and integrity bound to protected primary
+### Source, commit binding, and package integrity
 
-The package source is bound to the protected primary commit:
-- Primary commit SHA: `e9a1bc352d54741ae72e2766f6e07e28e798900d`
-- Primary tree package path: `deploy/php-fpm-confinement/1.0.12/`
+Three distinct levels of verification are required prior to installation:
+
+1. **Owner-verified Git commit binding (pre-condition):**
+   The package source is strictly bound to the protected primary commit:
+   - Primary commit SHA: `e9a1bc352d54741ae72e2766f6e07e28e798900d`
+   - Primary tree package path: `deploy/php-fpm-confinement/1.0.12/`
+   The Owner must verify in root console that the host repository checkout is on
+   exact commit `e9a1bc352d54741ae72e2766f6e07e28e798900d` prior to setting `PKG`.
+   Because the repository checkout location is not specified by primary
+   (`SOURCE_PATH_HOST=UNKNOWN_UNTIL_OWNER_SPECIFIES`), the commit verification
+   command cannot be hardcoded and is an Owner-managed pre-condition.
+
+2. **Package artifact and hash integrity (verified by the block below):**
+   The read-only verification block below proves that the `$PKG` directory is a
+   canonical, non-symlink directory whose `SHA256SUMS`, nine package files, and
+   `binding.json` match their documented SHA-256 pins. This block proves package
+   content integrity; it does not execute `git rev-parse`, verify git HEAD,
+   verify route status, or confirm secret absence.
+
+3. **Closed route and absence of production secrets (pre-install STOP conditions):**
+   Route closure and the absence of production secrets are separate host
+   operational pre-conditions that the Owner must confirm on the host before any
+   installation.
 
 Documentation blocker: The protected primary repository defines the tree path
 `deploy/php-fpm-confinement/1.0.12/` and immutable artifact hashes, but does not
@@ -52,9 +72,11 @@ regular file, uid 0, gid 0, mode `0644`, nlink 1. The installed targets are the
 nine `installed_files` entries in `binding.json`. Source files do not carry
 installed metadata; only installed targets carry `root:root 0644`.
 
-The package directory `PKG` must point to the verified primary source at commit
-`e9a1bc352d54741ae72e2766f6e07e28e798900d`, must be complete, must not be a
-symlink, and must pass the following integrity check before installation:
+Once the Owner confirms that the host checkout is bound to commit
+`e9a1bc352d54741ae72e2766f6e07e28e798900d`, sets `$PKG` to the corresponding
+`deploy/php-fpm-confinement/1.0.12` directory, and confirms route closure and
+secret absence, the following read-only block validates package artifact
+integrity before any target is touched:
 
 ```bash
 # Owner root console only.
@@ -86,9 +108,11 @@ test "$(sha256sum "$PKG/binding.json" | awk '{print $1}')" \
 
 The Owner must confirm all of the following before any `install` command:
 
+- the host repository checkout is verified on commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
+- `PKG` is the verified source directory bound to primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
+- the package artifact integrity check block above passed with exit code 0;
 - the route is closed;
 - no production secret exists or is placed;
-- `PKG` is the verified source directory bound to primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
 - no helper transfer directory or installed target is used as a staging path;
 - every installed target is absent and is not a symlink;
 - every target parent directory exists, is a real directory, and is not a
@@ -204,9 +228,9 @@ check /etc/systemd/system/wpcaregrid-production-php8.5-fpm.service c638125ca47c1
 ### Gate 1 STOP/HOLD
 
 Gate 1 is `HOLD` if:
-- `PKG` is unset, not verified, or does not match primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
+- `PKG` is unset, not verified, or the host checkout is not confirmed at primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
 - the host checkout path is not established from primary (documentation blocker);
-- any hash differs;
+- any artifact hash or checksum differs;
 - any target exists or is a symlink before installation;
 - any parent directory is missing or not a canonical non-symlink directory;
 - the route is open;
