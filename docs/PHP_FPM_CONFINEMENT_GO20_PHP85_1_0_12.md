@@ -25,32 +25,47 @@ Nginx is a required enforce-confined peer. Its profile permits the production vh
 
 Secret placement, route opening, and database/application validation are separate gates. CI and offline tests do not constitute live acceptance or production authorization.
 
-## Gate 1 — package transfer and root-console installation
+## Gate 1 — direct Owner root-console installation from verified source
 
-This section defines the Gate 1 handoff between a transfer-only upload and the
-root-console installation. It does not authorize either operation by itself.
+Owner decision: Confinement 1.0.12 Gate 1 is a direct Owner root-console installation
+from a named, verified source. There is no separate Elliot upload-manifest and no
+package transfer-only staging path. There is and will be no staging on this host.
+Helper 2.1.11 is DEFERRED until after fixture acceptance (Gate 3) and is not part
+of Gate 1. Do not use an installed target or the helper transfer directory as a
+source or staging destination.
 
-### Source and integrity
+### Source and integrity bound to protected primary
 
-The package source is the primary tree `deploy/php-fpm-confinement/1.0.12/`.
+The package source is bound to the protected primary commit:
+- Primary commit SHA: `e9a1bc352d54741ae72e2766f6e07e28e798900d`
+- Primary tree package path: `deploy/php-fpm-confinement/1.0.12/`
+
+Documentation blocker: The protected primary repository defines the tree path
+`deploy/php-fpm-confinement/1.0.12/` and immutable artifact hashes, but does not
+specify an absolute filesystem checkout path on the host. Because the host
+checkout path cannot be established from primary, this is recorded as a
+documentation blocker (`SOURCE_PATH_HOST=UNKNOWN_UNTIL_OWNER_SPECIFIES`). The
+documentation does not invent a host checkout path.
+
 The `package_owner_mode` in `binding.json` documents the **installed** metadata:
 regular file, uid 0, gid 0, mode `0644`, nlink 1. The installed targets are the
-nine `installed_files` entries in the same file. The source files are not
-assigned a host owner/mode by this document; only the installed targets carry
-the documented metadata.
+nine `installed_files` entries in `binding.json`. Source files do not carry
+installed metadata; only installed targets carry `root:root 0644`.
 
-The package directory must be complete, must not be a symlink, and must pass:
+The package directory `PKG` must point to the verified primary source at commit
+`e9a1bc352d54741ae72e2766f6e07e28e798900d`, must be complete, must not be a
+symlink, and must pass the following integrity check before installation:
 
 ```bash
 # Owner root console only.
 set -euo pipefail
-PKG="${PKG:?PKG is UNKNOWN until the Owner records the transfer-only destination}"
+PKG="${PKG:?STOP: PKG path to verified primary deploy/php-fpm-confinement/1.0.12 must be set by Owner}"
 test "$(id -u)" -eq 0 || { echo "STOP: root console required"; exit 1; }
-test -d "$PKG" && test ! -L "$PKG" || { echo "STOP: package directory invalid"; exit 1; }
+test -d "$PKG" && test ! -L "$PKG" || { echo "STOP: package directory invalid or symlink"; exit 1; }
 test "$(realpath -e -- "$PKG")" = "$PKG" \
   || { echo "STOP: package path is not canonical or contains a symlink"; exit 1; }
 test -f "$PKG/SHA256SUMS" && test ! -L "$PKG/SHA256SUMS" \
-  || { echo "STOP: SHA256SUMS missing"; exit 1; }
+  || { echo "STOP: SHA256SUMS missing or symlink"; exit 1; }
 test "$(sha256sum "$PKG/SHA256SUMS" | awk '{print $1}')" \
   = "c6d9e20b1ad1c59cb1dab4cef9bc0c0b047dfdf682493fd2de3e2326ad3e1f87" \
   || { echo "STOP: SHA256SUMS pin mismatch"; exit 1; }
@@ -67,29 +82,19 @@ test "$(sha256sum "$PKG/binding.json" | awk '{print $1}')" \
   || { echo "STOP: binding.json hash mismatch"; exit 1; }
 ```
 
-### Transfer-only upload and installation separation
-
-The repository does **not** define a package upload destination. Do not use an
-installed target or the helper transfer directory as the package upload
-destination. Until the Owner records a documented transfer-only destination,
-`PKG` is `UNKNOWN` and Gate 1 is `HOLD`.
-
-An upload, once the transfer-only destination is documented, may only place the
-package bytes in the transfer-only `PKG` directory. It must not write an
-installed target, execute a package file, load an AppArmor profile, reload
-systemd, or install the helper. The root-console installation below reads from
-`PKG` and is the only step that writes the nine installed targets.
-
 ### Pre-install STOP conditions
 
 The Owner must confirm all of the following before any `install` command:
 
 - the route is closed;
 - no production secret exists or is placed;
-- `PKG` is the documented, verified transfer-only package directory;
+- `PKG` is the verified source directory bound to primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
+- no helper transfer directory or installed target is used as a staging path;
 - every installed target is absent and is not a symlink;
 - every target parent directory exists, is a real directory, and is not a
   symlink; this procedure does not create missing parents or invent their mode;
+- staging does not exist on this host;
+- helper 2.1.11 is DEFERRED and not installed;
 - no helper installation, profile load/enforce, secret, database/application,
   route, or production action is part of Gate 1.
 
@@ -166,7 +171,9 @@ install -o root -g root -m 0644 \
 
 ### Gate 1 post-install read-only checks
 
-These checks are read-only. They do not load a profile, reload systemd, start a
+These checks are strictly read-only Owner root-console commands. They verify the
+installed metadata (`stat -c '%U:%G %a %h'` = `root:root 644 1`) and sha256
+hashes of all nine targets. They do not load a profile, reload systemd, start a
 service, install the helper, place a secret, touch the database/application,
 open the route, or activate production.
 
@@ -196,13 +203,19 @@ check /etc/systemd/system/wpcaregrid-production-php8.5-fpm.service c638125ca47c1
 
 ### Gate 1 STOP/HOLD
 
-Gate 1 is `HOLD` if the transfer-only destination is not documented, `PKG` is
-not verified, any hash differs, any target exists or is a symlink, any parent
-directory is missing or not a real directory, the route is not closed, or a
-production secret exists. Gate 1 is `STOP` on any command failure; do not retry,
-repair, or continue to profile load/enforce, live acceptance, helper install,
-secret placement, database/application checks, route opening, or production
-activation.
+Gate 1 is `HOLD` if:
+- `PKG` is unset, not verified, or does not match primary commit `e9a1bc352d54741ae72e2766f6e07e28e798900d`;
+- the host checkout path is not established from primary (documentation blocker);
+- any hash differs;
+- any target exists or is a symlink before installation;
+- any parent directory is missing or not a canonical non-symlink directory;
+- the route is open;
+- any production secret exists;
+- any attempt is made to use an installed target or helper transfer directory for package staging.
+
+Gate 1 is `STOP` on any command failure; do not retry, repair, or continue to
+profile load/enforce, live acceptance, helper install, secret placement,
+database/application checks, route opening, or production activation.
 
 ## Ubuntu 26.04 validation
 
