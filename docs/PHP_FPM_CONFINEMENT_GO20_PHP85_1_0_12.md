@@ -43,6 +43,7 @@ The package directory must be complete, must not be a symlink, and must pass:
 
 ```bash
 # Owner root console only.
+set -euo pipefail
 PKG="${PKG:?PKG is UNKNOWN until the Owner records the transfer-only destination}"
 test "$(id -u)" -eq 0 || { echo "STOP: root console required"; exit 1; }
 test -d "$PKG" && test ! -L "$PKG" || { echo "STOP: package directory invalid"; exit 1; }
@@ -94,6 +95,7 @@ The Owner must confirm all of the following before any `install` command:
 
 ```bash
 # Owner root console only. Stop if any target or parent is not exactly as required.
+set -euo pipefail
 targets=(
   /etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common
   /etc/apparmor.d/wpcaregrid-nginx
@@ -132,6 +134,7 @@ not a retry or repair instruction.
 
 ```bash
 # Owner root console only.
+set -euo pipefail
 install -o root -g root -m 0644 \
   "$PKG/apparmor/abstractions/wpcaregrid-php-fpm-common" \
   /etc/apparmor.d/abstractions/wpcaregrid-php-fpm-common
@@ -169,6 +172,7 @@ open the route, or activate production.
 
 ```bash
 # Owner root console only, read-only.
+set -euo pipefail
 check() {
   path=$1
   want=$2
