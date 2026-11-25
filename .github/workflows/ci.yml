@@ -47,18 +47,20 @@ jobs:
       - name: Compile production-only AppArmor profiles without loading them
         run: |
           set -euo pipefail
-          pkg=deploy/php-fpm-confinement/1.0.12
-          for profile in "$pkg"/apparmor/wpcaregrid-*; do
-            apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
+          for pkg in deploy/php-fpm-confinement/1.0.12 deploy/php-fpm-confinement/1.0.13; do
+            for profile in "$pkg"/apparmor/wpcaregrid-*; do
+              apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
+            done
           done
       - name: Validate production units with Ubuntu 26.04 systemd
         run: |
           set -euo pipefail
-          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.12/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
-          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.12/systemd/wpcaregrid-production-php8.5-fpm.service
+          sudo install -D -m 0644 deploy/php-fpm-confinement/1.0.13/systemd/nginx.service.d/90-wpcaregrid-confinement.conf /etc/systemd/system/nginx.service.d/90-wpcaregrid-confinement.conf
+          systemd-analyze verify nginx.service deploy/php-fpm-confinement/1.0.13/systemd/wpcaregrid-production-php8.5-fpm.service
       - name: Production-only package, acceptance, and immutable-byte tests
         run: |
           python3 scripts/tests/production-only-confinement-1-0-12-test.py
+          python3 scripts/tests/production-only-confinement-1-0-13-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
