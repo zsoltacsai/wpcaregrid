@@ -33,9 +33,11 @@ root-console installation. It does not authorize either operation by itself.
 ### Source and integrity
 
 The package source is the primary tree `deploy/php-fpm-confinement/1.0.12/`.
-The package owner/mode is the `package_owner_mode` in `binding.json`: regular
-file, uid 0, gid 0, mode `0644`, nlink 1. The installed targets are the nine
-`installed_files` entries in the same file.
+The `package_owner_mode` in `binding.json` documents the **installed** metadata:
+regular file, uid 0, gid 0, mode `0644`, nlink 1. The installed targets are the
+nine `installed_files` entries in the same file. The source files are not
+assigned a host owner/mode by this document; only the installed targets carry
+the documented metadata.
 
 The package directory must be complete, must not be a symlink, and must pass:
 
