@@ -543,8 +543,10 @@ _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME = 2
 _TRACEBACK_PARSE_FAILURE_STAGES = {
     "OVER_BOUND",
     "INVALID_ENCODING",
-    "FIRST_NONEMPTY_LINE_NOT_HEADER",
+    "NO_EXACT_TRACEBACK_HEADER",
     "PREFIX_BEFORE_TRACEBACK",
+    "FIRST_HEADER_SUFFIX_INVALID",
+    "PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER",
     "HEADER_WITHOUT_FRAME",
     "MISSING_EXCEPTION_LINE",
     "FRAME_OR_CHAIN_MISMATCH",
@@ -564,6 +566,17 @@ def _traceback_failure(status: str, stage: str, frame_count: int = 0) -> dict:
     }
 
 
+def _looks_like_exception_summary(line: str) -> bool:
+    match = _TRACEBACK_EXCEPTION.fullmatch(line)
+    if not match:
+        return False
+    name = match.group(1).rsplit(".", 1)[-1]
+    # Require a known or conventionally named exception class. A generic
+    # launcher line such as ``ERROR: ...`` is ordinary prefix text, not a
+    # Python exception summary.
+    return name in _TRACEBACK_CLASSES or name.endswith(("Error", "Exception", "Group"))
+
+
 def _traceback_summary(data: bytes | None) -> dict:
     """Parse only standard traceback structure; never return source, message, args, or full paths."""
     if data is None:
@@ -578,30 +591,32 @@ def _traceback_summary(data: bytes | None) -> dict:
         return _traceback_failure("UNPARSEABLE", "INVALID_ENCODING")
     lines = text.splitlines()
     first_nonempty = next((i for i, line in enumerate(lines) if line.strip()), None)
-    if first_nonempty is None:
-        return _traceback_failure("UNPARSEABLE", "FIRST_NONEMPTY_LINE_NOT_HEADER")
-    if lines[first_nonempty] != _TRACEBACK_HEADER:
-        # A caller such as systemd-run may write a diagnostic before the Python
-        # child traceback. Accept only a complete existing grammar suffix; the
-        # prefix is deliberately discarded and never appears in the result.
-        for start in range(first_nonempty + 1, len(lines)):
-            if lines[start] != _TRACEBACK_HEADER:
-                continue
-            # A multiline exception message can itself contain a line that
-            # equals the traceback header. Do not reinterpret text after an
-            # exception-summary line as a traceback prefix.
-            if any(_TRACEBACK_EXCEPTION.fullmatch(line) and ":" in line
-                   for line in lines[first_nonempty:start]):
-                break
-            suffix = _parse_traceback_lines(lines[start:])
-            if suffix.get("status") == "PARSED":
-                suffix["parse_failure_stage"] = "PREFIX_BEFORE_TRACEBACK"
-                return suffix
-            # Do not skip a malformed header/suffix and cherry-pick a later
-            # traceback from inside untrusted stderr.
-            break
-        return _traceback_failure("UNPARSEABLE", "FIRST_NONEMPTY_LINE_NOT_HEADER")
-    return _parse_traceback_lines(lines[first_nonempty:])
+    header_indexes = [i for i, line in enumerate(lines) if line == _TRACEBACK_HEADER]
+    if not header_indexes:
+        return _traceback_failure("UNPARSEABLE", "NO_EXACT_TRACEBACK_HEADER")
+
+    first_header = header_indexes[0]
+    has_prefix = first_header != first_nonempty
+    if has_prefix:
+        # A multiline exception summary may contain an exact header line.
+        # Treat that as ambiguous prefix data and fail closed rather than
+        # reinterpreting the message as a new traceback.
+        if any(_looks_like_exception_summary(line)
+               for line in lines[first_nonempty:first_header]):
+            return _traceback_failure("UNPARSEABLE", "PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER")
+
+    suffix = _parse_traceback_lines(lines[first_header:])
+    if suffix.get("status") == "PARSED":
+        if has_prefix:
+            suffix["parse_failure_stage"] = "PREFIX_BEFORE_TRACEBACK"
+        return suffix
+
+    # Collapse grammar-specific partial failures after a header. No partial
+    # frame count or parser detail is needed to distinguish this category.
+    status = suffix.get("status")
+    if status not in ("OVER_FRAME_BOUND", "UNSUPPORTED_EXCEPTION_FORMAT"):
+        status = "UNPARSEABLE"
+    return _traceback_failure(status, "FIRST_HEADER_SUFFIX_INVALID")
 
 
 def _parse_traceback_lines(lines: list[str]) -> dict:
@@ -666,7 +681,7 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
             return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
 
     if not blocks or final_frame is None or final_exception is None:
-        return _traceback_failure("UNPARSEABLE", "FIRST_NONEMPTY_LINE_NOT_HEADER", total_frames)
+        return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
     basename, line_number, function = final_frame
     safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
     return {

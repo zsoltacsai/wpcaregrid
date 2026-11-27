@@ -295,7 +295,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'ValueError: secret\n')
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary["status"], "UNPARSEABLE")
-        self.assertEqual(summary["parse_failure_stage"], "FRAME_OR_CHAIN_MISMATCH")
+        self.assertEqual(summary["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
         self.assertNotIn("secret", str(summary))
 
     def test_traceback_summary_accepts_chained_and_syntax_context_structure(self):
@@ -334,7 +334,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'TypeError: hidden-two\n')
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary["status"], "UNPARSEABLE")
-        self.assertEqual(summary["parse_failure_stage"], "FRAME_OR_CHAIN_MISMATCH")
+        self.assertEqual(summary["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
 
     def test_traceback_summary_rejects_unsupported_multiline_exception_groups(self):
         raw = (b'Traceback (most recent call last):\n'
@@ -343,7 +343,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'  +-+---------------- 1 ----------------\n')
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary["status"], "UNSUPPORTED_EXCEPTION_FORMAT")
-        self.assertEqual(summary["parse_failure_stage"], "UNSUPPORTED_EXCEPTION_FORMAT")
+        self.assertEqual(summary["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
 
     def test_traceback_summary_fails_closed_for_unbounded_or_malformed_input(self):
         self.assertEqual(HELPER._traceback_summary(None), {"status": "ABSENT_OR_UNKNOWN"})
@@ -353,7 +353,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(over_bound["parse_failure_stage"], "OVER_BOUND")
         malformed = HELPER._traceback_summary(b"Traceback (most recent call last):\nnot a frame\nValueError: x")
         self.assertEqual(malformed["status"], "UNPARSEABLE")
-        self.assertEqual(malformed["parse_failure_stage"], "HEADER_WITHOUT_FRAME")
+        self.assertEqual(malformed["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
 
     def test_traceback_summary_failure_stage_covers_rejected_grammar_without_echoing_input(self):
         header = b"Traceback (most recent call last):\n"
@@ -362,29 +362,29 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         chain = b"During handling of the above exception, another exception occurred:"
         valid_first = header + frame + exception
         cases = (
-            ("no-header", b"system error: raw-exception-message-secret", "FIRST_NONEMPTY_LINE_NOT_HEADER", 0),
-            ("blank-input", b"\n\n", "FIRST_NONEMPTY_LINE_NOT_HEADER", 0),
-            ("header-without-frame", header + exception, "HEADER_WITHOUT_FRAME", 0),
-            ("header-eof", header, "HEADER_WITHOUT_FRAME", 0),
+            ("no-header", b"system error: raw-exception-message-secret", "NO_EXACT_TRACEBACK_HEADER", 0),
+            ("blank-input", b"\n\n", "NO_EXACT_TRACEBACK_HEADER", 0),
+            ("header-without-frame", header + exception, "FIRST_HEADER_SUFFIX_INVALID", 0),
+            ("header-eof", header, "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("malformed-frame", header + b'  File "/root/private/probe.py", line bad, call\n' + exception,
-             "HEADER_WITHOUT_FRAME", 0),
-            ("missing-exception", header + frame, "MISSING_EXCEPTION_LINE", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
+            ("missing-exception", header + frame, "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("malformed-exception", header + frame + b"not an exception raw-secret\n",
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("missing-chain-separator", valid_first + chain + b"\n" + header + frame + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("extra-before-chain", valid_first + b"\n\n" + chain + b"\n\n" + header + frame + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("wrong-chain-marker", valid_first + b"\nnot a marker raw-secret\n\n" + header + frame + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("missing-chain-trailing-separator", valid_first + b"\n" + chain + b"\n" + header + frame + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("extra-after-chain", valid_first + b"\n" + chain + b"\n\n\n" + header + frame + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("wrong-chained-header", valid_first + b"\n" + chain + b"\nnot a header raw-secret\n",
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
             ("too-many-context-lines", header + frame + b"    source one\n    source two\n    source three\n" + exception,
-             "FRAME_OR_CHAIN_MISMATCH", 1),
+             "FIRST_HEADER_SUFFIX_INVALID", 0),
         )
         for name, raw, expected_stage, expected_frames in cases:
             with self.subTest(name=name):
@@ -424,6 +424,18 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         for forbidden in ("raw-prefix-secret", "raw-inner-message", "raw-final-message", "/root", raw.decode()):
             self.assertNotIn(forbidden, stderr_rendered)
 
+    def test_generic_error_wrapper_prefix_is_not_exception_summary(self):
+        raw = (b"ERROR: raw-launcher-message\n"
+               b"Traceback (most recent call last):\n"
+               b'  File "/root/private/probe.py", line 12, in run\n'
+               b"OSError: raw-exception-message\n")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "PARSED")
+        self.assertEqual(summary["parse_failure_stage"], "PREFIX_BEFORE_TRACEBACK")
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        for forbidden in ("raw-launcher-message", "raw-exception-message", "/root", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
+
     def test_traceback_summary_rejects_malformed_suffix_after_prefix(self):
         raw = (b"wrapper said error: raw-prefix-secret\n"
                b"Traceback (most recent call last):\n"
@@ -432,7 +444,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b"trailing raw-suffix-secret\n")
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
-            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
@@ -443,7 +455,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         raw = b"RuntimeError: Traceback (most recent call last): raw-message-secret\n"
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
-            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "status": "UNPARSEABLE", "parse_failure_stage": "NO_EXACT_TRACEBACK_HEADER",
             "frame_count": 0,
         })
         self.assertNotIn("raw-message-secret", __import__("json").dumps(summary))
@@ -454,11 +466,24 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                              b"ValueError: raw-suffix-message\n")
         summary = HELPER._traceback_summary(multiline_message)
         self.assertEqual(summary, {
-            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "status": "UNPARSEABLE", "parse_failure_stage": "PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary)
         for forbidden in ("raw-prefix-message", "raw-suffix-message", "/root", multiline_message.decode()):
+            self.assertNotIn(forbidden, rendered)
+
+        class_only_message = (b"RuntimeError\n"
+                              b"Traceback (most recent call last):\n"
+                              b'  File "/root/private/probe.py", line 8, in call\n'
+                              b"ValueError: raw-suffix-message\n")
+        summary = HELPER._traceback_summary(class_only_message)
+        self.assertEqual(summary, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER",
+            "frame_count": 0,
+        })
+        rendered = __import__("json").dumps(summary)
+        for forbidden in ("RuntimeError", "raw-suffix-message", "/root", class_only_message.decode()):
             self.assertNotIn(forbidden, rendered)
 
     def test_traceback_summary_rejects_multiple_unrelated_headers(self):
@@ -468,7 +493,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                + header + frame + b"TypeError: raw-two\n")
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
-            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
@@ -485,8 +510,8 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             b"Traceback (most recent call last):\n" + frame * (HELPER._MAX_TRACEBACK_FRAMES + 1)
         )
         self.assertEqual(too_many_frames, {
-            "status": "OVER_FRAME_BOUND", "parse_failure_stage": "OVER_FRAME_BOUND",
-            "frame_count": HELPER._MAX_TRACEBACK_FRAMES,
+            "status": "OVER_FRAME_BOUND", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
+            "frame_count": 0,
         })
         for summary in (invalid_encoding, too_many_frames):
             self.assertNotIn("raw-secret", str(summary))
