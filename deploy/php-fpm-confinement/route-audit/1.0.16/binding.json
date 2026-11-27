@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "artifact": "wpcg-production-nginx-route-review-aid",
+  "version": "1.0.16",
+  "acceptance_verdict": false,
+  "route_attestation": false,
+  "parser_source": "pinned_deploy_priv.py",
+  "parser_sha256": "c61cebec06152fdbf54599fa4296c68d5d5db7c2220dacce38c7104da7b6aba2"
+}

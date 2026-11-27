@@ -68,6 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           export PYTHONDONTWRITEBYTECODE=1
+          python3 -B scripts/tests/production-route-audit-1-0-16-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-orchestrator-integrity-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-orchestrator-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-report-test.py

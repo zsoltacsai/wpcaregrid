@@ -35,6 +35,40 @@ immutable pins. The artifact's `PINNED_INPUTS.json` binds it to the exact
 sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 `/tmp` copy or a runner from a mutable worktree.
 
+### Read-only origin route review artifact
+
+The route attestation requires both provider evidence and the effective origin
+Nginx configuration. The separately versioned review aid lives at
+`deploy/php-fpm-confinement/route-audit/1.0.16/`. Its Git commit/tree and
+`SHA256SUMS` are immutable outer pins; the manifest SHA-256 is
+`4c1f4ea9be93419738a9bf7a73b6432fc8d7a5ceb2dfa7dafe812ea432f4fdfb`.
+`binding.json` identifies it as a
+review-only tool, and `pinned_deploy_priv.py` must match the embedded SHA-256.
+The source tool never returns a closed-route PASS and never creates the
+attestation. Its `effective_config_sha256` identifies the exact text stream
+given to its parser without retaining that raw stream.
+
+Stage it only from the exact merged commit that contains the artifact, into a
+new absent root-owned directory, and verify the Git tree, file list, modes,
+ownership, link counts, and manifest before use. Do not overwrite an existing
+destination. On the host, run `nginx -t`, then pipe `nginx -T` directly into
+the pinned review tool. Keep raw output in the pipe only; save only the
+redacted JSON summary and command exit statuses in the root-only evidence
+envelope. The summary requires manual Owner review of every active server and
+location route, including `listen`, `server_name`, `root`/`alias`,
+`try_files`/`return`/`rewrite`/`error_page`, variable/map relationships,
+FastCGI socket, TLS paths, proxy/auth paths, and any unsupported syntax.
+Parser `summary_parse=PASS` means only that the bounded parser understood the
+input; it is not a route verdict. Any ambiguity, unresolved variable,
+unclassified directive, non-404 production route, or app upstream is HOLD.
+
+Only after Owner review of the origin summary and the provider evidence may an
+authorized operator create the separate `route-closure.json` described below.
+The record must use the provider-export SHA-256 and the summary's
+`effective_config_sha256`; neither hash alone proves route closure. A
+DNS-only export does not prove origin behavior, and a redacted route summary
+does not prove current provider state.
+
 ### Preconditions and external route attestation
 
 Run only after the protected primary has merged the artifact and exact-head CI
