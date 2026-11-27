@@ -75,3 +75,8 @@ the matrix requires it, then calls the pinned verifier with that profile's
 own evidence. The sibling listener is used only for build/deploy CLI profiles.
 Any failure stops the run and preserves evidence; no weaker profile or retry
 is attempted. Fixture cleanup is gated on all four verifier PASS results.
+
+Each sibling listener gets a fresh random nonce in its transient systemd unit
+name. The runner owns that unit only after its own `systemd-run` returns success,
+and cleanup targets only the recorded nonce unit. A failed or timed-out start is
+ambiguous: the runner leaves any late/foreign unit untouched and reports HOLD.

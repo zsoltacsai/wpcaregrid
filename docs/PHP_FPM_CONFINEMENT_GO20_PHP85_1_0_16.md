@@ -87,7 +87,7 @@ path before extraction. Run as root from the trusted existing checkout, with
 set -euo pipefail
 ORCH_COMMIT='<exact reviewed merge commit>'
 ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post'
-ORCH_TREE='10fae7a287e370b13ea8b403856f29ec7dbd3066'
+ORCH_TREE='ac7a5b71bcb400efa92606cb71006672b705865f'
 test "$(git -C /home/deploy/wpcaregrid rev-parse "$ORCH_COMMIT:$ORCH_REL")" = "$ORCH_TREE"
 DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post'
 BASE='/usr/local/libexec/wpcg-gate2-orchestrators'
@@ -123,9 +123,9 @@ for file in "$DEST"/*; do
 done
 cd "$DEST"
 sha256sum -c --strict SHA256SUMS
-test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '4d32901addf3593cfe7185885bac1854eb9adbf79687772fee81cfa9dc2d9aec'
+test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = 'af5831f07753e47b5aa38ac8d8e3837133c889852d3f015b2b75b408192a9549'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
-test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'cda9e4dacca2c7917196c9c812909c4fe08c9f4accd665f64b3503059f13d467'
+test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = '6901b25fd5062c01133ba225a3dbf36b3e7df2d2d5b99704c8c150af6f85edd1'
 ```
 
 Before proceeding, compare the staged file names to the exact artifact tree,
@@ -177,9 +177,15 @@ unreaped child, or nonzero `su` exit is HOLD. The orchestrator then:
    only where required by the matrix. Raw JSON, stderr and audit evidence stay
    in that run's root-only evidence directory.
 4. Starts the matrix-pinned sibling listener only around the baseline/confined
-   pair for the two CLI profiles. It verifies the exact banner, stops the unit,
-   and verifies both unit inactivity/unload and socket absence before moving
-   on. It does not run PHP cache-building or database identity commands.
+   pair for the two CLI profiles. Each invocation uses a fresh 128-bit random
+   suffix in its transient systemd unit name. The runner records ownership only
+   after that exact `systemd-run` call returns success; cleanup can stop only
+   the recorded nonce unit, never the legacy/shared `wpcg-sibling-canary.service`.
+   If `systemd-run` fails or times out, a late/active unit is ambiguous and is
+   left untouched for operator review (HOLD). After a successful start it
+   verifies the exact banner, stops its own unit, and verifies that unit is
+   inactive/unloaded and the socket is absent before moving on. It does not run
+   PHP cache-building or database identity commands.
 5. Runs the pinned verifier separately for each profile with only that
    profile's baseline, confined, before/after inventory and correlated audit
    inputs. Any failure stops the run and preserves evidence. No cleanup occurs

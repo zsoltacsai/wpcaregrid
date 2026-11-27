@@ -157,5 +157,79 @@ class DeriveProfileTests(unittest.TestCase):
             self.assertFalse(module.unload_probe(self.profile))
 
 
+class SiblingOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        module.SIBLING_UNITS.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.evidence = Path(self.tmp.name)
+        self.pkg = self.evidence / 'package'
+        (self.pkg / 'acceptance').mkdir(parents=True)
+        self.matrix = self.pkg / 'acceptance/matrix.json'
+        self.matrix.write_text('{}')
+        self.commands = []
+        self.foreign = {'wpcg-sibling-canary.service': 'inactive'}
+        self.lexists_patch = patch.object(module.os.path, 'lexists', return_value=False)
+        self.lexists_patch.start()
+        self.addCleanup(self.lexists_patch.stop)
+        self.nonce_patch = patch.object(module.secrets, 'token_hex', return_value='a' * 32)
+        self.nonce_patch.start()
+        self.addCleanup(self.nonce_patch.stop)
+
+        def command_ok(argv, **kwargs):
+            self.commands.append(tuple(argv))
+            if argv[1] == 'is-active':
+                name = argv[-1]
+                return 0 if self.foreign.get(name) == 'active' else 3
+            if argv[1] == 'stop':
+                self.foreign[argv[-1]] = 'inactive'
+                return 0
+            return 0
+        self.command_patch = patch.object(module, 'command_ok', side_effect=command_ok)
+        self.command_patch.start()
+        self.addCleanup(self.command_patch.stop)
+
+    def tearDown(self):
+        module.SIBLING_UNITS.clear()
+        self.tmp.cleanup()
+
+    def _assert_failed_start_does_not_stop_late_foreign_unit(self, outcome):
+        started = []
+        def fake_run(argv, **kwargs):
+            self.assertIn('--unit=wpcg-g2-sibling-' + ('a' * 32), argv)
+            # Model another actor activating the attempted nonce name after
+            # our precheck, while this invocation's systemd-run fails/times out.
+            self.foreign['wpcg-g2-sibling-' + ('a' * 32) + '.service'] = 'active'
+            self.foreign['wpcg-sibling-canary.service'] = 'active'
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return SimpleNamespace(returncode=outcome)
+
+        with patch.object(module, 'run', side_effect=fake_run):
+            with self.assertRaises(module.Hold) as raised:
+                module.start_sibling(self.pkg, self.matrix, self.evidence,
+                                     lambda unit: started.append(unit))
+        self.assertEqual(raised.exception.code, 'sibling-start')
+        # This is the profile_run finally contract: no callback means no owned
+        # unit, so cleanup must not call systemctl stop for any unit.
+        for unit in started:
+            module.stop_sibling(unit)
+        self.assertEqual(started, [])
+        self.assertEqual(self.foreign['wpcg-sibling-canary.service'], 'active')
+        self.assertEqual(self.foreign['wpcg-g2-sibling-' + ('a' * 32) + '.service'], 'active')
+        self.assertFalse(any(command[1] == 'stop' for command in self.commands))
+        self.assertFalse(any('wpcg-sibling-canary.service' in command for command in self.commands))
+
+    def test_systemd_run_failure_does_not_stop_late_foreign_unit(self):
+        self._assert_failed_start_does_not_stop_late_foreign_unit(1)
+
+    def test_systemd_run_timeout_does_not_stop_late_foreign_unit(self):
+        timeout = module.subprocess.TimeoutExpired(['systemd-run'], 20)
+        self._assert_failed_start_does_not_stop_late_foreign_unit(timeout)
+
+    def test_cleanup_rejects_shared_or_malformed_unit_name(self):
+        self.assertFalse(module.stop_sibling('wpcg-sibling-canary.service'))
+        self.assertEqual(self.commands, [])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

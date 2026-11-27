@@ -29,6 +29,7 @@ RESULT_FIELDS = ('profile','status','inventory_before_rc','baseline_rc','confine
                  'verifier_rc','sibling_required','sibling_cleanup_ok','probe_unloaded','original_exec_check')
 ACTIVE_EVIDENCE = ''
 CURRENT_PHASE = 'startup'
+SIBLING_UNITS = []
 GATE_STATE = {'package_pin_ok':False,'fixture_pre_match':False,'host_preflight_ok':False}
 PROBE_PROFILE_OWNER = (0,0)
 STALE_PARTIAL_PROFILE = pathlib.Path('/')
@@ -444,16 +445,26 @@ def launch_probe(pkg,matrix_text,profile,mode,env,confined,out,err):
     return p.returncode
 
 
-def start_sibling(pkg,matrix_path,evidence,on_attempt=None):
+def start_sibling(pkg,matrix_path,evidence,on_started=None):
     if os.path.lexists(SOCKET): raise Hold('sibling-socket-before')
-    unit_rc=command_ok(['/usr/bin/systemctl','is-active','--quiet','wpcg-sibling-canary.service'])
+    unit='wpcg-g2-sibling-'+secrets.token_hex(16)
+    unit_service=unit+'.service'
+    unit_rc=command_ok(['/usr/bin/systemctl','is-active','--quiet',unit_service])
     if unit_rc==0: raise Hold('sibling-unit-existing')
     if unit_rc not in (3,4): raise Hold('sibling-unit-state')
-    if on_attempt is not None: on_attempt()
-    p=run(['/usr/bin/systemd-run','--quiet','--collect','--unit=wpcg-sibling-canary','--property=RuntimeMaxSec=600','--property=Type=exec',
-           '/usr/bin/python3','-I','-B',str(pkg/'acceptance/sibling-listener.py'),str(matrix_path),'--seconds','600'],
-          out=evidence/'sibling-start.stdout',err=evidence/'sibling-start.stderr',timeout=20)
+    try:
+        p=run(['/usr/bin/systemd-run','--quiet','--collect','--unit='+unit,'--property=RuntimeMaxSec=600','--property=Type=exec',
+               '/usr/bin/python3','-I','-B',str(pkg/'acceptance/sibling-listener.py'),str(matrix_path),'--seconds','600'],
+              out=evidence/'sibling-start.stdout',err=evidence/'sibling-start.stderr',timeout=20)
+    except (OSError,subprocess.TimeoutExpired):
+        # The unit state is ambiguous. No ownership callback was made, so leave
+        # any late/foreign unit untouched and fail closed for operator review.
+        raise Hold('sibling-start')
     if p.returncode!=0: raise Hold('sibling-start')
+    # Ownership starts only after this exact systemd-run invocation confirms success.
+    # On spawn error, timeout, or nonzero status, leave any same-name/late unit alone.
+    SIBLING_UNITS.append(unit_service)
+    if on_started is not None: on_started(unit_service)
     deadline=time.monotonic()+8
     while time.monotonic()<deadline:
         if os.path.exists(SOCKET) and stat.S_ISSOCK(os.lstat(SOCKET).st_mode): return
@@ -461,19 +472,31 @@ def start_sibling(pkg,matrix_path,evidence,on_attempt=None):
     raise Hold('sibling-ready')
 
 
-def stop_sibling():
-    command_ok(['/usr/bin/systemctl','stop','wpcg-sibling-canary.service'],timeout=30)
+def stop_sibling(unit_service):
+    if not isinstance(unit_service,str) or not re.fullmatch(r'wpcg-g2-sibling-[0-9a-f]{32}\.service',unit_service):
+        return False
+    command_ok(['/usr/bin/systemctl','stop',unit_service],timeout=30)
     deadline=time.monotonic()+10
     while time.monotonic()<deadline:
-        if sibling_gone(): return True
+        if sibling_gone((unit_service,)): return True
         time.sleep(0.1)
     return False
 
 
-def sibling_gone():
-    # systemctl is-active: 3=inactive, 4=unknown/unloaded. Other errors are UNKNOWN.
-    rc=command_ok(['/usr/bin/systemctl','is-active','--quiet','wpcg-sibling-canary.service'])
-    return rc in (3,4) and not os.path.lexists(SOCKET)
+def sibling_gone(units=None):
+    # Check only nonce unit names this invocation successfully started. Never
+    # stop the legacy shared unit. Its state is still a pre/postcondition: active
+    # means another actor may own the canary and this run must HOLD.
+    legacy_rc=command_ok(['/usr/bin/systemctl','is-active','--quiet','wpcg-sibling-canary.service'])
+    if legacy_rc not in (3,4): return False
+    names=tuple(SIBLING_UNITS if units is None else units)
+    if any(not isinstance(name,str) or not re.fullmatch(r'wpcg-g2-sibling-[0-9a-f]{32}\.service',name)
+           for name in names):
+        return False
+    for name in names:
+        rc=command_ok(['/usr/bin/systemctl','is-active','--quiet',name])
+        if rc not in (3,4): return False
+    return not os.path.lexists(SOCKET)
 
 
 def unload_probe(path):
@@ -595,17 +618,17 @@ def profile_run(name,matrix_text,matrix,verifier,boot,evidence):
     # One unique nonce and sender for each baseline/confined invocation.
     N=name.replace('wpcaregrid-','').replace('php-','').replace('-','')+secrets.token_hex(3)
     profile_path=evidence/(name+'-probe.profile')
-    loaded=False; load_attempted=False; sibling=False; sender=None; sender_nonce=None
+    loaded=False; load_attempted=False; sibling_unit=None; sender=None; sender_nonce=None
     start_ns=time.time_ns()
     try:
         set_phase(name+'.setup')
         if result['sibling_required']:
-            # Arm cleanup after prechecks but before invoking systemd-run: the unit may
-            # start even if the outer command times out or returns an error.
-            def arm_sibling_cleanup():
-                nonlocal sibling
-                sibling=True
-            start_sibling(PKG,PKG/'acceptance/matrix.json',evidence,arm_sibling_cleanup)
+            # Cleanup is armed only after systemd-run reports that this invocation
+            # successfully created its nonce unit. Failed/late starts remain untouched.
+            def own_sibling(unit_service):
+                nonlocal sibling_unit
+                sibling_unit=unit_service
+            start_sibling(PKG,PKG/'acceptance/matrix.json',evidence,own_sibling)
         for mode in ('baseline','confined'):
             set_phase(name+'.'+mode+'.sender-start')
             nonce=N+('b' if mode=='baseline' else 'c')
@@ -632,8 +655,8 @@ def profile_run(name,matrix_text,matrix,verifier,boot,evidence):
         if loaded:
             if not unload_probe(profile_path): raise Hold('probe-unload')
             loaded=False; load_attempted=False; result['probe_unloaded']=True
-        if sibling:
-            result['sibling_cleanup_ok']=stop_sibling(); sibling=False
+        if sibling_unit is not None:
+            result['sibling_cleanup_ok']=stop_sibling(sibling_unit); sibling_unit=None
             if not result['sibling_cleanup_ok']: raise Hold('sibling-cleanup')
         end_ns=time.time_ns()
         set_phase(name+'.audit-capture')
@@ -669,8 +692,8 @@ def profile_run(name,matrix_text,matrix,verifier,boot,evidence):
         if loaded or load_attempted:
             try: result['probe_unloaded']=unload_probe(profile_path)
             except Exception: result['probe_unloaded']=False
-        if sibling:
-            try: result['sibling_cleanup_ok']=stop_sibling()
+        if sibling_unit is not None:
+            try: result['sibling_cleanup_ok']=stop_sibling(sibling_unit)
             except Exception: result['sibling_cleanup_ok']=False
         if sender is not None and sender_nonce is not None:
             # Let the pinned sender reach its documented 120-second timeout and its own finally cleanup.
