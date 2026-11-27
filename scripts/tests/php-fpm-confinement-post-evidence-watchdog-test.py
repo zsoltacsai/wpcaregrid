@@ -40,6 +40,12 @@ def success_report():
 
 
 class EvidenceWatchdogTests(unittest.TestCase):
+    def test_bundle_root_requires_0555_and_parent_allows_only_root_write(self):
+        self.assertTrue(WATCHDOG._directory_mode_safe(stat.S_IFDIR | 0o555, bundle_root=True))
+        self.assertFalse(WATCHDOG._directory_mode_safe(stat.S_IFDIR | 0o755, bundle_root=True))
+        self.assertTrue(WATCHDOG._directory_mode_safe(stat.S_IFDIR | 0o755, bundle_root=False))
+        self.assertFalse(WATCHDOG._directory_mode_safe(stat.S_IFDIR | 0o775, bundle_root=False))
+
     def make_bundle(self, root, helper_bytes, *, helper_mode=0o444):
         root = Path(root)
         watchdog_bytes = WATCHDOG_PATH.read_bytes()
@@ -115,6 +121,28 @@ class EvidenceWatchdogTests(unittest.TestCase):
             self.assertEqual(stdout, b"verified-source-ran\n")
             self.assertNotIn(b"replacement-ran", stdout)
             root.chmod(0o755)
+
+    def test_bundle_rejects_symlink_and_hardlink_helper_paths(self):
+        for kind in ("symlink", "hardlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.make_bundle(root, b"print('trusted')\n")
+                root.chmod(0o755)
+                helper_path = root / WATCHDOG.HELPER_NAME
+                helper_path.unlink()
+                if kind == "symlink":
+                    victim = root / "victim"
+                    victim.write_bytes(b"/private/path/raw-secret")
+                    helper_path.symlink_to(victim)
+                else:
+                    os.link(root / WATCHDOG.WATCHDOG_NAME, helper_path)
+                root.chmod(0o555)
+                with self.assertRaises(ValueError):
+                    WATCHDOG._load_bundle(
+                        str(root), expected_uid=os.getuid(), expected_gid=os.getgid(),
+                        require_trusted_path=False,
+                    )
+                root.chmod(0o755)
 
     def test_manifest_pins_the_versioned_local_bundle(self):
         manifest_path = WATCHDOG_PATH.with_name("bundle-manifest.json")

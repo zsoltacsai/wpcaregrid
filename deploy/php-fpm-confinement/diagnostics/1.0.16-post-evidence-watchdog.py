@@ -77,6 +77,13 @@ def _same_file(left, right) -> bool:
             right.st_nlink, right.st_size)
 
 
+def _directory_mode_safe(mode: int, *, bundle_root: bool) -> bool:
+    permissions = stat.S_IMODE(mode)
+    if bundle_root:
+        return permissions == 0o555
+    return (permissions & 0o022) == 0
+
+
 def _open_bundle_directory(path: str, *, expected_uid: int, expected_gid: int,
                            require_trusted_path: bool) -> int:
     absolute = os.path.abspath(path)
@@ -99,8 +106,11 @@ def _open_bundle_directory(path: str, *, expected_uid: int, expected_gid: int,
             if not component:
                 continue
             before = os.stat(component, dir_fd=fd, follow_symlinks=False)
+            child_path = os.path.join(current, component)
+            is_bundle_root = child_path == absolute
             if (not stat.S_ISDIR(before.st_mode) or before.st_uid != expected_uid
-                    or before.st_gid != expected_gid or stat.S_IMODE(before.st_mode) & 0o022):
+                    or before.st_gid != expected_gid
+                    or not _directory_mode_safe(before.st_mode, bundle_root=is_bundle_root)):
                 raise ValueError("bundle-path-metadata")
             child_fd = os.open(component, directory_flags, dir_fd=fd)
             opened = os.fstat(child_fd)
@@ -109,7 +119,7 @@ def _open_bundle_directory(path: str, *, expected_uid: int, expected_gid: int,
                 raise ValueError("bundle-path-raced")
             os.close(fd)
             fd = child_fd
-            current = os.path.join(current, component)
+            current = child_path
         if current != absolute:
             raise ValueError("bundle-path")
         return fd
