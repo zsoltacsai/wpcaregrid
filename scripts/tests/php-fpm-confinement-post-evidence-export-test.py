@@ -424,6 +424,18 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         for forbidden in ("raw-prefix-secret", "raw-inner-message", "raw-final-message", "/root", raw.decode()):
             self.assertNotIn(forbidden, stderr_rendered)
 
+    def test_generic_error_wrapper_prefix_is_not_exception_summary(self):
+        raw = (b"ERROR: raw-launcher-message\n"
+               b"Traceback (most recent call last):\n"
+               b'  File "/root/private/probe.py", line 12, in run\n'
+               b"OSError: raw-exception-message\n")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "PARSED")
+        self.assertEqual(summary["parse_failure_stage"], "PREFIX_BEFORE_TRACEBACK")
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        for forbidden in ("raw-launcher-message", "raw-exception-message", "/root", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
+
     def test_traceback_summary_rejects_malformed_suffix_after_prefix(self):
         raw = (b"wrapper said error: raw-prefix-secret\n"
                b"Traceback (most recent call last):\n"
