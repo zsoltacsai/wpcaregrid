@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import importlib.util
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -244,6 +245,57 @@ class SiblingOwnershipTests(unittest.TestCase):
     def test_cleanup_rejects_shared_or_malformed_unit_name(self):
         self.assertFalse(module.stop_sibling('wpcg-sibling-canary.service'))
         self.assertEqual(self.commands, [])
+
+    def test_two_cli_sibling_lifecycles_share_evidence_dir(self):
+        socket = {'present': False}
+        units = {}
+        nonce_values = ['1' * 32, '2' * 32]
+        run_calls = []
+
+        def command_ok(argv, **kwargs):
+            self.commands.append(tuple(argv))
+            if argv[1] == 'is-active':
+                name = argv[-1]
+                return 0 if units.get(name) == 'active' or self.foreign.get(name) == 'active' else 3
+            if argv[1] == 'stop':
+                units[argv[-1]] = 'inactive'
+                socket['present'] = False
+                return 0
+            return 0
+
+        def subprocess_run(argv, *, stdout, stderr, **kwargs):
+            run_calls.append((tuple(argv), stdout.name, stderr.name))
+            unit_arg = next(arg for arg in argv if arg.startswith('--unit='))
+            name = unit_arg.split('=', 1)[1] + '.service'
+            units[name] = 'active'
+            socket['present'] = True
+            return SimpleNamespace(returncode=0)
+
+        with patch.object(module.secrets, 'token_hex', side_effect=nonce_values), \
+             patch.object(module, 'command_ok', side_effect=command_ok), \
+             patch.object(module.subprocess, 'run', side_effect=subprocess_run), \
+             patch.object(module.os.path, 'lexists', side_effect=lambda path: socket['present']), \
+             patch.object(module.os.path, 'exists', side_effect=lambda path: socket['present']), \
+             patch.object(module.os, 'lstat', return_value=SimpleNamespace(st_mode=stat.S_IFSOCK)), \
+             patch.object(module.stat, 'S_ISSOCK', return_value=True):
+            started = []
+            module.start_sibling(self.pkg, self.matrix, self.evidence, started.append)
+            self.assertTrue(module.stop_sibling(started[0]))
+            module.start_sibling(self.pkg, self.matrix, self.evidence, started.append)
+
+            self.assertEqual(len(run_calls), 2)
+            self.assertNotEqual(run_calls[0][1], run_calls[1][1])
+            self.assertNotEqual(run_calls[0][2], run_calls[1][2])
+            self.assertTrue(all(Path(path).is_file() for call in run_calls for path in call[1:]))
+            self.assertEqual(len(started), 2)
+            self.assertNotEqual(started[0], started[1])
+
+            self.assertTrue(module.stop_sibling(started[1]))
+            self.assertTrue(module.sibling_gone())
+
+        stops = [command[-1] for command in self.commands if len(command) > 1 and command[1] == 'stop']
+        self.assertEqual(stops, started)
+        self.assertFalse(socket['present'])
 
 
 if __name__ == '__main__':
