@@ -12,9 +12,9 @@ PKG = os.path.abspath(PKG)
 PINNED_FIXTURE = os.environ.get("WPCG_NGINX_PINNED_SOURCE", os.path.join(PKG, "pinned_deploy_priv.py"))
 os.environ["WPCG_NGINX_PINNED_SOURCE"] = PINNED_FIXTURE
 P = os.path.join(PKG, "route_summary.py")
-EXPECTED_ADAPTER_SHA256 = "7715dae9e8ec7c92750bdfd9d99dbecbc3dedcfb6b6f96f4c82042fbb4e9752c"
+EXPECTED_ADAPTER_SHA256 = "c1834dba5263448e768ee6e3b0666c17ed5f2895e6cc41bb0f03018017c9b241"
 EXPECTED_PARSER_SHA256 = "c61cebec06152fdbf54599fa4296c68d5d5db7c2220dacce38c7104da7b6aba2"
-EXPECTED_MANIFEST_SHA256 = "4c1f4ea9be93419738a9bf7a73b6432fc8d7a5ceb2dfa7dafe812ea432f4fdfb"
+EXPECTED_MANIFEST_SHA256 = "a9c5df2ddad544ff78819f36ea833b4f3a36991c510e92dacc6a9016575b1f90"
 spec = importlib.util.spec_from_file_location("summary", P)
 M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
@@ -275,6 +275,20 @@ class Tests(unittest.TestCase):
         bad = M.summarize(dump(base("server { listen 80; server_name wpcaregrid.com; root /srv/secret/public; }")))
         self.assertNotIn("/srv/secret", json.dumps(bad))
         self.assertEqual(bad["route_verdict"], "HOLD")
+
+    def test_public_root_rejects_traversal_and_noncanonical_paths(self):
+        for path in (
+            "/var/www/wpcaregrid-production/releases/../public",
+            "/var/www/wpcaregrid-production/releases/./release/public",
+            "/var/www/wpcaregrid-production/releases//release/public",
+            "/var/www/wpcaregrid-production/current/public/",
+        ):
+            with self.subTest(path=path):
+                result = M.summarize(dump(base(f"server {{ listen 80; server_name wpcaregrid.com; root {path}; }}")))
+                root = next(row for row in result["route_records"] if row["directive"] == "root")
+                self.assertEqual(root["values"], "<redacted>")
+                self.assertEqual(result["route_verdict"], "HOLD")
+                self.assertNotIn(path, json.dumps(result))
 
     def test_empty_include_glob_has_explicit_hold_code(self):
         config = base("server { listen 80; server_name wpcaregrid.com; location / { return 404; } }")

@@ -15,7 +15,7 @@ PINNED_SOURCE = None if os.geteuid() == 0 else os.environ.get("WPCG_NGINX_PINNED
 
 ROOT = "/etc/nginx/nginx.conf"
 DOMAINS = {"wpcaregrid.com", "www.wpcaregrid.com"}
-PUBLIC_ROOT = re.compile(r"^/var/www/wpcaregrid-production/(?:current|releases/[A-Za-z0-9._-]+)/public/?$")
+PUBLIC_ROOT = re.compile(r"^/var/www/wpcaregrid-production/(?:current|releases/[A-Za-z0-9._-]+)/public$")
 CERT = re.compile(r"^/etc/letsencrypt/(?:live/wpcaregrid\.com/fullchain\.pem|archive/wpcaregrid\.com/fullchain[0-9]+\.pem)$")
 KEY = re.compile(r"^/etc/letsencrypt/(?:live/wpcaregrid\.com/privkey\.pem|archive/wpcaregrid\.com/privkey[0-9]+\.pem)$")
 FPM_SOCKET = "unix:/run/php/wpcaregrid-production-php8.5-fpm.sock"
@@ -313,7 +313,14 @@ def resolve_include(pattern, source_paths):
 
 def approved_path(name, args):
     if name in {"root", "alias"}:
-        return args[0] if len(args) == 1 and PUBLIC_ROOT.fullmatch(args[0]) else None
+        if len(args) != 1:
+            return None
+        path = args[0]
+        # Nginx paths must be canonical before allowlist matching. normpath
+        # rejects dot segments, duplicate separators, and trailing slashes.
+        if not path.startswith("/") or posixpath.normpath(path) != path:
+            return None
+        return path if PUBLIC_ROOT.fullmatch(path) else None
     if name == "ssl_certificate":
         return args[0] if len(args) == 1 and CERT.fullmatch(args[0]) else None
     if name == "ssl_certificate_key":
