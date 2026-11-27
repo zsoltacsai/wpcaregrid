@@ -523,6 +523,114 @@ def _stderr_class(data: bytes | None) -> str:
     return "other"
 
 
+_TRACEBACK_FRAME = re.compile(r'^\s+File "([^"\r\n]{1,4096})", line ([0-9]{1,8}), in ([A-Za-z0-9_<>() .-]{1,128})\s*$')
+_TRACEBACK_EXCEPTION = re.compile(r'^([A-Za-z_][A-Za-z0-9_.]{0,127})(?::.*)?$')
+_TRACEBACK_CLASSES = {
+    "AssertionError", "AttributeError", "BaseException", "BrokenPipeError", "ChildProcessError",
+    "FileNotFoundError", "IndexError", "KeyError", "MemoryError", "NameError", "OSError",
+    "PermissionError", "ProcessLookupError", "RuntimeError", "SystemError", "TimeoutError",
+    "TypeError", "UnicodeDecodeError", "ValueError", "ExceptionGroup",
+}
+_TRACEBACK_BASES = {"probe.py", "subprocess.py", "<string>", "runpy.py", "site.py"}
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+_TRACEBACK_CHAIN_MARKERS = {
+    "During handling of the above exception, another exception occurred:",
+    "The above exception was the direct cause of the following exception:",
+}
+_MAX_TRACEBACK_BYTES = 65_536
+_MAX_TRACEBACK_FRAMES = 128
+_MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME = 2
+
+
+def _traceback_summary(data: bytes | None) -> dict:
+    """Parse only standard traceback structure; never return source, message, args, or full paths."""
+    if data is None:
+        return {"status": "ABSENT_OR_UNKNOWN"}
+    if not data:
+        return {"status": "EMPTY"}
+    if len(data) > _MAX_TRACEBACK_BYTES:
+        return {"status": "OVER_BOUND", "byte_count": len(data)}
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return {"status": "UNPARSEABLE"}
+    lines = text.splitlines()
+    if not lines:
+        return {"status": "UNPARSEABLE"}
+
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    total_frames = 0
+    final_frame = None
+    final_exception = None
+    blocks = 0
+    while index < len(lines):
+        if lines[index] != _TRACEBACK_HEADER:
+            return {"status": "UNPARSEABLE", "frame_count": min(total_frames, _MAX_TRACEBACK_FRAMES)}
+        index += 1
+        block_frames = []
+        while index < len(lines):
+            frame_match = _TRACEBACK_FRAME.fullmatch(lines[index])
+            if not frame_match:
+                break
+            raw_path, line_number, function = frame_match.groups()
+            basename = re.split(r"[\\/]", raw_path)[-1]
+            block_frames.append((basename, int(line_number), function.strip()))
+            total_frames += 1
+            if total_frames > _MAX_TRACEBACK_FRAMES:
+                return {"status": "OVER_FRAME_BOUND", "frame_count_capped": _MAX_TRACEBACK_FRAMES}
+            index += 1
+            context_count = 0
+            while index < len(lines) and not _TRACEBACK_FRAME.fullmatch(lines[index]) and (
+                lines[index].startswith("    ") or lines[index].startswith("\t")
+            ):
+                context_count += 1
+                if context_count > _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME:
+                    return {"status": "UNPARSEABLE", "frame_count": total_frames}
+                index += 1
+        if not block_frames or index >= len(lines):
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        exception_match = _TRACEBACK_EXCEPTION.fullmatch(lines[index])
+        if not exception_match:
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        exception_name = exception_match.group(1).rsplit(".", 1)[-1]
+        if exception_name in {"ExceptionGroup", "BaseExceptionGroup"}:
+            return {"status": "UNSUPPORTED_EXCEPTION_FORMAT", "frame_count": total_frames}
+        final_exception = exception_name if exception_name in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
+        final_frame = block_frames[-1]
+        blocks += 1
+        index += 1
+        if index == len(lines):
+            break
+        # Python's formatter puts exactly one blank separator before and
+        # after the exception-chain marker. Do not skip arbitrary lines.
+        if lines[index] != "":
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        index += 1
+        if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        index += 1
+        if index >= len(lines) or lines[index] != "":
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        index += 1
+        if index >= len(lines) or lines[index] != _TRACEBACK_HEADER:
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+
+    if not blocks or final_frame is None or final_exception is None:
+        return {"status": "UNPARSEABLE", "frame_count": total_frames}
+    basename, line_number, function = final_frame
+    safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
+    return {
+        "status": "PARSED",
+        "exception_class": final_exception,
+        "frame_count": total_frames,
+        "thrower_basename": basename if basename in _TRACEBACK_BASES else "OTHER_BASENAME",
+        "thrower_function": safe_function,
+        "thrower_line": line_number,
+    }
+
+
 def _preflight_summary(data: bytes | None) -> dict:
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND"}
@@ -809,6 +917,7 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
         data = selected.get(filename)
         stderr[filename] = {"status": "BOUND" if data is not None else "ABSENT_OR_UNKNOWN",
                             "reason_class": _stderr_class(data),
+                            "traceback": _traceback_summary(data),
                             "raw_text_emitted": False}
     conf_for_audit = confined_doc if confined_status == "parsed" else None
     audit = _audit_summary(selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit, package["matrix"], verifier)
