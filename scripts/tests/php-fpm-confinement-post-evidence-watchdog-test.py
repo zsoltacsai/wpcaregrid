@@ -148,6 +148,11 @@ class EvidenceWatchdogTests(unittest.TestCase):
         manifest_path = WATCHDOG_PATH.with_name("bundle-manifest.json")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         helper_path = WATCHDOG_PATH.with_name(WATCHDOG.HELPER_NAME)
+        self.assertEqual(
+            WATCHDOG.TRUSTED_BUNDLE_DIR,
+            "/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-2",
+        )
+        self.assertEqual(WATCHDOG.BUNDLE_VERSION, "1.0.16-post-watchdog-2")
         self.assertEqual(manifest["bundle_version"], WATCHDOG.BUNDLE_VERSION)
         self.assertEqual(manifest["watchdog_sha256"], hashlib.sha256(WATCHDOG_PATH.read_bytes()).hexdigest())
         self.assertEqual(manifest["helper_sha256"], hashlib.sha256(helper_path.read_bytes()).hexdigest())

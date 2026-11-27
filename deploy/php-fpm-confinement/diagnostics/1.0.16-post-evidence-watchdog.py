@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-TRUSTED_BUNDLE_DIR = "/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post"
+TRUSTED_BUNDLE_DIR = "/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-2"
 WATCHDOG_NAME = "1.0.16-post-evidence-watchdog.py"
 HELPER_NAME = "1.0.16-post-evidence.py"
 MANIFEST_NAME = "bundle-manifest.json"

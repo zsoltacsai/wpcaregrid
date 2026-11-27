@@ -43,12 +43,14 @@ subprocesses. Run only as python3 -B after versioned review and CI.
 
 Install the versioned three-file bundle (`1.0.16-post-evidence-watchdog.py`,
 `1.0.16-post-evidence.py`, and `bundle-manifest.json`) at
-`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post`. The bundle
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-2`. Keep
+the prior `1.0.16-post` bundle unchanged; each watchdog bundle version uses a
+distinct fixed directory and never replaces an earlier immutable install. The bundle
 directory must be root-owned mode 0555; each regular file must be root-owned,
 mode 0444, and have one hard link. Every parent directory is checked for root
 ownership, no group/world write permission, and absence of symlinks. The
 manifest pins both source SHA-256 values. Run only the installed entrypoint with
-`python3 -B /usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post/1.0.16-post-evidence-watchdog.py`.
+`python3 -B /usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-2/1.0.16-post-evidence-watchdog.py`.
 The watchdog reads the bundle with dirfd/O_NOFOLLOW checks and verifies the
 manifest before starting a child. It places the exact verified helper bytes in
 a sealed anonymous memfd and executes that descriptor, so replacing the
