@@ -166,7 +166,7 @@ cd "$DEST"
 sha256sum -c --strict SHA256SUMS
 test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '7dc579e508eef5c116d6462cfde569b60d3b1eceae583f0adf5cfd736d16f866'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
-test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = '6901b25fd5062c01133ba225a3dbf36b3e7df2d2d5b99704c8c150af6f85edd1'
+test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'f3c8bcebece6e13132e29fc0172c96d9baa7c71c833642f3ada6c5d6cb257900'
 ```
 
 Before proceeding, compare the staged file names to the exact artifact tree,
