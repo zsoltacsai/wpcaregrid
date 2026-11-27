@@ -26,6 +26,10 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             "subprocess", "socket", "urllib", "http", "requests", "pathlib", "tempfile", "shutil"
         }
         os_open_calls = []
+        parents = {}
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
         # pathlib is used only by the test harness, never by the helper.
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -55,9 +59,25 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                     if func.attr == "open":
                         allowed_os_open = isinstance(func.value, ast.Name) and func.value.id == "os"
                         self.assertTrue(allowed_os_open, "only guarded os.open with O_RDONLY is permitted")
+                        self.assertEqual(len(node.args), 2)
+                        flag_expr = node.args[1]
+                        self.assertTrue(
+                            (isinstance(flag_expr, ast.Name) and flag_expr.id == "flags")
+                            or (isinstance(flag_expr, ast.Call)
+                                and isinstance(flag_expr.func, ast.Name)
+                                and flag_expr.func.id == "_directory_flags")
+                        )
                         os_open_calls.append(node)
                     self.assertNotEqual(func.attr, "verify", "the diagnostic must never call the acceptance verifier")
-        self.assertEqual(len(os_open_calls), 1, "all file reads must pass through the single guarded reader")
+        allowed_openers = {"_open_absolute_directory", "_open_dir_at", "_read_regular_at"}
+        opener_names = set()
+        for call in os_open_calls:
+            parent = parents.get(call)
+            while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                parent = parents.get(parent)
+            self.assertIsNotNone(parent)
+            opener_names.add(parent.name)
+        self.assertEqual(opener_names, allowed_openers)
 
     def test_verifier_source_matches_the_literal_pin(self):
         verifier_path = ROOT / "deploy/php-fpm-confinement/1.0.16/acceptance/verify-acceptance.py"
@@ -72,7 +92,8 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         )
         flags_seen = []
 
-        def guarded_open(_path, flags):
+        def guarded_open(_path, flags, **kwargs):
+            self.assertEqual(kwargs, {"dir_fd": 123})
             flags_seen.append(flags)
             self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
             for name in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"):
@@ -84,14 +105,100 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         chunks = [data, b""]
         with mock.patch.object(HELPER.os, "lstat", return_value=fake_stat), \
              mock.patch.object(HELPER.os, "open", side_effect=guarded_open), \
+             mock.patch.object(HELPER.os, "stat", return_value=fake_stat), \
              mock.patch.object(HELPER.os, "fstat", return_value=fake_stat), \
              mock.patch.object(HELPER.os, "read", side_effect=lambda _fd, _size: chunks.pop(0)), \
              mock.patch.object(HELPER.os, "close", return_value=None):
-            actual, metadata = HELPER._read_regular("/synthetic/input", expected_mode=0o600)
+            actual, metadata = HELPER._read_regular_at(123, "input", expected_mode=0o600)
 
         self.assertEqual(actual, data)
         self.assertEqual(metadata["sha256"], hashlib.sha256(data).hexdigest())
         self.assertEqual(len(flags_seen), 1)
+
+    def test_reader_rejects_metadata_hash_and_race_mismatches(self):
+        data = b"fixture bytes"
+        original = types.SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0, st_nlink=1,
+            st_size=len(data), st_dev=11, st_ino=22, st_mtime_ns=33, st_ctime_ns=44,
+        )
+        bad_inputs = (
+            ({"st_uid": 1000}, "input-metadata", None),
+            ({"st_mode": stat.S_IFREG | 0o644}, "input-mode", 0o600),
+            ({"st_nlink": 2}, "input-metadata", None),
+        )
+        for changes, code, expected_mode in bad_inputs:
+            attrs = vars(original).copy()
+            attrs.update(changes)
+            bad_stat = types.SimpleNamespace(**attrs)
+            with self.subTest(code=code, changes=changes), \
+                 mock.patch.object(HELPER.os, "stat", return_value=bad_stat), \
+                 mock.patch.object(HELPER.os, "open") as open_mock:
+                with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                    HELPER._read_regular_at(123, "input", expected_mode=expected_mode)
+                self.assertEqual(caught.exception.code, code)
+                open_mock.assert_not_called()
+
+        changed = types.SimpleNamespace(**{**vars(original), "st_ino": 99})
+        with mock.patch.object(HELPER.os, "stat", return_value=original), \
+             mock.patch.object(HELPER.os, "open", return_value=91), \
+             mock.patch.object(HELPER.os, "fstat", return_value=changed), \
+             mock.patch.object(HELPER.os, "close") as close_mock:
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._read_regular_at(123, "input")
+            self.assertEqual(caught.exception.code, "input-raced")
+            close_mock.assert_called_once_with(91)
+
+        drifted = types.SimpleNamespace(**{**vars(original), "st_mtime_ns": 34})
+        chunks = [data, b""]
+        with mock.patch.object(HELPER.os, "stat", return_value=original), \
+             mock.patch.object(HELPER.os, "open", return_value=91), \
+             mock.patch.object(HELPER.os, "fstat", side_effect=[original, drifted]), \
+             mock.patch.object(HELPER.os, "read", side_effect=lambda _fd, _size: chunks.pop(0)), \
+             mock.patch.object(HELPER.os, "close"):
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._read_regular_at(123, "input")
+            self.assertEqual(caught.exception.code, "input-raced")
+
+        chunks = [data, b""]
+        with mock.patch.object(HELPER.os, "stat", return_value=original), \
+             mock.patch.object(HELPER.os, "open", return_value=91), \
+             mock.patch.object(HELPER.os, "fstat", return_value=original), \
+             mock.patch.object(HELPER.os, "read", side_effect=lambda _fd, _size: chunks.pop(0)), \
+             mock.patch.object(HELPER.os, "close"):
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._read_regular_at(123, "input", expected_sha256="0" * 64)
+            self.assertEqual(caught.exception.code, "pinned-input-digest-mismatch")
+
+        small = types.SimpleNamespace(**{**vars(original), "st_size": 4})
+        chunks = [b"12345"]
+        with mock.patch.object(HELPER, "MAX_FILE_BYTES", 4), \
+             mock.patch.object(HELPER.os, "stat", return_value=small), \
+             mock.patch.object(HELPER.os, "open", return_value=91), \
+             mock.patch.object(HELPER.os, "fstat", return_value=small), \
+             mock.patch.object(HELPER.os, "read", side_effect=lambda _fd, _size: chunks.pop(0)), \
+             mock.patch.object(HELPER.os, "close"):
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._read_regular_at(123, "input")
+            self.assertEqual(caught.exception.code, "input-size-bound")
+
+    def test_dirfd_open_detects_directory_replacement(self):
+        before = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0,
+                                       st_nlink=2, st_dev=1, st_ino=10)
+        replaced = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0,
+                                         st_nlink=2, st_dev=1, st_ino=11)
+        with mock.patch.object(HELPER.os, "stat", return_value=before) as stat_mock, \
+             mock.patch.object(HELPER.os, "open", return_value=91) as open_mock, \
+             mock.patch.object(HELPER.os, "fstat", return_value=replaced), \
+             mock.patch.object(HELPER.os, "close") as close_mock:
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._open_dir_at(77, "child", expected_mode=0o755)
+        self.assertEqual(caught.exception.code, "directory-raced")
+        self.assertEqual(stat_mock.call_args.kwargs, {"dir_fd": 77, "follow_symlinks": False})
+        self.assertEqual(open_mock.call_args.kwargs, {"dir_fd": 77})
+        self.assertEqual(open_mock.call_args.args[1] & os.O_ACCMODE, os.O_RDONLY)
+        self.assertTrue(open_mock.call_args.args[1] & os.O_NOFOLLOW)
+        self.assertTrue(open_mock.call_args.args[1] & os.O_DIRECTORY)
+        close_mock.assert_called_once_with(91)
 
     def test_untrusted_names_and_preflight_keys_are_not_echoed(self):
         info = types.SimpleNamespace(
@@ -119,9 +226,11 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             st_mode=stat.S_IFREG | 0o600, st_uid=0, st_gid=0, st_nlink=1,
             st_size=12, st_mtime_ns=7,
         )
-        with mock.patch.object(HELPER, "_directory", return_value=regular_stat), \
+        with mock.patch.object(HELPER, "_open_absolute_directory", return_value=10), \
+             mock.patch.object(HELPER, "_open_dir_at", return_value=11), \
              mock.patch.object(HELPER.os, "listdir", return_value=["private-link", "private-file"]), \
-             mock.patch.object(HELPER.os, "lstat", side_effect=[symlink_stat, regular_stat]), \
+             mock.patch.object(HELPER.os, "stat", side_effect=[symlink_stat, regular_stat]), \
+             mock.patch.object(HELPER.os, "close", return_value=None), \
              mock.patch.object(HELPER.os, "open", side_effect=AssertionError("untrusted evidence must not be opened")):
             manifest, selected, unknown = HELPER._evidence_manifest(
                 HELPER.os.path.join(HELPER.ENVELOPE_DIR, HELPER.RUN_DIR_NAME)
