@@ -401,18 +401,18 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             ("missing-exception", header + frame, "FIRST_HEADER_SUFFIX_INVALID", "MISSING_EXCEPTION_SUMMARY"),
             ("malformed-exception", header + frame + b"not an exception raw-secret\n",
              "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_EXCEPTION_SUMMARY"),
-            ("missing-chain-separator", valid_first + chain + b"\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
-            ("extra-before-chain", valid_first + b"\n\n" + chain + b"\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
+            ("missing-chain-separator", valid_first + b"raw-secret-missing-separator\n" + chain + b"\n" + header + frame + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_SEPARATOR_AFTER_EXCEPTION"),
+            ("extra-before-chain", valid_first + b"\nraw-secret-before-chain\n\n" + chain + b"\n\n" + header + frame + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_CHAIN_MARKER"),
             ("wrong-chain-marker", valid_first + b"\nnot a marker raw-secret\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
-            ("missing-chain-trailing-separator", valid_first + b"\n" + chain + b"\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
-            ("extra-after-chain", valid_first + b"\n" + chain + b"\n\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
-            ("wrong-chained-header", valid_first + b"\n" + chain + b"\nnot a header raw-secret\n",
-             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_CHAIN_MARKER"),
+            ("missing-chain-trailing-separator", valid_first + b"\n" + chain + b"\nraw-secret-after-marker\n" + header + frame + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_SEPARATOR_AFTER_CHAIN_MARKER"),
+            ("extra-after-chain", valid_first + b"\n" + chain + b"\n\nraw-secret-after-separator\n" + header + frame + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_NEXT_TRACEBACK_HEADER"),
+            ("wrong-chained-header", valid_first + b"\n" + chain + b"\n\nnot a header raw-secret\n",
+             "FIRST_HEADER_SUFFIX_INVALID", "EXPECTED_NEXT_TRACEBACK_HEADER"),
             ("too-many-context-lines", header + frame + b"    source one\n    source two\n    source three\n" + exception,
              "FIRST_HEADER_SUFFIX_INVALID", "SOURCE_CONTEXT_OVER_BOUND"),
         )
@@ -479,7 +479,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
-            "parse_failure_substage": "CHAIN_OR_TRAILING_MISMATCH",
+            "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
@@ -529,7 +529,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
-            "parse_failure_substage": "CHAIN_OR_TRAILING_MISMATCH",
+            "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
