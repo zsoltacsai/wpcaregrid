@@ -34,6 +34,17 @@ PINNED_PACKAGE_FILES = {
     "acceptance/derive-probe-profile.py": "22503809027074cce467ab8651531b1d9b5d75732af165be7f8cafcc83202a8a",
     "acceptance/verify-acceptance.py": "b821e435ab42ea9f06c2fbe57b0496f1e16e47bc625c3d3f6d51c448586f8c24",
 }
+# Exact Git tree modes for the pinned blobs above. Executable bits are part of
+# the package pin contract; treating every blob as 0644 rejects the two
+# executable probe/profile scripts in the 1.0.16 tree.
+PINNED_PACKAGE_MODES = {
+    "SHA256SUMS": 0o644,
+    "binding.json": 0o644,
+    "acceptance/matrix.json": 0o644,
+    "acceptance/probe.py": 0o755,
+    "acceptance/derive-probe-profile.py": 0o755,
+    "acceptance/verify-acceptance.py": 0o644,
+}
 EVIDENCE_ALLOWLIST = {
     "preflight-summary.json",
     "wpcaregrid-nginx-inventory-before.json",
@@ -248,6 +259,9 @@ def _read_pinned_relative(root_fd: int, relative: str, digest: str) -> tuple[byt
     components = relative.split("/")
     if any(not component or component in (".", "..") for component in components):
         raise DiagnosticHold("package-path-invalid")
+    expected_mode = PINNED_PACKAGE_MODES.get(relative)
+    if expected_mode is None or relative not in PINNED_PACKAGE_FILES:
+        raise DiagnosticHold("package-path-unpinned")
     current_fd = root_fd
     owned_fd = None
     try:
@@ -256,7 +270,7 @@ def _read_pinned_relative(root_fd: int, relative: str, digest: str) -> tuple[byt
             if owned_fd is not None:
                 os.close(owned_fd)
             current_fd = owned_fd = next_fd
-        return _read_regular_at(current_fd, components[-1], digest, expected_mode=0o644,
+        return _read_regular_at(current_fd, components[-1], digest, expected_mode=expected_mode,
                                 display_name=relative)
     finally:
         if owned_fd is not None:
