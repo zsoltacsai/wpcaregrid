@@ -344,6 +344,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary["status"], "UNSUPPORTED_EXCEPTION_FORMAT")
         self.assertEqual(summary["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
+        self.assertEqual(summary["parse_failure_substage"], "UNSUPPORTED_EXCEPTION_FORMAT")
 
     def test_traceback_summary_fails_closed_for_unbounded_or_malformed_input(self):
         self.assertEqual(HELPER._traceback_summary(None), {"status": "ABSENT_OR_UNKNOWN"})
@@ -362,36 +363,42 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         chain = b"During handling of the above exception, another exception occurred:"
         valid_first = header + frame + exception
         cases = (
-            ("no-header", b"system error: raw-exception-message-secret", "NO_EXACT_TRACEBACK_HEADER", 0),
-            ("blank-input", b"\n\n", "NO_EXACT_TRACEBACK_HEADER", 0),
-            ("header-without-frame", header + exception, "FIRST_HEADER_SUFFIX_INVALID", 0),
-            ("header-eof", header, "FIRST_HEADER_SUFFIX_INVALID", 0),
+            ("no-header", b"system error: raw-exception-message-secret", "NO_EXACT_TRACEBACK_HEADER", None),
+            ("blank-input", b"\n\n", "NO_EXACT_TRACEBACK_HEADER", None),
+            ("header-without-frame", header + exception, "FIRST_HEADER_SUFFIX_INVALID", "NO_FRAME_AFTER_HEADER"),
+            ("header-eof", header, "FIRST_HEADER_SUFFIX_INVALID", "NO_FRAME_AFTER_HEADER"),
+            ("unexpected-after-header", header + b"wrapper raw-prefix-secret\n" + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "UNEXPECTED_LINE_AFTER_HEADER"),
             ("malformed-frame", header + b'  File "/root/private/probe.py", line bad, call\n' + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
-            ("missing-exception", header + frame, "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_FRAME_LINE"),
+            ("missing-exception", header + frame, "FIRST_HEADER_SUFFIX_INVALID", "MISSING_EXCEPTION_SUMMARY"),
             ("malformed-exception", header + frame + b"not an exception raw-secret\n",
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_EXCEPTION_SUMMARY"),
             ("missing-chain-separator", valid_first + chain + b"\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("extra-before-chain", valid_first + b"\n\n" + chain + b"\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("wrong-chain-marker", valid_first + b"\nnot a marker raw-secret\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("missing-chain-trailing-separator", valid_first + b"\n" + chain + b"\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("extra-after-chain", valid_first + b"\n" + chain + b"\n\n\n" + header + frame + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("wrong-chained-header", valid_first + b"\n" + chain + b"\nnot a header raw-secret\n",
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "CHAIN_OR_TRAILING_MISMATCH"),
             ("too-many-context-lines", header + frame + b"    source one\n    source two\n    source three\n" + exception,
-             "FIRST_HEADER_SUFFIX_INVALID", 0),
+             "FIRST_HEADER_SUFFIX_INVALID", "SOURCE_CONTEXT_OVER_BOUND"),
         )
-        for name, raw, expected_stage, expected_frames in cases:
+        for name, raw, expected_stage, expected_substage in cases:
             with self.subTest(name=name):
                 summary = HELPER._traceback_summary(raw)
                 self.assertEqual(summary["status"], "UNPARSEABLE")
                 self.assertEqual(summary["parse_failure_stage"], expected_stage)
-                self.assertEqual(summary["frame_count"], expected_frames)
+                self.assertEqual(summary["frame_count"], 0)
+                if expected_substage is None:
+                    self.assertNotIn("parse_failure_substage", summary)
+                else:
+                    self.assertEqual(summary["parse_failure_substage"], expected_substage)
                 rendered = __import__("json").dumps(summary, sort_keys=True)
                 self.assertNotIn("raw-exception-message-secret", rendered)
                 self.assertNotIn("raw-secret", rendered)
@@ -445,6 +452,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
+            "parse_failure_substage": "CHAIN_OR_TRAILING_MISMATCH",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
@@ -494,6 +502,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
+            "parse_failure_substage": "CHAIN_OR_TRAILING_MISMATCH",
             "frame_count": 0,
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
@@ -511,6 +520,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         )
         self.assertEqual(too_many_frames, {
             "status": "OVER_FRAME_BOUND", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
+            "parse_failure_substage": "OVER_FRAME_BOUND",
             "frame_count": 0,
         })
         for summary in (invalid_encoding, too_many_frames):
