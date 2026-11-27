@@ -8,6 +8,7 @@ import json
 import pathlib
 import stat
 import subprocess
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -28,6 +29,7 @@ EXPECTED = {
         'fixtures.py': 'e5cc5ee6dc8c60549bb4b8acd63ab6a22487e3edf288b67d1e3bc640191e8ebd',
     },
 }
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('post_orchestrator_tree_test', ARTIFACT / 'acceptance-post.py')
 orchestrator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(orchestrator)
