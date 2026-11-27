@@ -290,7 +290,9 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'  File "/safe/first.py", line 10, in first\n'
                b'    raise ValueError()\n'
                b'ValueError: hidden-one\n'
+               b'\n'
                b'The above exception was the direct cause of the following exception:\n'
+               b'\n'
                b'Traceback (most recent call last):\n'
                b'  File "/safe/probe.py", line 427, in main\n'
                b'    bad syntax\n'
@@ -304,6 +306,20 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary["thrower_line"], 427)
         self.assertNotIn("hidden", str(summary))
         self.assertNotIn("bad syntax", str(summary))
+
+    def test_traceback_summary_rejects_extra_chain_separator_lines(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/safe/first.py", line 10, in first\n'
+               b'ValueError: hidden-one\n'
+               b'\n'
+               b'not a chain marker\n'
+               b'\n'
+               b'The above exception was the direct cause of the following exception:\n'
+               b'\n'
+               b'Traceback (most recent call last):\n'
+               b'  File "/safe/probe.py", line 427, in main\n'
+               b'TypeError: hidden-two\n')
+        self.assertEqual(HELPER._traceback_summary(raw)["status"], "UNPARSEABLE")
 
     def test_traceback_summary_rejects_unsupported_multiline_exception_groups(self):
         raw = (b'Traceback (most recent call last):\n'

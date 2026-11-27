@@ -603,10 +603,18 @@ def _traceback_summary(data: bytes | None) -> dict:
         index += 1
         if index == len(lines):
             break
-        if lines[index] not in _TRACEBACK_CHAIN_MARKERS:
+        # Python's formatter puts exactly one blank separator before and
+        # after the exception-chain marker. Do not skip arbitrary lines.
+        if lines[index] != "":
             return {"status": "UNPARSEABLE", "frame_count": total_frames}
         index += 1
-        if index == len(lines):
+        if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        index += 1
+        if index >= len(lines) or lines[index] != "":
+            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        index += 1
+        if index >= len(lines) or lines[index] != _TRACEBACK_HEADER:
             return {"status": "UNPARSEABLE", "frame_count": total_frames}
 
     if not blocks or final_frame is None or final_exception is None:
