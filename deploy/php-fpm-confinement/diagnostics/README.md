@@ -9,7 +9,8 @@ The helper verifies the exact 1.0.16 package file hashes before executing the
 pinned verifier module, and only calls the verifier's parse_audit,
 expected_checks, and window_hit helpers for diagnostic correlation. It does
 not call verify(). It reads the pinned inputs and exact run envelope
-with O_RDONLY|O_NOFOLLOW, bounded sizes, and metadata checks. It emits one
+with dirfds, openat-style relative opens, O_RDONLY|O_NOFOLLOW, bounded sizes,
+and owner/mode/link/identity checks on each directory and file component. It emits one
 allowlisted, redacted JSON object on stdout. It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
