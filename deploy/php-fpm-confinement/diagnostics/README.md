@@ -17,15 +17,16 @@ classification, function token, and line number; it never emits exception messag
 lines, or full paths. It accepts standard chained tracebacks with the exact
 blank separators emitted by Python and up to two indented source-context lines per frame; malformed intermediate lines and
 unsupported multiline ExceptionGroup output remain UNKNOWN. Parse failures carry only an allowlisted
-`parse_failure_stage` enum and a bounded `frame_count`, distinguishing missing headers, headers with
-no recognized frame record (including a malformed first frame), invalid encoding, size/frame bounds,
-and frame/chain mismatches without echoing input. It searches the complete bounded stderr for exact
-traceback-header lines. If the first nonempty line is a prefix and a later suffix fully matches the
-strict traceback grammar, it emits only the redacted summary with
-`parse_failure_stage=PREFIX_BEFORE_TRACEBACK`; otherwise it emits
-`FIRST_NONEMPTY_LINE_NOT_HEADER` with no partial frame count. Prefix text and malformed suffixes are
-never emitted. It does not skip malformed earlier header candidates or a prefix that already contains
-an exception-summary line, avoiding false recognition of header text inside multiline exception messages.
+`parse_failure_stage` enum and a bounded `frame_count`, distinguishing missing headers, invalid
+encoding, size/frame bounds, and invalid traceback suffixes without echoing input. It searches the
+complete bounded stderr for exact traceback-header lines. No exact header anywhere yields
+`NO_EXACT_TRACEBACK_HEADER`. A found header whose suffix does not fully match the strict grammar
+yields `FIRST_HEADER_SUFFIX_INVALID` with no partial frame count. A complete valid traceback after a
+prefix emits only the redacted summary with `parse_failure_stage=PREFIX_BEFORE_TRACEBACK`. An
+exception-summary line before a later exact header yields
+`PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER`; malformed suffixes, prefix text, and all raw lines are
+never emitted. Exception-summary detection is structural and includes class-only first lines; it does
+not skip malformed earlier header candidates.
 It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
