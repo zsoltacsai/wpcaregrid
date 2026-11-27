@@ -362,8 +362,8 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         chain = b"During handling of the above exception, another exception occurred:"
         valid_first = header + frame + exception
         cases = (
-            ("no-header", b"system error: raw-exception-message-secret", "NO_TRACEBACK_HEADER", 0),
-            ("blank-input", b"\n\n", "NO_TRACEBACK_HEADER", 0),
+            ("no-header", b"system error: raw-exception-message-secret", "FIRST_NONEMPTY_LINE_NOT_HEADER", 0),
+            ("blank-input", b"\n\n", "FIRST_NONEMPTY_LINE_NOT_HEADER", 0),
             ("header-without-frame", header + exception, "HEADER_WITHOUT_FRAME", 0),
             ("header-eof", header, "HEADER_WITHOUT_FRAME", 0),
             ("malformed-frame", header + b'  File "/root/private/probe.py", line bad, call\n' + exception,
@@ -397,6 +397,83 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 self.assertNotIn("raw-secret", rendered)
                 self.assertNotIn("/root", rendered)
                 self.assertNotIn(raw.decode("utf-8"), rendered)
+
+    def test_traceback_summary_accepts_only_complete_chained_suffix_after_prefix(self):
+        prefix = b"systemd-run diagnostic prefix raw-prefix-secret\n"
+        header = b"Traceback (most recent call last):\n"
+        frame_one = b'  File "/root/private/first.py", line 9, in inner\n'
+        frame_two = b'  File "/root/private/probe.py", line 27, in main\n'
+        chain = b"\nDuring handling of the above exception, another exception occurred:\n\n"
+        first = header + frame_one + b"ValueError: raw-inner-message\n"
+        final = header + frame_two + b"PermissionError: raw-final-message\n"
+        raw = prefix + first + chain + final
+
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary, {
+            "status": "PARSED", "exception_class": "PermissionError", "frame_count": 2,
+            "thrower_basename": "probe.py", "thrower_function": "main", "thrower_line": 27,
+            "parse_failure_stage": "PREFIX_BEFORE_TRACEBACK",
+        })
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        for forbidden in ("raw-prefix-secret", "raw-inner-message", "raw-final-message", "/root", "private", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
+        stderr_report = HELPER._stderr_summary(raw)
+        stderr_rendered = __import__("json").dumps(stderr_report, sort_keys=True)
+        self.assertFalse(stderr_report["raw_text_emitted"])
+        self.assertEqual(stderr_report["traceback"], summary)
+        for forbidden in ("raw-prefix-secret", "raw-inner-message", "raw-final-message", "/root", raw.decode()):
+            self.assertNotIn(forbidden, stderr_rendered)
+
+    def test_traceback_summary_rejects_malformed_suffix_after_prefix(self):
+        raw = (b"wrapper said error: raw-prefix-secret\n"
+               b"Traceback (most recent call last):\n"
+               b'  File "/root/private/probe.py", line 8, in call\n'
+               b"ValueError: raw-message\n"
+               b"trailing raw-suffix-secret\n")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "frame_count": 0,
+        })
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        for forbidden in ("raw-prefix-secret", "raw-message", "raw-suffix-secret", "/root", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_traceback_header_text_in_exception_message_is_not_a_header(self):
+        raw = b"RuntimeError: Traceback (most recent call last): raw-message-secret\n"
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "frame_count": 0,
+        })
+        self.assertNotIn("raw-message-secret", __import__("json").dumps(summary))
+
+        multiline_message = (b"RuntimeError: raw-prefix-message\n"
+                             b"Traceback (most recent call last):\n"
+                             b'  File "/root/private/probe.py", line 8, in call\n'
+                             b"ValueError: raw-suffix-message\n")
+        summary = HELPER._traceback_summary(multiline_message)
+        self.assertEqual(summary, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "frame_count": 0,
+        })
+        rendered = __import__("json").dumps(summary)
+        for forbidden in ("raw-prefix-message", "raw-suffix-message", "/root", multiline_message.decode()):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_traceback_summary_rejects_multiple_unrelated_headers(self):
+        header = b"Traceback (most recent call last):\n"
+        frame = b'  File "/root/private/probe.py", line 8, in call\n'
+        raw = (b"wrapper prefix raw-prefix-secret\n" + header + frame + b"ValueError: raw-one\n"
+               + header + frame + b"TypeError: raw-two\n")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_NONEMPTY_LINE_NOT_HEADER",
+            "frame_count": 0,
+        })
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        for forbidden in ("raw-prefix-secret", "raw-one", "raw-two", "/root", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
 
     def test_traceback_summary_failure_stages_cover_encoding_and_frame_bounds(self):
         invalid_encoding = HELPER._traceback_summary(b"\xffraw-secret")

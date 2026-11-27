@@ -19,7 +19,13 @@ blank separators emitted by Python and up to two indented source-context lines p
 unsupported multiline ExceptionGroup output remain UNKNOWN. Parse failures carry only an allowlisted
 `parse_failure_stage` enum and a bounded `frame_count`, distinguishing missing headers, headers with
 no recognized frame record (including a malformed first frame), invalid encoding, size/frame bounds,
-and frame/chain mismatches without echoing input.
+and frame/chain mismatches without echoing input. It searches the complete bounded stderr for exact
+traceback-header lines. If the first nonempty line is a prefix and a later suffix fully matches the
+strict traceback grammar, it emits only the redacted summary with
+`parse_failure_stage=PREFIX_BEFORE_TRACEBACK`; otherwise it emits
+`FIRST_NONEMPTY_LINE_NOT_HEADER` with no partial frame count. Prefix text and malformed suffixes are
+never emitted. It does not skip malformed earlier header candidates or a prefix that already contains
+an exception-summary line, avoiding false recognition of header text inside multiline exception messages.
 It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
