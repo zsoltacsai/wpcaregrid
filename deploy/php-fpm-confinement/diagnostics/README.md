@@ -35,7 +35,19 @@ It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
 
+Run the watchdog entrypoint, `python3 -B
+1.0.16-post-evidence-watchdog.py`, for bounded supervision. It starts exactly
+one helper child in a new process group, passes an inherited progress pipe, and
+enforces a 90-second monotonic deadline. The progress pipe accepts only fixed
+stage enums. Stdout, stderr, and progress are separately byte-bounded; stderr
+is never forwarded. On timeout or malformed/oversized output, the parent sends
+TERM then KILL to the private process group and makes bounded wait/reap
+attempts. Its timeout JSON is separate from the helper's unchanged success
+schema and contains only a valid last stage, a coarse elapsed bucket, and
+whether the direct child was reaped. An unconfirmed reap is fail-closed and
+must not be retried automatically.
+
 This source must not be run on the host until it has passed versioned review
-and CI and the Owner separately authorizes that diagnostic run. Its output
-never replaces the pinned orchestrator or verifier result and cannot establish
-acceptance.
+and exact-head CI and the Owner separately authorizes that diagnostic run. Its
+output never replaces the pinned orchestrator or verifier result and cannot
+establish acceptance.

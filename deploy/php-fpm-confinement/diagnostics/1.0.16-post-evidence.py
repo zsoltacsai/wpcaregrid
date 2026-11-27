@@ -18,6 +18,23 @@ import re
 import stat
 import types
 
+_PROGRESS_FD: int | None = None
+_PROGRESS_STAGES = {
+    "PIN_LOAD", "EVIDENCE_ENUMERATE", "EVIDENCE_READ", "JSON_PARSE",
+    "TRACEBACK_PARSE", "AUDIT_SUMMARY", "OUTPUT",
+}
+
+
+def _progress(stage: str) -> None:
+    """Send one allowlisted token to the watchdog's inherited progress pipe."""
+    if _PROGRESS_FD is None or stage not in _PROGRESS_STAGES:
+        return
+    try:
+        os.write(_PROGRESS_FD, (stage + "\n").encode("ascii"))
+    except OSError:
+        # Progress is advisory; the parent watchdog still enforces the deadline.
+        pass
+
 PACKAGE_DIR = "/root/wpcg-gate2.ujob3I/live-acceptance.j9lqdz/package-stage-1.0.16-442fa9ab-modes2/package-1.0.16"
 ENVELOPE_DIR = "/root/wpcg-route-attestation-20261127.KbA7hY"
 RUN_DIR_NAME = "acceptance-1.0.16-post-20261127T135951Z-b726ce"
@@ -336,6 +353,7 @@ def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[
         raise DiagnosticHold("run-id-mismatch")
     start = _run_start_ns()
     envelope_fd = _open_absolute_directory(ENVELOPE_DIR, expected_mode=0o700)
+    _progress("EVIDENCE_ENUMERATE")
     try:
         run_fd = _open_dir_at(envelope_fd, RUN_DIR_NAME, expected_mode=0o700)
     finally:
@@ -385,6 +403,7 @@ def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[
             unknown.add(name)
             continue
         try:
+            _progress("EVIDENCE_READ")
             data, secure = _read_regular_at(run_fd, name, expected_mode=0o600)
         except DiagnosticHold as exc:
             item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": exc.code})
@@ -411,6 +430,7 @@ def _probe_summary(name: str, data: bytes | None, matrix: dict, expected_mode: s
     if not data:
         return {"filename": name, "status": "EMPTY"}, None, "empty"
     try:
+        _progress("JSON_PARSE")
         doc = json.loads(data)
     except (ValueError, json.JSONDecodeError):
         return {"filename": name, "status": "INVALID_JSON"}, None, "invalid-json"
@@ -605,6 +625,7 @@ def _traceback_summary(data: bytes | None) -> dict:
     if len(data) > _MAX_TRACEBACK_BYTES:
         return _traceback_failure("OVER_BOUND", "OVER_BOUND")
     try:
+        _progress("TRACEBACK_PARSE")
         text = data.decode("utf-8", "strict")
     except UnicodeDecodeError:
         return _traceback_failure("UNPARSEABLE", "INVALID_ENCODING")
@@ -728,6 +749,7 @@ def _preflight_summary(data: bytes | None) -> dict:
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND"}
     try:
+        _progress("JSON_PARSE")
         doc = json.loads(data)
     except (ValueError, json.JSONDecodeError):
         return {"status": "INVALID_JSON"}
@@ -754,6 +776,7 @@ def _inventory_summary(data: bytes | None, baseline: dict | None, confined: dict
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND"}
     try:
+        _progress("JSON_PARSE")
         doc = json.loads(data)
     except (ValueError, json.JSONDecodeError):
         return {"status": "INVALID_JSON"}
@@ -814,6 +837,7 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND", "denied_record_count": None, "check_correlation": "UNKNOWN", "reason_code": "audit-absent"}
     try:
+        _progress("AUDIT_SUMMARY")
         records, problems = verifier.parse_audit(data.decode("utf-8"))
     except Exception:
         return {"status": "INVALID_AUDIT", "denied_record_count": None, "check_correlation": "UNKNOWN", "reason_code": "audit-parse-failed"}
@@ -994,6 +1018,7 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
         raise DiagnosticHold("root-read-only-context-required")
     if os.path.basename(envelope_dir) != os.path.basename(ENVELOPE_DIR):
         raise DiagnosticHold("envelope-identity")
+    _progress("PIN_LOAD")
     package, verifier = _load_pins(package_dir)
     run_dir = os.path.join(envelope_dir, RUN_DIR_NAME)
     manifest, selected, unknown = _evidence_manifest(run_dir)
@@ -1058,11 +1083,24 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
 
 
 def main() -> int:
-    if len(sys.argv) != 1:
+    global _PROGRESS_FD
+    if (len(sys.argv) == 3 and sys.argv[1] == "--progress-fd"
+            and sys.argv[2].isascii() and sys.argv[2].isdecimal()):
+        candidate_fd = int(sys.argv[2])
+        try:
+            valid_pipe = candidate_fd >= 3 and stat.S_ISFIFO(os.fstat(candidate_fd).st_mode)
+        except OSError:
+            valid_pipe = False
+        if not valid_pipe:
+            print(json.dumps({"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN", "reason_code": "unexpected-arguments"}, sort_keys=True, separators=(",", ":")))
+            return 2
+        _PROGRESS_FD = candidate_fd
+    elif len(sys.argv) != 1:
         print(json.dumps({"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN", "reason_code": "unexpected-arguments"}, sort_keys=True, separators=(",", ":")))
         return 2
     try:
         report = summarize()
+        _progress("OUTPUT")
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
         return 0
     except DiagnosticHold as exc:

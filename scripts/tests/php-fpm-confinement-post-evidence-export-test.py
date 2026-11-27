@@ -20,6 +20,22 @@ SPEC.loader.exec_module(HELPER)
 
 
 class EvidenceExportSafetyTests(unittest.TestCase):
+    def test_progress_pipe_emits_only_fixed_stage_enums(self):
+        read_fd, write_fd = os.pipe()
+        original_fd = HELPER._PROGRESS_FD
+        try:
+            HELPER._PROGRESS_FD = write_fd
+            HELPER._progress("PIN_LOAD")
+            HELPER._progress("/private/path/raw-message")
+            os.close(write_fd)
+            write_fd = -1
+            self.assertEqual(os.read(read_fd, 128), b"PIN_LOAD\n")
+        finally:
+            HELPER._PROGRESS_FD = original_fd
+            os.close(read_fd)
+            if write_fd >= 0:
+                os.close(write_fd)
+
     def test_ast_contains_no_write_or_network_or_subprocess_api(self):
         tree = ast.parse(HELPER_PATH.read_text(encoding="utf-8"))
         forbidden_imports = {
@@ -51,11 +67,20 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                             )
                         )
                         self.assertTrue(safe_conversion, "replace is allowed only for the two audited value conversions")
-                    self.assertNotIn(func.attr, {
+                    if func.attr == "write":
+                        allowed_progress_write = isinstance(func.value, ast.Name) and func.value.id == "os"
+                        self.assertTrue(allowed_progress_write, "only the progress-pipe os.write is permitted")
+                        parent = parents.get(node)
+                        while parent is not None and not isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            parent = parents.get(parent)
+                        self.assertIsNotNone(parent)
+                        self.assertEqual(parent.name, "_progress")
+                    else:
+                        self.assertNotIn(func.attr, {
                         "write", "writelines", "write_text", "write_bytes", "unlink", "remove", "mkdir",
                         "makedirs", "rmdir", "rename", "chmod", "chown", "truncate",
                         "mkstemp", "mkdtemp", "fdopen", "connect", "connect_ex", "Popen", "run",
-                    })
+                        })
                     if func.attr == "open":
                         allowed_os_open = isinstance(func.value, ast.Name) and func.value.id == "os"
                         self.assertTrue(allowed_os_open, "only guarded os.open with O_RDONLY is permitted")
