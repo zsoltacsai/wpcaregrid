@@ -449,13 +449,17 @@ def start_sibling(pkg,matrix_path,evidence,on_started=None):
     if os.path.lexists(SOCKET): raise Hold('sibling-socket-before')
     unit='wpcg-g2-sibling-'+secrets.token_hex(16)
     unit_service=unit+'.service'
+    # Evidence files are exclusive-create. Include this invocation's unit nonce
+    # so the build and deploy CLI listeners can share one run directory.
+    evidence_nonce=unit[len('wpcg-g2-sibling-'):]
     unit_rc=command_ok(['/usr/bin/systemctl','is-active','--quiet',unit_service])
     if unit_rc==0: raise Hold('sibling-unit-existing')
     if unit_rc not in (3,4): raise Hold('sibling-unit-state')
     try:
         p=run(['/usr/bin/systemd-run','--quiet','--collect','--unit='+unit,'--property=RuntimeMaxSec=600','--property=Type=exec',
                '/usr/bin/python3','-I','-B',str(pkg/'acceptance/sibling-listener.py'),str(matrix_path),'--seconds','600'],
-              out=evidence/'sibling-start.stdout',err=evidence/'sibling-start.stderr',timeout=20)
+              out=evidence/f'sibling-start-{evidence_nonce}.stdout',
+              err=evidence/f'sibling-start-{evidence_nonce}.stderr',timeout=20)
     except (OSError,subprocess.TimeoutExpired):
         # The unit state is ambiguous. No ownership callback was made, so leave
         # any late/foreign unit untouched and fail closed for operator review.
