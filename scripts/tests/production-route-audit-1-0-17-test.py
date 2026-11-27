@@ -15,7 +15,7 @@ os.environ["WPCG_NGINX_PINNED_SOURCE"] = PINNED_FIXTURE
 P = os.path.join(PKG, "route_summary.py")
 EXPECTED_ADAPTER_SHA256 = "1591d1632ae32fecbcfe624a7f8b369f040a35a9a15dec5b0c94afefa654d669"
 EXPECTED_PARSER_SHA256 = "c61cebec06152fdbf54599fa4296c68d5d5db7c2220dacce38c7104da7b6aba2"
-EXPECTED_MANIFEST_SHA256 = "075c0ff3c3727ce14149bd3b665ebe169ab661eb48c8af6a304043b76bfe2fdb"
+EXPECTED_MANIFEST_SHA256 = "debc9cbc4682af5cab8d744a564e22fea307137b499a0c27de18c82a0c5e8f06"
 spec = importlib.util.spec_from_file_location("summary", P)
 M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
@@ -88,6 +88,13 @@ class Tests(unittest.TestCase):
         self.assertIs(binding["acceptance_verdict"], False)
         self.assertIs(binding["route_attestation"], False)
         self.assertEqual(binding["parser_sha256"], EXPECTED_PARSER_SHA256)
+
+    def test_readme_never_pipes_nginx_stderr_into_config_parser(self):
+        with open(os.path.join(PKG, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        self.assertIn("set -euo pipefail", readme)
+        self.assertIn("nginx -T 2>/dev/null |", readme)
+        self.assertNotIn("nginx -T 2>&1 |", readme)
 
     def test_pinned_source_is_digest_checked_and_root_mode_requires_trusted_path(self):
         self.assertEqual(len(M._secure_source_bytes(M.LOCAL_REVIEW_SOURCE, privileged=False)), os.stat(M.LOCAL_REVIEW_SOURCE).st_size)

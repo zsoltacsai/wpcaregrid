@@ -40,8 +40,8 @@ sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 The route attestation requires both provider evidence and the effective origin
 Nginx configuration. Use the separately versioned review aid at
 `deploy/php-fpm-confinement/route-audit/1.0.17/`, bound to acceptance package
-1.0.16. The artifact tree is `88dc051c5fbc8766acdda90be283a339a14c0ad7` and its `SHA256SUMS` digest
-is `075c0ff3c3727ce14149bd3b665ebe169ab661eb48c8af6a304043b76bfe2fdb`; `route_summary.py` has SHA-256
+1.0.16. The artifact tree is `c592abf2d65f953fec8a5d689accb9ce1220fd51` and its `SHA256SUMS` digest
+is `debc9cbc4682af5cab8d744a564e22fea307137b499a0c27de18c82a0c5e8f06`; `route_summary.py` has SHA-256
 `1591d1632ae32fecbcfe624a7f8b369f040a35a9a15dec5b0c94afefa654d669`. Select the exact protected-primary merge commit that
 contains this tree and verify the commit:path tree before staging. Route-audit
 1.0.16 is superseded and must not be used for root review capture because its

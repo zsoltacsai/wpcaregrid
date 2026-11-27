@@ -56,7 +56,7 @@ else
   printf 'NGINX_TEST_RC=%s\n' "$rc"
   exit "$rc"
 fi
-if /usr/sbin/nginx -T 2>&1 | /usr/bin/python3 -B "$DEST/route_summary.py" "$DEST/pinned_deploy_priv.py" >"$OUT"; then
+if /usr/sbin/nginx -T 2>/dev/null | /usr/bin/python3 -B "$DEST/route_summary.py" "$DEST/pinned_deploy_priv.py" >"$OUT"; then
   printf '%s\n' 'NGINX_SUMMARY_RC=0'
 else
   rc=$?
