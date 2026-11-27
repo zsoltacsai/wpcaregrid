@@ -10,7 +10,7 @@ return [
     'check_note' => 'Read-only: contacts the public advisory database (osv.dev) with the names and versions of the installed packages.',
     'refused' => [
         'disabled' => 'Platform update checks are disabled (PLATFORM_UPDATES_ENABLED).',
-        'staging_external_contact_closed' => 'Blocked: this staging stack has not been opened for external services.',
+        'staging_platform_updates_closed' => 'Blocked: this staging stack has not been opened for the platform update check (STAGING_ACTIVE_PLATFORM_UPDATES_OUTBOUND).',
         'staging_environment_unproven' => 'Blocked: this staging stack is not proven to be the isolated staging environment.',
         'staging_mail_not_confined' => 'Blocked: this staging stack has no confined mail transport.',
         'staging_held' => 'Blocked by the staging policy.',

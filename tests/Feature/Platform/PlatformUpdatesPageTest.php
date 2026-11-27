@@ -244,7 +244,7 @@ class PlatformUpdatesPageTest extends TestCase
         config(['platform_updates.enabled' => false]);
         $this->post(route('owner.platform-updates.check'))->assertRedirect()->assertSessionHas('owner_error');
 
-        config(['platform_updates.enabled' => true, 'app.deployment_environment' => 'staging_next', 'marketing_release.staging_active_features.external_services' => false]);
+        config(['platform_updates.enabled' => true, 'app.deployment_environment' => 'staging_next', 'marketing_release.staging_active_features.platform_updates_outbound' => false]);
         $this->post(route('owner.platform-updates.check'))->assertRedirect()->assertSessionHas('owner_error');
 
         Queue::assertNothingPushed();

@@ -858,6 +858,7 @@ return [
             'mail' => 'Mail',
             'connector' => 'Connector API',
             'external' => 'External services',
+            'platform_updates' => 'Platform update check',
             'scheduler' => 'Scheduler tasks',
             'scheduler_all' => 'All :count tasks may run',
             'scheduler_held' => ':running of :total run; held: :held',

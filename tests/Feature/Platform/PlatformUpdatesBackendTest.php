@@ -218,11 +218,11 @@ class PlatformUpdatesBackendTest extends TestCase
     public function test_staging_next_without_the_external_services_opt_in_makes_no_outbound_request(): void
     {
         Http::fake();
-        config(['app.deployment_environment' => 'staging_next', 'marketing_release.staging_active_features.external_services' => false]);
+        config(['app.deployment_environment' => 'staging_next', 'marketing_release.staging_active_features.platform_updates_outbound' => false]);
 
         $check = app(PlatformUpdateScanner::class)->run('manual');
 
-        $this->assertSame(['refused', 'staging_external_contact_closed'], [$check->status, $check->reason_code]);
+        $this->assertSame(['refused', 'staging_platform_updates_closed'], [$check->status, $check->reason_code]);
         Http::assertNothingSent();
         $this->artisan('platform:updates:check')->assertFailed();
         Http::assertNothingSent();
