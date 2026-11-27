@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Bounded-output, timeout, progress-token, and reap tests for the diagnostic watchdog."""
 import importlib.util
+import fcntl
+import hashlib
 import json
 import os
+import subprocess
 import sys
+import tempfile
+import stat
 import unittest
 from pathlib import Path
 
@@ -35,6 +40,90 @@ def success_report():
 
 
 class EvidenceWatchdogTests(unittest.TestCase):
+    def make_bundle(self, root, helper_bytes, *, helper_mode=0o444):
+        root = Path(root)
+        watchdog_bytes = WATCHDOG_PATH.read_bytes()
+        files = {
+            WATCHDOG.WATCHDOG_NAME: watchdog_bytes,
+            WATCHDOG.HELPER_NAME: helper_bytes,
+        }
+        manifest = {
+            "schema": 1,
+            "bundle_version": WATCHDOG.BUNDLE_VERSION,
+            "watchdog_sha256": hashlib.sha256(watchdog_bytes).hexdigest(),
+            "helper_sha256": hashlib.sha256(helper_bytes).hexdigest(),
+        }
+        files[WATCHDOG.MANIFEST_NAME] = json.dumps(manifest, sort_keys=True).encode()
+        for name, data in files.items():
+            path = root / name
+            path.write_bytes(data)
+            path.chmod(helper_mode if name == WATCHDOG.HELPER_NAME else 0o444)
+        root.chmod(0o555)
+        return files
+
+    def test_writable_or_replaced_helper_is_rejected(self):
+        for replacement, mode in ((False, 0o644), (True, 0o444)):
+            with self.subTest(replacement=replacement, mode=oct(mode)):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    helper = b"print('trusted')\n"
+                    self.make_bundle(root, helper, helper_mode=mode)
+                    if replacement:
+                        root.chmod(0o755)
+                        helper_path = root / WATCHDOG.HELPER_NAME
+                        helper_path.chmod(0o644)
+                        helper_path.write_bytes(b"print('/private/path/raw-secret')\n")
+                        helper_path.chmod(0o444)
+                        root.chmod(0o555)
+                    with self.assertRaises(ValueError):
+                        WATCHDOG._load_bundle(
+                            str(root), expected_uid=os.getuid(), expected_gid=os.getgid(),
+                            require_trusted_path=False,
+                        )
+                    root.chmod(0o755)
+
+    def test_verified_bytes_execute_after_helper_path_is_replaced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            original = b"print('verified-source-ran')\n"
+            self.make_bundle(root, original)
+            verified = WATCHDOG._load_bundle(
+                str(root), expected_uid=os.getuid(), expected_gid=os.getgid(),
+                require_trusted_path=False,
+            )
+            self.assertEqual(verified, original)
+            root.chmod(0o755)
+            helper_path = root / WATCHDOG.HELPER_NAME
+            helper_path.chmod(0o644)
+            helper_path.write_bytes(b"print('replacement-ran')\n")
+            helper_path.chmod(0o444)
+            root.chmod(0o555)
+
+            fd = WATCHDOG._sealed_source_fd(verified)
+            try:
+                seals = fcntl.fcntl(fd, fcntl.F_GET_SEALS)
+                self.assertTrue(seals & fcntl.F_SEAL_WRITE)
+                process = subprocess.Popen(
+                    [sys.executable, "-B", f"/proc/self/fd/{fd}"],
+                    pass_fds=(fd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    close_fds=True,
+                )
+            finally:
+                os.close(fd)
+            stdout, stderr = process.communicate(timeout=2)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(stdout, b"verified-source-ran\n")
+            self.assertNotIn(b"replacement-ran", stdout)
+            root.chmod(0o755)
+
+    def test_manifest_pins_the_versioned_local_bundle(self):
+        manifest_path = WATCHDOG_PATH.with_name("bundle-manifest.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        helper_path = WATCHDOG_PATH.with_name(WATCHDOG.HELPER_NAME)
+        self.assertEqual(manifest["bundle_version"], WATCHDOG.BUNDLE_VERSION)
+        self.assertEqual(manifest["watchdog_sha256"], hashlib.sha256(WATCHDOG_PATH.read_bytes()).hexdigest())
+        self.assertEqual(manifest["helper_sha256"], hashlib.sha256(helper_path.read_bytes()).hexdigest())
+
     def test_hanging_child_is_killed_and_reaped_after_each_stage(self):
         for stage in sorted(WATCHDOG.PROGRESS_STAGES):
             with self.subTest(stage=stage):
