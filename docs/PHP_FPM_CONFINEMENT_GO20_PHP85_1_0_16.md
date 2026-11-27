@@ -39,9 +39,12 @@ sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 
 The route attestation requires both provider evidence and the effective origin
 Nginx configuration. The separately versioned review aid lives at
-`deploy/php-fpm-confinement/route-audit/1.0.16/`. Its Git commit/tree and
-`SHA256SUMS` are immutable outer pins; the manifest SHA-256 is
-`4c1f4ea9be93419738a9bf7a73b6432fc8d7a5ceb2dfa7dafe812ea432f4fdfb`.
+`deploy/php-fpm-confinement/route-audit/1.0.16/`. For the reviewed 1.0.16
+artifact, use merge commit `896e098ab8bdbab96c8280a70619455e6dbdd505`, tree
+`e3ae8c7896e1c6adf56ce72f2616b187bc2f061e`, and `SHA256SUMS` digest
+`a9c5df2ddad544ff78819f36ea833b4f3a36991c510e92dacc6a9016575b1f90` as the
+immutable outer pins. `route_summary.py` has SHA-256
+`c1834dba5263448e768ee6e3b0666c17ed5f2895e6cc41bb0f03018017c9b241`.
 `binding.json` identifies it as a
 review-only tool, and `pinned_deploy_priv.py` must match the embedded SHA-256.
 The source tool never returns a closed-route PASS and never creates the
