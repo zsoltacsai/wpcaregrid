@@ -547,23 +547,42 @@ _TRACEBACK_PARSE_FAILURE_STAGES = {
     "PREFIX_BEFORE_TRACEBACK",
     "FIRST_HEADER_SUFFIX_INVALID",
     "PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER",
-    "HEADER_WITHOUT_FRAME",
-    "MISSING_EXCEPTION_LINE",
-    "FRAME_OR_CHAIN_MISMATCH",
+}
+_TRACEBACK_PARSE_SUBSTAGES = {
+    "NO_FRAME_AFTER_HEADER",
+    "MALFORMED_FRAME_LINE",
+    "UNEXPECTED_LINE_AFTER_HEADER",
+    "MISSING_EXCEPTION_SUMMARY",
+    "MALFORMED_EXCEPTION_SUMMARY",
+    "CHAIN_OR_TRAILING_MISMATCH",
+    "SOURCE_CONTEXT_OVER_BOUND",
     "OVER_FRAME_BOUND",
     "UNSUPPORTED_EXCEPTION_FORMAT",
 }
 
 
-def _traceback_failure(status: str, stage: str, frame_count: int = 0) -> dict:
+def _traceback_failure(status: str, stage: str, frame_count: int = 0,
+                       substage: str | None = None) -> dict:
     """Return only allowlisted parse state; never attach source or input text."""
     if stage not in _TRACEBACK_PARSE_FAILURE_STAGES:
-        stage = "FRAME_OR_CHAIN_MISMATCH"
-    return {
+        stage = "FIRST_HEADER_SUFFIX_INVALID"
+    result = {
         "status": status,
         "parse_failure_stage": stage,
         "frame_count": min(max(frame_count, 0), _MAX_TRACEBACK_FRAMES),
     }
+    if substage in _TRACEBACK_PARSE_SUBSTAGES:
+        result["parse_failure_substage"] = substage
+    return result
+
+
+def _traceback_suffix_failure(status: str, substage: str) -> dict:
+    """Collapse suffix failures to a safe stage and allowlisted branch label."""
+    return _traceback_failure(status, "FIRST_HEADER_SUFFIX_INVALID", substage=substage)
+
+
+def _looks_like_frame_line(line: str) -> bool:
+    return line.lstrip(" \t").startswith("File ")
 
 
 def _looks_like_exception_summary(line: str) -> bool:
@@ -610,13 +629,7 @@ def _traceback_summary(data: bytes | None) -> dict:
         if has_prefix:
             suffix["parse_failure_stage"] = "PREFIX_BEFORE_TRACEBACK"
         return suffix
-
-    # Collapse grammar-specific partial failures after a header. No partial
-    # frame count or parser detail is needed to distinguish this category.
-    status = suffix.get("status")
-    if status not in ("OVER_FRAME_BOUND", "UNSUPPORTED_EXCEPTION_FORMAT"):
-        status = "UNPARSEABLE"
-    return _traceback_failure(status, "FIRST_HEADER_SUFFIX_INVALID")
+    return suffix
 
 
 def _parse_traceback_lines(lines: list[str]) -> dict:
@@ -628,7 +641,7 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
     blocks = 0
     while index < len(lines):
         if lines[index] != _TRACEBACK_HEADER:
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
         index += 1
         block_frames = []
         while index < len(lines):
@@ -640,7 +653,7 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
             block_frames.append((basename, int(line_number), function.strip()))
             total_frames += 1
             if total_frames > _MAX_TRACEBACK_FRAMES:
-                return _traceback_failure("OVER_FRAME_BOUND", "OVER_FRAME_BOUND", total_frames)
+                return _traceback_suffix_failure("OVER_FRAME_BOUND", "OVER_FRAME_BOUND")
             index += 1
             context_count = 0
             while index < len(lines) and not _TRACEBACK_FRAME.fullmatch(lines[index]) and (
@@ -648,18 +661,25 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
             ):
                 context_count += 1
                 if context_count > _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME:
-                    return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+                    return _traceback_suffix_failure("UNPARSEABLE", "SOURCE_CONTEXT_OVER_BOUND")
                 index += 1
         if not block_frames:
-            return _traceback_failure("UNPARSEABLE", "HEADER_WITHOUT_FRAME", total_frames)
+            if index >= len(lines):
+                return _traceback_suffix_failure("UNPARSEABLE", "NO_FRAME_AFTER_HEADER")
+            if _looks_like_frame_line(lines[index]):
+                return _traceback_suffix_failure("UNPARSEABLE", "MALFORMED_FRAME_LINE")
+            if _TRACEBACK_EXCEPTION.fullmatch(lines[index]):
+                return _traceback_suffix_failure("UNPARSEABLE", "NO_FRAME_AFTER_HEADER")
+            return _traceback_suffix_failure("UNPARSEABLE", "UNEXPECTED_LINE_AFTER_HEADER")
         if index >= len(lines):
-            return _traceback_failure("UNPARSEABLE", "MISSING_EXCEPTION_LINE", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "MISSING_EXCEPTION_SUMMARY")
         exception_match = _TRACEBACK_EXCEPTION.fullmatch(lines[index])
         if not exception_match:
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            substage = "MALFORMED_FRAME_LINE" if _looks_like_frame_line(lines[index]) else "MALFORMED_EXCEPTION_SUMMARY"
+            return _traceback_suffix_failure("UNPARSEABLE", substage)
         exception_name = exception_match.group(1).rsplit(".", 1)[-1]
         if exception_name in {"ExceptionGroup", "BaseExceptionGroup"}:
-            return _traceback_failure("UNSUPPORTED_EXCEPTION_FORMAT", "UNSUPPORTED_EXCEPTION_FORMAT", total_frames)
+            return _traceback_suffix_failure("UNSUPPORTED_EXCEPTION_FORMAT", "UNSUPPORTED_EXCEPTION_FORMAT")
         final_exception = exception_name if exception_name in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
         final_frame = block_frames[-1]
         blocks += 1
@@ -669,19 +689,19 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
         # Python's formatter puts exactly one blank separator before and
         # after the exception-chain marker. Do not skip arbitrary lines.
         if lines[index] != "":
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
         index += 1
         if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
         index += 1
         if index >= len(lines) or lines[index] != "":
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
         index += 1
         if index >= len(lines) or lines[index] != _TRACEBACK_HEADER:
-            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
 
     if not blocks or final_frame is None or final_exception is None:
-        return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
+        return _traceback_suffix_failure("UNPARSEABLE", "NO_FRAME_AFTER_HEADER")
     basename, line_number, function = final_frame
     safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
     return {

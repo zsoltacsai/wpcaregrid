@@ -27,7 +27,10 @@ exception-summary line matching a known or conventionally named Python exception
 later exact header yields `PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER`; generic launcher prefixes such
 as `ERROR:` remain ordinary discarded prefix text. Malformed suffixes, prefix text, and all raw lines
 are never emitted. Detection includes class-only exception lines and does not skip malformed earlier
-header candidates.
+header candidates. Invalid suffixes may include only these substage enums: `NO_FRAME_AFTER_HEADER`,
+`MALFORMED_FRAME_LINE`, `UNEXPECTED_LINE_AFTER_HEADER`, `MISSING_EXCEPTION_SUMMARY`,
+`MALFORMED_EXCEPTION_SUMMARY`, `CHAIN_OR_TRAILING_MISMATCH`, `SOURCE_CONTEXT_OVER_BOUND`,
+`OVER_FRAME_BOUND`, and `UNSUPPORTED_EXCEPTION_FORMAT`.
 It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
