@@ -108,10 +108,96 @@ def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
     )
 
 
-def _read_regular(path: str, expected_sha256: str | None = None, *, expected_mode: int | None = None) -> tuple[bytes, dict]:
-    """Read one root-owned regular file via O_NOFOLLOW and verify its identity."""
+def _same_directory(a: os.stat_result, b: os.stat_result) -> bool:
+    return (
+        stat.S_ISDIR(a.st_mode)
+        and stat.S_ISDIR(b.st_mode)
+        and (a.st_dev, a.st_ino, a.st_uid, a.st_gid, stat.S_IMODE(a.st_mode), a.st_nlink)
+        == (b.st_dev, b.st_ino, b.st_uid, b.st_gid, stat.S_IMODE(b.st_mode), b.st_nlink)
+    )
+
+
+def _directory_mode(info: os.stat_result, expected_mode: int | None = None) -> bool:
+    mode = stat.S_IMODE(info.st_mode)
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == 0
+        and info.st_gid == 0
+        and not mode & 0o022
+        and (expected_mode is None or mode == expected_mode)
+    )
+
+
+def _directory_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise DiagnosticHold("nofollow-directory-unavailable")
+    return os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_dir_at(parent_fd: int, name: str, *, expected_mode: int | None = None) -> int:
+    """Open and verify a root-owned directory relative to an already pinned parent fd."""
+    if not name or name in (".", "..") or "/" in name or "\\x00" in name:
+        raise DiagnosticHold("directory-component-invalid")
     try:
-        before = os.lstat(path)
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        raise DiagnosticHold("input-unavailable") from None
+    if not _directory_mode(before, expected_mode):
+        raise DiagnosticHold("directory-metadata")
+    fd = None
+    try:
+        fd = os.open(name, _directory_flags(), dir_fd=parent_fd)
+        opened = os.fstat(fd)
+        if not _directory_mode(opened, expected_mode) or not _same_directory(before, opened):
+            raise DiagnosticHold("directory-raced")
+        return fd
+    except DiagnosticHold:
+        if fd is not None:
+            os.close(fd)
+        raise
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        raise DiagnosticHold("directory-open-failed") from None
+
+
+def _open_absolute_directory(path: str, *, expected_mode: int) -> int:
+    """Walk from / using dirfds so no parent path component can be swapped after validation."""
+    if not os.path.isabs(path) or os.path.normpath(path) != path or path == "/":
+        raise DiagnosticHold("directory-path-noncanonical")
+    flags = _directory_flags()
+    try:
+        current_fd = os.open("/", flags)
+    except OSError:
+        raise DiagnosticHold("root-directory-open-failed") from None
+    try:
+        root_info = os.fstat(current_fd)
+        if not _directory_mode(root_info, 0o755):
+            raise DiagnosticHold("root-directory-metadata")
+        components = path.strip("/").split("/")
+        for index, component in enumerate(components):
+            next_fd = _open_dir_at(current_fd, component,
+                                   expected_mode=expected_mode if index == len(components) - 1 else None)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except DiagnosticHold:
+        os.close(current_fd)
+        raise
+    except OSError:
+        os.close(current_fd)
+        raise DiagnosticHold("directory-walk-failed") from None
+
+
+def _read_regular_at(directory_fd: int, name: str, expected_sha256: str | None = None,
+                     *, expected_mode: int | None = None, display_name: str | None = None) -> tuple[bytes, dict]:
+    """Read one file by basename relative to a pinned directory fd; never follow links."""
+    if not name or name in (".", "..") or "/" in name or "\\x00" in name:
+        raise DiagnosticHold("input-name-invalid")
+    try:
+        before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except OSError:
         raise DiagnosticHold("input-unavailable") from None
     if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_gid != 0 or before.st_nlink != 1:
@@ -128,7 +214,7 @@ def _read_regular(path: str, expected_sha256: str | None = None, *, expected_mod
         raise DiagnosticHold("nonblock-unavailable")
     flags = os.O_RDONLY | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0)
     try:
-        fd = os.open(path, flags)
+        fd = os.open(name, flags, dir_fd=directory_fd)
         try:
             opened = os.fstat(fd)
             if not _same_file(before, opened):
@@ -155,32 +241,39 @@ def _read_regular(path: str, expected_sha256: str | None = None, *, expected_mod
     digest = hashlib.sha256(data).hexdigest()
     if expected_sha256 is not None and digest != expected_sha256:
         raise DiagnosticHold("pinned-input-digest-mismatch")
-    return data, {**_meta(os.path.basename(path), before), "sha256": digest}
+    return data, {**_meta(display_name or name, before), "sha256": digest}
 
 
-def _directory(path: str, mode: int, *, owner: int = 0, group: int = 0) -> os.stat_result:
+def _read_pinned_relative(root_fd: int, relative: str, digest: str) -> tuple[bytes, dict]:
+    components = relative.split("/")
+    if any(not component or component in (".", "..") for component in components):
+        raise DiagnosticHold("package-path-invalid")
+    current_fd = root_fd
+    owned_fd = None
     try:
-        info = os.lstat(path)
-    except OSError:
-        raise DiagnosticHold("directory-unavailable") from None
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-        raise DiagnosticHold("directory-type")
-    if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (owner, group, mode):
-        raise DiagnosticHold("directory-metadata")
-    return info
+        for component in components[:-1]:
+            next_fd = _open_dir_at(current_fd, component, expected_mode=0o755)
+            if owned_fd is not None:
+                os.close(owned_fd)
+            current_fd = owned_fd = next_fd
+        return _read_regular_at(current_fd, components[-1], digest, expected_mode=0o644,
+                                display_name=relative)
+    finally:
+        if owned_fd is not None:
+            os.close(owned_fd)
 
 
 def _load_pins(package_dir: str) -> tuple[dict, types.ModuleType]:
-    _directory(package_dir, 0o755)
+    package_fd = _open_absolute_directory(package_dir, expected_mode=0o755)
     pin_bytes = {}
     pin_metadata = {}
-    for relative, digest in PINNED_PACKAGE_FILES.items():
-        path = os.path.join(package_dir, relative)
-        data, metadata = _read_regular(path, digest, expected_mode=0o644)
-        metadata["basename"] = relative
-        metadata["basename_sha256"] = None
-        pin_bytes[relative] = data
-        pin_metadata[relative] = metadata
+    try:
+        for relative, digest in PINNED_PACKAGE_FILES.items():
+            data, metadata = _read_pinned_relative(package_fd, relative, digest)
+            pin_bytes[relative] = data
+            pin_metadata[relative] = metadata
+    finally:
+        os.close(package_fd)
     expected_manifest = {}
     try:
         for line in pin_bytes["SHA256SUMS"].decode("ascii").splitlines():
@@ -223,18 +316,23 @@ def _run_start_ns() -> int:
 
 
 def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[str]]:
-    envelope = _directory(ENVELOPE_DIR, 0o700)
-    run = _directory(run_dir, 0o700)
     if os.path.abspath(os.path.dirname(run_dir)) != os.path.abspath(ENVELOPE_DIR):
         raise DiagnosticHold("run-dir-not-direct-child")
     if os.path.basename(run_dir) != RUN_DIR_NAME:
         raise DiagnosticHold("run-id-mismatch")
     start = _run_start_ns()
+    envelope_fd = _open_absolute_directory(ENVELOPE_DIR, expected_mode=0o700)
     try:
-        names = sorted(os.listdir(run_dir))
+        run_fd = _open_dir_at(envelope_fd, RUN_DIR_NAME, expected_mode=0o700)
+    finally:
+        os.close(envelope_fd)
+    try:
+        names = sorted(os.listdir(run_fd))
     except OSError:
+        os.close(run_fd)
         raise DiagnosticHold("evidence-list-failed") from None
     if len(names) > MAX_CHILDREN:
+        os.close(run_fd)
         raise DiagnosticHold("evidence-child-bound")
     manifest, selected, unknown = [], {}, set()
     selected_bytes = 0
@@ -242,9 +340,8 @@ def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[
         if name in (".", "..") or os.path.basename(name) != name or "\x00" in name:
             manifest.append({"basename": "<invalid-name>", "origin": "UNKNOWN", "sha256": None})
             continue
-        path = os.path.join(run_dir, name)
         try:
-            info = os.lstat(path)
+            info = os.stat(name, dir_fd=run_fd, follow_symlinks=False)
         except OSError:
             shown_name, name_digest = _safe_name(name)
             manifest.append({"basename": shown_name, "basename_sha256": name_digest,
@@ -274,7 +371,7 @@ def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[
             unknown.add(name)
             continue
         try:
-            data, secure = _read_regular(path, expected_mode=0o600)
+            data, secure = _read_regular_at(run_fd, name, expected_mode=0o600)
         except DiagnosticHold as exc:
             item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": exc.code})
             manifest.append(item)
@@ -284,6 +381,7 @@ def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[
         manifest.append(item)
         selected[name] = data
         selected_bytes += len(data)
+    os.close(run_fd)
     return manifest, selected, unknown
 
 
