@@ -574,7 +574,10 @@ _TRACEBACK_PARSE_SUBSTAGES = {
     "UNEXPECTED_LINE_AFTER_HEADER",
     "MISSING_EXCEPTION_SUMMARY",
     "MALFORMED_EXCEPTION_SUMMARY",
-    "CHAIN_OR_TRAILING_MISMATCH",
+    "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
+    "EXPECTED_CHAIN_MARKER",
+    "EXPECTED_SEPARATOR_AFTER_CHAIN_MARKER",
+    "EXPECTED_NEXT_TRACEBACK_HEADER",
     "SOURCE_CONTEXT_OVER_BOUND",
     "OVER_FRAME_BOUND",
     "UNSUPPORTED_EXCEPTION_FORMAT",
@@ -662,7 +665,7 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
     blocks = 0
     while index < len(lines):
         if lines[index] != _TRACEBACK_HEADER:
-            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
+            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_NEXT_TRACEBACK_HEADER")
         index += 1
         block_frames = []
         while index < len(lines):
@@ -710,16 +713,16 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
         # Python's formatter puts exactly one blank separator before and
         # after the exception-chain marker. Do not skip arbitrary lines.
         if lines[index] != "":
-            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
+            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
         index += 1
         if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
-            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
+            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_CHAIN_MARKER")
         index += 1
         if index >= len(lines) or lines[index] != "":
-            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
+            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_SEPARATOR_AFTER_CHAIN_MARKER")
         index += 1
         if index >= len(lines) or lines[index] != _TRACEBACK_HEADER:
-            return _traceback_suffix_failure("UNPARSEABLE", "CHAIN_OR_TRAILING_MISMATCH")
+            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_NEXT_TRACEBACK_HEADER")
 
     if not blocks or final_frame is None or final_exception is None:
         return _traceback_suffix_failure("UNPARSEABLE", "NO_FRAME_AFTER_HEADER")

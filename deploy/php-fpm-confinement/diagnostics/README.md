@@ -18,7 +18,12 @@ lines, or full paths. It accepts standard chained tracebacks with the exact
 blank separators emitted by Python and up to two indented source-context lines per frame; malformed intermediate lines and
 unsupported multiline ExceptionGroup output remain UNKNOWN. Parse failures carry only an allowlisted
 `parse_failure_stage` enum and a bounded `frame_count`, distinguishing missing headers, invalid
-encoding, size/frame bounds, and invalid traceback suffixes without echoing input. It searches the
+encoding, size/frame bounds, and invalid traceback suffixes without echoing input. The
+`CHAIN_OR_TRAILING_MISMATCH` case is split into four parser-state substages:
+`EXPECTED_SEPARATOR_AFTER_EXCEPTION`, `EXPECTED_CHAIN_MARKER`,
+`EXPECTED_SEPARATOR_AFTER_CHAIN_MARKER`, and `EXPECTED_NEXT_TRACEBACK_HEADER`. These identify
+only the exact grammar check that failed; they do not identify the underlying runtime cause.
+They never include line text, exception messages, paths, partial frame counts, or offsets. It searches the
 complete bounded stderr for exact traceback-header lines. No exact header anywhere yields
 `NO_EXACT_TRACEBACK_HEADER`. A found header whose suffix does not fully match the strict grammar
 yields `FIRST_HEADER_SUFFIX_INVALID` with no partial frame count. A complete valid traceback after a
@@ -29,7 +34,8 @@ as `ERROR:` remain ordinary discarded prefix text. Malformed suffixes, prefix te
 are never emitted. Detection includes class-only exception lines and does not skip malformed earlier
 header candidates. Invalid suffixes may include only these substage enums: `NO_FRAME_AFTER_HEADER`,
 `MALFORMED_FRAME_LINE`, `UNEXPECTED_LINE_AFTER_HEADER`, `MISSING_EXCEPTION_SUMMARY`,
-`MALFORMED_EXCEPTION_SUMMARY`, `CHAIN_OR_TRAILING_MISMATCH`, `SOURCE_CONTEXT_OVER_BOUND`,
+`MALFORMED_EXCEPTION_SUMMARY`, `EXPECTED_SEPARATOR_AFTER_EXCEPTION`, `EXPECTED_CHAIN_MARKER`,
+`EXPECTED_SEPARATOR_AFTER_CHAIN_MARKER`, `EXPECTED_NEXT_TRACEBACK_HEADER`, `SOURCE_CONTEXT_OVER_BOUND`,
 `OVER_FRAME_BOUND`, and `UNSUPPORTED_EXCEPTION_FORMAT`.
 It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
