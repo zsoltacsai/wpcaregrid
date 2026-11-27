@@ -371,6 +371,8 @@ class EvidenceExportSafetyTests(unittest.TestCase):
              "FIRST_HEADER_SUFFIX_INVALID", "UNEXPECTED_LINE_AFTER_HEADER"),
             ("malformed-frame", header + b'  File "/root/private/probe.py", line bad, call\n' + exception,
              "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_FRAME_LINE"),
+            ("malformed-frame-unquoted-path", header + b"  File /root/private/probe.py, line 41, in call\n" + exception,
+             "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_FRAME_LINE"),
             ("missing-exception", header + frame, "FIRST_HEADER_SUFFIX_INVALID", "MISSING_EXCEPTION_SUMMARY"),
             ("malformed-exception", header + frame + b"not an exception raw-secret\n",
              "FIRST_HEADER_SUFFIX_INVALID", "MALFORMED_EXCEPTION_SUMMARY"),
