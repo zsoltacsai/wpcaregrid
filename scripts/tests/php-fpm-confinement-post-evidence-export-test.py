@@ -276,6 +276,42 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertNotIn("tokenized", str(summary))
         self.assertNotIn("sensitive", str(summary))
 
+    def test_traceback_summary_rejects_unparsed_intermediate_lines(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/safe/probe.py", line 41, in call\n'
+               b'not a traceback line\n'
+               b'ValueError: secret\n')
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "UNPARSEABLE")
+        self.assertNotIn("secret", str(summary))
+
+    def test_traceback_summary_accepts_chained_and_syntax_context_structure(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/safe/first.py", line 10, in first\n'
+               b'    raise ValueError()\n'
+               b'ValueError: hidden-one\n'
+               b'The above exception was the direct cause of the following exception:\n'
+               b'Traceback (most recent call last):\n'
+               b'  File "/safe/probe.py", line 427, in main\n'
+               b'    bad syntax\n'
+               b'    ^\n'
+               b'TypeError: hidden-two\n')
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "PARSED")
+        self.assertEqual(summary["exception_class"], "TypeError")
+        self.assertEqual(summary["frame_count"], 2)
+        self.assertEqual(summary["thrower_basename"], "probe.py")
+        self.assertEqual(summary["thrower_line"], 427)
+        self.assertNotIn("hidden", str(summary))
+        self.assertNotIn("bad syntax", str(summary))
+
+    def test_traceback_summary_rejects_unsupported_multiline_exception_groups(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/safe/probe.py", line 9, in run\n'
+               b'ExceptionGroup: grouped\n'
+               b'  +-+---------------- 1 ----------------\n')
+        self.assertEqual(HELPER._traceback_summary(raw)["status"], "UNSUPPORTED_EXCEPTION_FORMAT")
+
     def test_traceback_summary_fails_closed_for_unbounded_or_malformed_input(self):
         self.assertEqual(HELPER._traceback_summary(None), {"status": "ABSENT_OR_UNKNOWN"})
         self.assertEqual(HELPER._traceback_summary(b""), {"status": "EMPTY"})

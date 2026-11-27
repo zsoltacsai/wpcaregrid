@@ -14,7 +14,9 @@ and owner/mode/link/identity checks on each directory and file component. It emi
 allowlisted, redacted JSON object on stdout. For standard Python tracebacks in the confined
 probe stderr, it may add only an allowlisted exception class, frame count, safe basename
 classification, function token, and line number; it never emits exception messages, source
-lines, or full paths. Unrecognized or oversized traceback content remains UNKNOWN. It creates no files, directories,
+lines, or full paths. It accepts standard chained tracebacks and up to two
+indented source-context lines per frame; malformed intermediate lines and
+unsupported multiline ExceptionGroup output remain UNKNOWN. It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
 
