@@ -582,7 +582,7 @@ def _traceback_suffix_failure(status: str, substage: str) -> dict:
 
 
 def _looks_like_frame_line(line: str) -> bool:
-    return line.lstrip(" \t").startswith('File "')
+    return line.lstrip(" \t").startswith("File ")
 
 
 def _looks_like_exception_summary(line: str) -> bool:
