@@ -87,7 +87,7 @@ path before extraction. Run as root from the trusted existing checkout, with
 set -euo pipefail
 ORCH_COMMIT='<exact reviewed merge commit>'
 ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post'
-ORCH_TREE='ac7a5b71bcb400efa92606cb71006672b705865f'
+ORCH_TREE='dbd8f0dad86eab587fd64a86a347a14f7c5a9d38'
 test "$(git -C /home/deploy/wpcaregrid rev-parse "$ORCH_COMMIT:$ORCH_REL")" = "$ORCH_TREE"
 DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post'
 BASE='/usr/local/libexec/wpcg-gate2-orchestrators'
@@ -123,7 +123,7 @@ for file in "$DEST"/*; do
 done
 cd "$DEST"
 sha256sum -c --strict SHA256SUMS
-test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = 'af5831f07753e47b5aa38ac8d8e3837133c889852d3f015b2b75b408192a9549'
+test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '7dc579e508eef5c116d6462cfde569b60d3b1eceae583f0adf5cfd736d16f866'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
 test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = '6901b25fd5062c01133ba225a3dbf36b3e7df2d2d5b99704c8c150af6f85edd1'
 ```
@@ -186,6 +186,9 @@ unreaped child, or nonzero `su` exit is HOLD. The orchestrator then:
    verifies the exact banner, stops its own unit, and verifies that unit is
    inactive/unloaded and the socket is absent before moving on. It does not run
    PHP cache-building or database identity commands.
+   Each start's stdout/stderr evidence filename includes that invocation's
+   nonce; this permits both CLI profiles to use one evidence directory without
+   colliding under exclusive-create semantics.
 5. Runs the pinned verifier separately for each profile with only that
    profile's baseline, confined, before/after inventory and correlated audit
    inputs. Any failure stops the run and preserves evidence. No cleanup occurs
