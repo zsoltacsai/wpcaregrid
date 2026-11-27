@@ -16,7 +16,11 @@ probe stderr, it may add only an allowlisted exception class, frame count, safe 
 classification, function token, and line number; it never emits exception messages, source
 lines, or full paths. It accepts standard chained tracebacks with the exact
 blank separators emitted by Python and up to two indented source-context lines per frame; malformed intermediate lines and
-unsupported multiline ExceptionGroup output remain UNKNOWN. It creates no files, directories,
+unsupported multiline ExceptionGroup output remain UNKNOWN. Parse failures carry only an allowlisted
+`parse_failure_stage` enum and a bounded `frame_count`, distinguishing missing headers, headers with
+no recognized frame record (including a malformed first frame), invalid encoding, size/frame bounds,
+and frame/chain mismatches without echoing input.
+It creates no files, directories,
 caches, receipts, temporary data, or __pycache__; it uses no network or
 subprocesses. Run only as python3 -B after versioned review and CI.
 

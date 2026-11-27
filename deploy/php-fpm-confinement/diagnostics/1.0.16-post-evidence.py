@@ -540,6 +540,27 @@ _TRACEBACK_CHAIN_MARKERS = {
 _MAX_TRACEBACK_BYTES = 65_536
 _MAX_TRACEBACK_FRAMES = 128
 _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME = 2
+_TRACEBACK_PARSE_FAILURE_STAGES = {
+    "OVER_BOUND",
+    "INVALID_ENCODING",
+    "NO_TRACEBACK_HEADER",
+    "HEADER_WITHOUT_FRAME",
+    "MISSING_EXCEPTION_LINE",
+    "FRAME_OR_CHAIN_MISMATCH",
+    "OVER_FRAME_BOUND",
+    "UNSUPPORTED_EXCEPTION_FORMAT",
+}
+
+
+def _traceback_failure(status: str, stage: str, frame_count: int = 0) -> dict:
+    """Return only allowlisted parse state; never attach source or input text."""
+    if stage not in _TRACEBACK_PARSE_FAILURE_STAGES:
+        stage = "FRAME_OR_CHAIN_MISMATCH"
+    return {
+        "status": status,
+        "parse_failure_stage": stage,
+        "frame_count": min(max(frame_count, 0), _MAX_TRACEBACK_FRAMES),
+    }
 
 
 def _traceback_summary(data: bytes | None) -> dict:
@@ -549,14 +570,14 @@ def _traceback_summary(data: bytes | None) -> dict:
     if not data:
         return {"status": "EMPTY"}
     if len(data) > _MAX_TRACEBACK_BYTES:
-        return {"status": "OVER_BOUND", "byte_count": len(data)}
+        return _traceback_failure("OVER_BOUND", "OVER_BOUND")
     try:
         text = data.decode("utf-8", "strict")
     except UnicodeDecodeError:
-        return {"status": "UNPARSEABLE"}
+        return _traceback_failure("UNPARSEABLE", "INVALID_ENCODING")
     lines = text.splitlines()
     if not lines:
-        return {"status": "UNPARSEABLE"}
+        return _traceback_failure("UNPARSEABLE", "NO_TRACEBACK_HEADER")
 
     index = 0
     while index < len(lines) and not lines[index].strip():
@@ -567,7 +588,8 @@ def _traceback_summary(data: bytes | None) -> dict:
     blocks = 0
     while index < len(lines):
         if lines[index] != _TRACEBACK_HEADER:
-            return {"status": "UNPARSEABLE", "frame_count": min(total_frames, _MAX_TRACEBACK_FRAMES)}
+            stage = "NO_TRACEBACK_HEADER" if blocks == 0 else "FRAME_OR_CHAIN_MISMATCH"
+            return _traceback_failure("UNPARSEABLE", stage, total_frames)
         index += 1
         block_frames = []
         while index < len(lines):
@@ -579,7 +601,7 @@ def _traceback_summary(data: bytes | None) -> dict:
             block_frames.append((basename, int(line_number), function.strip()))
             total_frames += 1
             if total_frames > _MAX_TRACEBACK_FRAMES:
-                return {"status": "OVER_FRAME_BOUND", "frame_count_capped": _MAX_TRACEBACK_FRAMES}
+                return _traceback_failure("OVER_FRAME_BOUND", "OVER_FRAME_BOUND", total_frames)
             index += 1
             context_count = 0
             while index < len(lines) and not _TRACEBACK_FRAME.fullmatch(lines[index]) and (
@@ -587,16 +609,18 @@ def _traceback_summary(data: bytes | None) -> dict:
             ):
                 context_count += 1
                 if context_count > _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME:
-                    return {"status": "UNPARSEABLE", "frame_count": total_frames}
+                    return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
                 index += 1
-        if not block_frames or index >= len(lines):
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        if not block_frames:
+            return _traceback_failure("UNPARSEABLE", "HEADER_WITHOUT_FRAME", total_frames)
+        if index >= len(lines):
+            return _traceback_failure("UNPARSEABLE", "MISSING_EXCEPTION_LINE", total_frames)
         exception_match = _TRACEBACK_EXCEPTION.fullmatch(lines[index])
         if not exception_match:
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
         exception_name = exception_match.group(1).rsplit(".", 1)[-1]
         if exception_name in {"ExceptionGroup", "BaseExceptionGroup"}:
-            return {"status": "UNSUPPORTED_EXCEPTION_FORMAT", "frame_count": total_frames}
+            return _traceback_failure("UNSUPPORTED_EXCEPTION_FORMAT", "UNSUPPORTED_EXCEPTION_FORMAT", total_frames)
         final_exception = exception_name if exception_name in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
         final_frame = block_frames[-1]
         blocks += 1
@@ -606,19 +630,19 @@ def _traceback_summary(data: bytes | None) -> dict:
         # Python's formatter puts exactly one blank separator before and
         # after the exception-chain marker. Do not skip arbitrary lines.
         if lines[index] != "":
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
         index += 1
         if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
         index += 1
         if index >= len(lines) or lines[index] != "":
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
         index += 1
         if index >= len(lines) or lines[index] != _TRACEBACK_HEADER:
-            return {"status": "UNPARSEABLE", "frame_count": total_frames}
+            return _traceback_failure("UNPARSEABLE", "FRAME_OR_CHAIN_MISMATCH", total_frames)
 
     if not blocks or final_frame is None or final_exception is None:
-        return {"status": "UNPARSEABLE", "frame_count": total_frames}
+        return _traceback_failure("UNPARSEABLE", "NO_TRACEBACK_HEADER", total_frames)
     basename, line_number, function = final_frame
     safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
     return {
@@ -628,6 +652,16 @@ def _traceback_summary(data: bytes | None) -> dict:
         "thrower_basename": basename if basename in _TRACEBACK_BASES else "OTHER_BASENAME",
         "thrower_function": safe_function,
         "thrower_line": line_number,
+    }
+
+
+def _stderr_summary(data: bytes | None) -> dict:
+    """Return bounded stderr report fields without retaining or echoing input bytes."""
+    return {
+        "status": "BOUND" if data is not None else "ABSENT_OR_UNKNOWN",
+        "reason_class": _stderr_class(data),
+        "traceback": _traceback_summary(data),
+        "raw_text_emitted": False,
     }
 
 
@@ -915,10 +949,7 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
     stderr = {}
     for filename in ("wpcaregrid-nginx-confined.stderr", "wpcaregrid-nginx-derive.stderr"):
         data = selected.get(filename)
-        stderr[filename] = {"status": "BOUND" if data is not None else "ABSENT_OR_UNKNOWN",
-                            "reason_class": _stderr_class(data),
-                            "traceback": _traceback_summary(data),
-                            "raw_text_emitted": False}
+        stderr[filename] = _stderr_summary(data)
     conf_for_audit = confined_doc if confined_status == "parsed" else None
     audit = _audit_summary(selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit, package["matrix"], verifier)
     if confined_status in ("unavailable", "empty", "invalid-json", "invalid-schema"):

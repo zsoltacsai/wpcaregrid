@@ -276,6 +276,18 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertNotIn("tokenized", str(summary))
         self.assertNotIn("sensitive", str(summary))
 
+    def test_stderr_report_fields_never_echo_raw_input_or_exception_message(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/root/private/raw-path/probe.py", line 12, in main\n'
+               b'PermissionError: raw-exception-message-secret\n')
+        summary = HELPER._stderr_summary(raw)
+        rendered = __import__("json").dumps(summary, sort_keys=True)
+        self.assertEqual(summary["status"], "BOUND")
+        self.assertEqual(summary["traceback"]["status"], "PARSED")
+        self.assertFalse(summary["raw_text_emitted"])
+        for forbidden in ("raw-path", "/root", "private", "raw-exception-message-secret", raw.decode()):
+            self.assertNotIn(forbidden, rendered)
+
     def test_traceback_summary_rejects_unparsed_intermediate_lines(self):
         raw = (b'Traceback (most recent call last):\n'
                b'  File "/safe/probe.py", line 41, in call\n'
@@ -283,6 +295,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'ValueError: secret\n')
         summary = HELPER._traceback_summary(raw)
         self.assertEqual(summary["status"], "UNPARSEABLE")
+        self.assertEqual(summary["parse_failure_stage"], "FRAME_OR_CHAIN_MISMATCH")
         self.assertNotIn("secret", str(summary))
 
     def test_traceback_summary_accepts_chained_and_syntax_context_structure(self):
@@ -319,20 +332,88 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                b'Traceback (most recent call last):\n'
                b'  File "/safe/probe.py", line 427, in main\n'
                b'TypeError: hidden-two\n')
-        self.assertEqual(HELPER._traceback_summary(raw)["status"], "UNPARSEABLE")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "UNPARSEABLE")
+        self.assertEqual(summary["parse_failure_stage"], "FRAME_OR_CHAIN_MISMATCH")
 
     def test_traceback_summary_rejects_unsupported_multiline_exception_groups(self):
         raw = (b'Traceback (most recent call last):\n'
                b'  File "/safe/probe.py", line 9, in run\n'
                b'ExceptionGroup: grouped\n'
                b'  +-+---------------- 1 ----------------\n')
-        self.assertEqual(HELPER._traceback_summary(raw)["status"], "UNSUPPORTED_EXCEPTION_FORMAT")
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["status"], "UNSUPPORTED_EXCEPTION_FORMAT")
+        self.assertEqual(summary["parse_failure_stage"], "UNSUPPORTED_EXCEPTION_FORMAT")
 
     def test_traceback_summary_fails_closed_for_unbounded_or_malformed_input(self):
         self.assertEqual(HELPER._traceback_summary(None), {"status": "ABSENT_OR_UNKNOWN"})
         self.assertEqual(HELPER._traceback_summary(b""), {"status": "EMPTY"})
-        self.assertEqual(HELPER._traceback_summary(b"x" * (HELPER._MAX_TRACEBACK_BYTES + 1))["status"], "OVER_BOUND")
-        self.assertEqual(HELPER._traceback_summary(b"Traceback (most recent call last):\nnot a frame\nValueError: x")["status"], "UNPARSEABLE")
+        over_bound = HELPER._traceback_summary(b"x" * (HELPER._MAX_TRACEBACK_BYTES + 1))
+        self.assertEqual(over_bound["status"], "OVER_BOUND")
+        self.assertEqual(over_bound["parse_failure_stage"], "OVER_BOUND")
+        malformed = HELPER._traceback_summary(b"Traceback (most recent call last):\nnot a frame\nValueError: x")
+        self.assertEqual(malformed["status"], "UNPARSEABLE")
+        self.assertEqual(malformed["parse_failure_stage"], "HEADER_WITHOUT_FRAME")
+
+    def test_traceback_summary_failure_stage_covers_rejected_grammar_without_echoing_input(self):
+        header = b"Traceback (most recent call last):\n"
+        frame = b'  File "/root/private/probe.py", line 41, in call\n'
+        exception = b"ValueError: raw-exception-message-secret\n"
+        chain = b"During handling of the above exception, another exception occurred:"
+        valid_first = header + frame + exception
+        cases = (
+            ("no-header", b"system error: raw-exception-message-secret", "NO_TRACEBACK_HEADER", 0),
+            ("blank-input", b"\n\n", "NO_TRACEBACK_HEADER", 0),
+            ("header-without-frame", header + exception, "HEADER_WITHOUT_FRAME", 0),
+            ("header-eof", header, "HEADER_WITHOUT_FRAME", 0),
+            ("malformed-frame", header + b'  File "/root/private/probe.py", line bad, call\n' + exception,
+             "HEADER_WITHOUT_FRAME", 0),
+            ("missing-exception", header + frame, "MISSING_EXCEPTION_LINE", 1),
+            ("malformed-exception", header + frame + b"not an exception raw-secret\n",
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("missing-chain-separator", valid_first + chain + b"\n" + header + frame + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("extra-before-chain", valid_first + b"\n\n" + chain + b"\n\n" + header + frame + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("wrong-chain-marker", valid_first + b"\nnot a marker raw-secret\n\n" + header + frame + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("missing-chain-trailing-separator", valid_first + b"\n" + chain + b"\n" + header + frame + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("extra-after-chain", valid_first + b"\n" + chain + b"\n\n\n" + header + frame + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("wrong-chained-header", valid_first + b"\n" + chain + b"\nnot a header raw-secret\n",
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+            ("too-many-context-lines", header + frame + b"    source one\n    source two\n    source three\n" + exception,
+             "FRAME_OR_CHAIN_MISMATCH", 1),
+        )
+        for name, raw, expected_stage, expected_frames in cases:
+            with self.subTest(name=name):
+                summary = HELPER._traceback_summary(raw)
+                self.assertEqual(summary["status"], "UNPARSEABLE")
+                self.assertEqual(summary["parse_failure_stage"], expected_stage)
+                self.assertEqual(summary["frame_count"], expected_frames)
+                rendered = __import__("json").dumps(summary, sort_keys=True)
+                self.assertNotIn("raw-exception-message-secret", rendered)
+                self.assertNotIn("raw-secret", rendered)
+                self.assertNotIn("/root", rendered)
+                self.assertNotIn(raw.decode("utf-8"), rendered)
+
+    def test_traceback_summary_failure_stages_cover_encoding_and_frame_bounds(self):
+        invalid_encoding = HELPER._traceback_summary(b"\xffraw-secret")
+        self.assertEqual(invalid_encoding, {
+            "status": "UNPARSEABLE", "parse_failure_stage": "INVALID_ENCODING", "frame_count": 0,
+        })
+        frame = b'  File "/safe/probe.py", line 1, in f\n'
+        too_many_frames = HELPER._traceback_summary(
+            b"Traceback (most recent call last):\n" + frame * (HELPER._MAX_TRACEBACK_FRAMES + 1)
+        )
+        self.assertEqual(too_many_frames, {
+            "status": "OVER_FRAME_BOUND", "parse_failure_stage": "OVER_FRAME_BOUND",
+            "frame_count": HELPER._MAX_TRACEBACK_FRAMES,
+        })
+        for summary in (invalid_encoding, too_many_frames):
+            self.assertNotIn("raw-secret", str(summary))
+            self.assertNotIn("Traceback", str(summary))
 
     def test_cli_emits_only_json_to_stdout_and_nothing_to_stderr(self):
         report = {"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN"}
