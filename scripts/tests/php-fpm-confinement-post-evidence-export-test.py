@@ -37,9 +37,19 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 if isinstance(func, ast.Name):
                     self.assertNotIn(func.id, {"open", "compileall", "system", "popen"})
                 if isinstance(func, ast.Attribute):
+                    if func.attr == "replace":
+                        receiver = func.value
+                        safe_conversion = (
+                            isinstance(receiver, ast.Call)
+                            and (
+                                (isinstance(receiver.func, ast.Attribute) and receiver.func.attr == "strptime")
+                                or (isinstance(receiver.func, ast.Name) and receiver.func.id == "str")
+                            )
+                        )
+                        self.assertTrue(safe_conversion, "replace is allowed only for the two audited value conversions")
                     self.assertNotIn(func.attr, {
                         "write", "writelines", "write_text", "write_bytes", "unlink", "remove", "mkdir",
-                        "makedirs", "rmdir", "rename", "replace", "chmod", "chown", "truncate",
+                        "makedirs", "rmdir", "rename", "chmod", "chown", "truncate",
                         "mkstemp", "mkdtemp", "fdopen", "connect", "connect_ex", "Popen", "run",
                     })
                     if func.attr == "open":
@@ -64,9 +74,11 @@ class EvidenceExportSafetyTests(unittest.TestCase):
 
         def guarded_open(_path, flags):
             flags_seen.append(flags)
-            self.assertTrue(flags & os.O_RDONLY)
+            self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
             for name in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"):
                 self.assertFalse(flags & getattr(os, name, 0), name)
+            self.assertTrue(flags & os.O_NOFOLLOW)
+            self.assertTrue(flags & os.O_NONBLOCK)
             return 91
 
         chunks = [data, b""]
