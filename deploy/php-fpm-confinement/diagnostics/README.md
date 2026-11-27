@@ -23,7 +23,7 @@ complete bounded stderr for exact traceback-header lines. No exact header anywhe
 `NO_EXACT_TRACEBACK_HEADER`. A found header whose suffix does not fully match the strict grammar
 yields `FIRST_HEADER_SUFFIX_INVALID` with no partial frame count. A complete valid traceback after a
 prefix emits only the redacted summary with `parse_failure_stage=PREFIX_BEFORE_TRACEBACK`. An
-an exception-summary line matching a known or conventionally named Python exception class before a
+exception-summary line matching a known or conventionally named Python exception class before a
 later exact header yields `PREFIX_EXCEPTION_SUMMARY_BLOCKED_HEADER`; generic launcher prefixes such
 as `ERROR:` remain ordinary discarded prefix text. Malformed suffixes, prefix text, and all raw lines
 are never emitted. Detection includes class-only exception lines and does not skip malformed earlier
