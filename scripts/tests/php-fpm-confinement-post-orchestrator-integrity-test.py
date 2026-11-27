@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import re
 import stat
 import subprocess
 import sys
@@ -73,6 +74,14 @@ class OrchestratorIntegrityTests(unittest.TestCase):
         expected = {'acceptance-post.py', 'one_shot_bridge.py', 'pty_io.py',
                     'PINNED_INPUTS.json', 'README.md'}
         self.assertEqual(set(manifest), expected)
+        runbook = (ROOT / 'docs/PHP_FPM_CONFINEMENT_GO20_PHP85_1_0_16.md').read_text()
+        for name in ('acceptance-post.py', 'one_shot_bridge.py'):
+            match = re.search(
+                rf"test \"\$\(sha256sum {re.escape(name)} \| cut -d' ' -f1\)\" = '([0-9a-f]{{64}})'",
+                runbook,
+            )
+            self.assertIsNotNone(match, name)
+            self.assertEqual(match.group(1), manifest[name], name)
         self.assertEqual({p.name for p in ARTIFACT.iterdir()} - {'SHA256SUMS'}, expected)
         for name in sorted(expected):
             path = ARTIFACT / name
