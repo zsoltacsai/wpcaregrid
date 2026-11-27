@@ -38,18 +38,22 @@ sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 ### Read-only origin route review artifact
 
 The route attestation requires both provider evidence and the effective origin
-Nginx configuration. The separately versioned review aid lives at
-`deploy/php-fpm-confinement/route-audit/1.0.16/`. For the reviewed 1.0.16
-artifact, use merge commit `896e098ab8bdbab96c8280a70619455e6dbdd505`, tree
-`e3ae8c7896e1c6adf56ce72f2616b187bc2f061e`, and `SHA256SUMS` digest
-`a9c5df2ddad544ff78819f36ea833b4f3a36991c510e92dacc6a9016575b1f90` as the
-immutable outer pins. `route_summary.py` has SHA-256
-`c1834dba5263448e768ee6e3b0666c17ed5f2895e6cc41bb0f03018017c9b241`.
+Nginx configuration. Use the separately versioned review aid at
+`deploy/php-fpm-confinement/route-audit/1.0.17/`, bound to acceptance package
+1.0.16. The artifact tree is `c592abf2d65f953fec8a5d689accb9ce1220fd51` and its `SHA256SUMS` digest
+is `debc9cbc4682af5cab8d744a564e22fea307137b499a0c27de18c82a0c5e8f06`; `route_summary.py` has SHA-256
+`1591d1632ae32fecbcfe624a7f8b369f040a35a9a15dec5b0c94afefa654d669`. Select the exact protected-primary merge commit that
+contains this tree and verify the commit:path tree before staging. Route-audit
+1.0.16 is superseded and must not be used for root review capture because its
+privileged loader rejects the manifest's 0644 parser file.
 `binding.json` identifies it as a
 review-only tool, and `pinned_deploy_priv.py` must match the embedded SHA-256.
 The source tool never returns a closed-route PASS and never creates the
 attestation. Its `effective_config_sha256` identifies the exact text stream
-given to its parser without retaining that raw stream.
+given to its parser without retaining that raw stream. The summary also lists
+include source-to-target edges without exposing include patterns. An empty
+wildcard is accepted only when the pinned resolver confirms the trusted
+filesystem has no matching entry.
 
 Stage it only from the exact merged commit that contains the artifact, into a
 new absent root-owned directory, and verify the Git tree, file list, modes,
