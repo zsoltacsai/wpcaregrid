@@ -76,6 +76,7 @@ jobs:
           python3 -B scripts/tests/php-fpm-confinement-post-report-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-bridge-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-evidence-export-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-evidence-watchdog-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
