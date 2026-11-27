@@ -573,10 +573,10 @@ def _looks_like_exception_summary(line: str) -> bool:
     if not match:
         return False
     name = match.group(1).rsplit(".", 1)[-1]
-    # Python exception classes conventionally start uppercase. Requiring that
-    # shape avoids treating ordinary lowercase wrapper diagnostics as an
-    # exception summary while remaining conservative for custom exception names.
-    return bool(name and name[0].isupper())
+    # Require a known or conventionally named exception class. A generic
+    # launcher line such as ``ERROR: ...`` is ordinary prefix text, not a
+    # Python exception summary.
+    return name in _TRACEBACK_CLASSES or name.endswith(("Error", "Exception", "Group"))
 
 
 def _traceback_summary(data: bytes | None) -> dict:
