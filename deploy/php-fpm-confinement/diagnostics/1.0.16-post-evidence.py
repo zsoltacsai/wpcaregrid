@@ -1,0 +1,766 @@
+#!/usr/bin/env python3
+"""Read-only, one-run diagnostic summary for the 2026-11-27 1.0.16-post HOLD.
+
+This is not an acceptance verifier. It reads only the pinned package inputs and
+the allowlisted direct children of one exact evidence directory. It emits one
+redacted JSON object to stdout and does not write files, caches, or diagnostics.
+Run with ``python3 -B`` after this file has passed versioned review and CI.
+"""
+from __future__ import annotations
+
+import sys
+sys.dont_write_bytecode = True
+
+import hashlib
+import json
+import os
+import re
+import stat
+import types
+
+PACKAGE_DIR = "/root/wpcg-gate2.ujob3I/live-acceptance.j9lqdz/package-stage-1.0.16-442fa9ab-modes2/package-1.0.16"
+ENVELOPE_DIR = "/root/wpcg-route-attestation-20261127.KbA7hY"
+RUN_DIR_NAME = "acceptance-1.0.16-post-20261127T135951Z-b726ce"
+MAX_FILE_BYTES = 24_000_000
+MAX_TOTAL_EVIDENCE_BYTES = 48_000_000
+MAX_CHILDREN = 256
+MAX_RUN_SECONDS = 1800
+
+PINNED_PACKAGE_FILES = {
+    "SHA256SUMS": "5a141648ee771e6ceaa4ff296720857bb52ecd9f1c995d6e58b7e6016a50e622",
+    "binding.json": "41d10ad9d8d0c3d03e852bed449b3783aef387a5e55be1e9b9077cd37632633d",
+    "acceptance/matrix.json": "3ea81dd061e77b27f89b410103b98ba36c5c8b6ab2ed881d4907d4af7bcfcb5a",
+    "acceptance/probe.py": "5cde081b25341f804f828f18615bc868b30bba1c70454dc1cbf6bc09ac9ff0af",
+    "acceptance/derive-probe-profile.py": "22503809027074cce467ab8651531b1d9b5d75732af165be7f8cafcc83202a8a",
+    "acceptance/verify-acceptance.py": "b821e435ab42ea9f06c2fbe57b0496f1e16e47bc625c3d3f6d51c448586f8c24",
+}
+EVIDENCE_ALLOWLIST = {
+    "preflight-summary.json",
+    "wpcaregrid-nginx-inventory-before.json",
+    "wpcaregrid-nginx-baseline.json",
+    "wpcaregrid-nginx-confined.json",
+    "wpcaregrid-nginx-confined.stderr",
+    "wpcaregrid-nginx-derive.stderr",
+    "wpcaregrid-nginx-audit.jsonl",
+}
+PROBE_REQUIRED_KEYS = {
+    "schema", "mode", "profile", "label", "pid", "starttime_ticks",
+    "kernel_start_ns", "started_ns", "ended_ns", "boot_id", "matrix_sha256",
+    "peers", "results", "fd0", "scm", "scm_socket",
+}
+SAFE_TOKEN = re.compile(r"[A-Za-z0-9_.:-]{1,100}\Z")
+BOOT_ID = re.compile(r"[0-9a-fA-F-]{32,36}\Z")
+KNOWN_EVIDENCE_NAMES = EVIDENCE_ALLOWLIST | {"preflight-summary.json"}
+RESULT_STATES = {"fstat-failed", "not-canary-file", "read", "channel-failed", "no-descriptor", "received"}
+RESULT_STAGES = {"connect", "recv", "read"}
+PREFLIGHT_PIN_KEYS = {
+    "package_tree", "sums", "binding", "matrix", "collector", "derive", "probe",
+    "sender", "listener", "verifier", "fixtures",
+}
+PREFLIGHT_SERVICE_KEYS = {"nginx", "production_fpm", "php84_active", "stock_php85_active"}
+
+
+class DiagnosticHold(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _kind(mode: int) -> str:
+    if stat.S_ISREG(mode):
+        return "regular"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "special"
+
+
+def _safe_name(name: str) -> tuple[str, str | None]:
+    if name in KNOWN_EVIDENCE_NAMES:
+        return name, None
+    return "UNKNOWN_BASENAME", hashlib.sha256(name.encode("utf-8", "replace")).hexdigest()
+
+
+def _meta(name: str, info: os.stat_result) -> dict:
+    shown_name, name_digest = _safe_name(name)
+    return {
+        "basename": shown_name,
+        "basename_sha256": name_digest,
+        "type": _kind(info.st_mode),
+        "mode": format(stat.S_IMODE(info.st_mode), "04o"),
+        "uid": info.st_uid,
+        "gid": info.st_gid,
+        "nlink": info.st_nlink,
+        "size": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+    }
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(a.st_mode)
+        and stat.S_ISREG(b.st_mode)
+        and (a.st_dev, a.st_ino, a.st_uid, a.st_gid, stat.S_IMODE(a.st_mode), a.st_nlink, a.st_size,
+             a.st_mtime_ns, a.st_ctime_ns)
+        == (b.st_dev, b.st_ino, b.st_uid, b.st_gid, stat.S_IMODE(b.st_mode), b.st_nlink, b.st_size,
+            b.st_mtime_ns, b.st_ctime_ns)
+    )
+
+
+def _read_regular(path: str, expected_sha256: str | None = None, *, expected_mode: int | None = None) -> tuple[bytes, dict]:
+    """Read one root-owned regular file via O_NOFOLLOW and verify its identity."""
+    try:
+        before = os.lstat(path)
+    except OSError:
+        raise DiagnosticHold("input-unavailable") from None
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_gid != 0 or before.st_nlink != 1:
+        raise DiagnosticHold("input-metadata")
+    if expected_mode is not None and stat.S_IMODE(before.st_mode) != expected_mode:
+        raise DiagnosticHold("input-mode")
+    if before.st_size < 0 or before.st_size > MAX_FILE_BYTES:
+        raise DiagnosticHold("input-size-bound")
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise DiagnosticHold("nofollow-unavailable")
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nonblock is None:
+        raise DiagnosticHold("nonblock-unavailable")
+    flags = os.O_RDONLY | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            opened = os.fstat(fd)
+            if not _same_file(before, opened):
+                raise DiagnosticHold("input-raced")
+            chunks, total = [], 0
+            while True:
+                chunk = os.read(fd, min(65536, MAX_FILE_BYTES + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > MAX_FILE_BYTES:
+                    raise DiagnosticHold("input-size-bound")
+            after = os.fstat(fd)
+            data = b"".join(chunks)
+            if len(data) != before.st_size or not _same_file(opened, after):
+                raise DiagnosticHold("input-raced")
+        finally:
+            os.close(fd)
+    except DiagnosticHold:
+        raise
+    except OSError:
+        raise DiagnosticHold("input-read-failed") from None
+    digest = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise DiagnosticHold("pinned-input-digest-mismatch")
+    return data, {**_meta(os.path.basename(path), before), "sha256": digest}
+
+
+def _directory(path: str, mode: int, *, owner: int = 0, group: int = 0) -> os.stat_result:
+    try:
+        info = os.lstat(path)
+    except OSError:
+        raise DiagnosticHold("directory-unavailable") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise DiagnosticHold("directory-type")
+    if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (owner, group, mode):
+        raise DiagnosticHold("directory-metadata")
+    return info
+
+
+def _load_pins(package_dir: str) -> tuple[dict, types.ModuleType]:
+    _directory(package_dir, 0o755)
+    pin_bytes = {}
+    pin_metadata = {}
+    for relative, digest in PINNED_PACKAGE_FILES.items():
+        path = os.path.join(package_dir, relative)
+        data, metadata = _read_regular(path, digest, expected_mode=0o644)
+        metadata["basename"] = relative
+        metadata["basename_sha256"] = None
+        pin_bytes[relative] = data
+        pin_metadata[relative] = metadata
+    expected_manifest = {}
+    try:
+        for line in pin_bytes["SHA256SUMS"].decode("ascii").splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_./-]+)", line)
+            if not match:
+                raise DiagnosticHold("package-manifest-format")
+            expected_manifest[match.group(2)] = match.group(1)
+    except UnicodeDecodeError:
+        raise DiagnosticHold("package-manifest-format") from None
+    for relative in PINNED_PACKAGE_FILES:
+        if relative == "SHA256SUMS":
+            continue
+        if expected_manifest.get(relative) != hashlib.sha256(pin_bytes[relative]).hexdigest():
+            raise DiagnosticHold("package-manifest-mismatch")
+    try:
+        binding = json.loads(pin_bytes["binding.json"])
+    except (ValueError, json.JSONDecodeError):
+        raise DiagnosticHold("package-binding-parse") from None
+    if not isinstance(binding, dict) or binding.get("package_version") != "1.0.16":
+        raise DiagnosticHold("package-binding-version")
+    module = types.ModuleType("wpcg_pinned_post_verifier")
+    module.__file__ = "<pinned-1.0.16-verify-acceptance.py>"
+    try:
+        exec(compile(pin_bytes["acceptance/verify-acceptance.py"], module.__file__, "exec"), module.__dict__)
+        matrix = json.loads(pin_bytes["acceptance/matrix.json"])
+    except Exception:
+        raise DiagnosticHold("pinned-code-load") from None
+    if not isinstance(matrix, dict) or "wpcaregrid-nginx" not in matrix.get("profiles", {}):
+        raise DiagnosticHold("pinned-matrix-schema")
+    return {"files": list(pin_metadata.values()), "matrix": matrix, "matrix_sha256": PINNED_PACKAGE_FILES["acceptance/matrix.json"]}, module
+
+
+def _run_start_ns() -> int:
+    match = re.fullmatch(r"acceptance-1\.0\.16-post-(\d{8}T\d{6}Z)-[0-9a-f]{6}", RUN_DIR_NAME)
+    if not match:
+        raise DiagnosticHold("run-id-format")
+    import datetime
+    parsed = datetime.datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+    return int(parsed.timestamp()) * 1_000_000_000
+
+
+def _evidence_manifest(run_dir: str) -> tuple[list[dict], dict[str, bytes], set[str]]:
+    envelope = _directory(ENVELOPE_DIR, 0o700)
+    run = _directory(run_dir, 0o700)
+    if os.path.abspath(os.path.dirname(run_dir)) != os.path.abspath(ENVELOPE_DIR):
+        raise DiagnosticHold("run-dir-not-direct-child")
+    if os.path.basename(run_dir) != RUN_DIR_NAME:
+        raise DiagnosticHold("run-id-mismatch")
+    start = _run_start_ns()
+    try:
+        names = sorted(os.listdir(run_dir))
+    except OSError:
+        raise DiagnosticHold("evidence-list-failed") from None
+    if len(names) > MAX_CHILDREN:
+        raise DiagnosticHold("evidence-child-bound")
+    manifest, selected, unknown = [], {}, set()
+    selected_bytes = 0
+    for name in names:
+        if name in (".", "..") or os.path.basename(name) != name or "\x00" in name:
+            manifest.append({"basename": "<invalid-name>", "origin": "UNKNOWN", "sha256": None})
+            continue
+        path = os.path.join(run_dir, name)
+        try:
+            info = os.lstat(path)
+        except OSError:
+            shown_name, name_digest = _safe_name(name)
+            manifest.append({"basename": shown_name, "basename_sha256": name_digest,
+                             "type": "unavailable", "origin": "UNKNOWN", "sha256": None})
+            continue
+        item = _meta(name, info)
+        if not stat.S_ISREG(info.st_mode):
+            item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": "not-regular"})
+            manifest.append(item)
+            unknown.add(name)
+            continue
+        if name not in EVIDENCE_ALLOWLIST:
+            item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": "filename-not-allowlisted"})
+            manifest.append(item)
+            unknown.add(name)
+            continue
+        if selected_bytes + info.st_size > MAX_TOTAL_EVIDENCE_BYTES:
+            item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": "aggregate-size-bound"})
+            manifest.append(item)
+            unknown.add(name)
+            continue
+        trusted_meta = (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode), info.st_nlink) == (0, 0, 0o600, 1)
+        in_run_window = start <= info.st_mtime_ns <= start + MAX_RUN_SECONDS * 1_000_000_000 and start <= info.st_ctime_ns <= start + MAX_RUN_SECONDS * 1_000_000_000
+        if not trusted_meta or not in_run_window or info.st_size > MAX_FILE_BYTES:
+            item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": "metadata-or-time-window"})
+            manifest.append(item)
+            unknown.add(name)
+            continue
+        try:
+            data, secure = _read_regular(path, expected_mode=0o600)
+        except DiagnosticHold as exc:
+            item.update({"origin": "UNKNOWN", "sha256": None, "reason_code": exc.code})
+            manifest.append(item)
+            unknown.add(name)
+            continue
+        item.update({"origin": "BOUND_TO_RUN_DIR_AND_TIME", "sha256": secure["sha256"]})
+        manifest.append(item)
+        selected[name] = data
+        selected_bytes += len(data)
+    return manifest, selected, unknown
+
+
+def _bounded_token(value, allowed: set[str] | None = None) -> str:
+    if isinstance(value, str) and SAFE_TOKEN.fullmatch(value) and (allowed is None or value in allowed):
+        return value
+    return "UNKNOWN"
+
+
+def _probe_summary(name: str, data: bytes | None, matrix: dict, expected_mode: str, verifier: types.ModuleType) -> tuple[dict, dict | None, str]:
+    if data is None:
+        return {"filename": name, "status": "ABSENT_OR_UNBOUND"}, None, "unavailable"
+    if not data:
+        return {"filename": name, "status": "EMPTY"}, None, "empty"
+    try:
+        doc = json.loads(data)
+    except (ValueError, json.JSONDecodeError):
+        return {"filename": name, "status": "INVALID_JSON"}, None, "invalid-json"
+    if not isinstance(doc, dict):
+        return {"filename": name, "status": "INVALID_SCHEMA"}, None, "invalid-schema"
+    profile = "wpcaregrid-nginx"
+    profile_spec = matrix.get("profiles", {}).get(profile, {})
+    allowed_roles = set(profile_spec.get("peer_roles", []))
+    raw_peers = doc.get("peers")
+    if not isinstance(raw_peers, dict) or set(raw_peers) - allowed_roles:
+        return {"filename": name, "status": "INVALID_SCHEMA"}, None, "invalid-schema"
+    peers, peer_count = {}, 0
+    for role, pids in raw_peers.items():
+        if not isinstance(pids, list) or len(pids) > 128 or any(type(pid) is not int or pid <= 0 for pid in pids):
+            return {"filename": name, "status": "INVALID_SCHEMA"}, None, "invalid-schema"
+        peer_count += len(pids)
+        if peer_count > 512:
+            return {"filename": name, "status": "INVALID_SCHEMA"}, None, "invalid-schema"
+        peers[role] = pids
+    expected_label = "unconfined" if expected_mode == "baseline" else profile + "-probe (enforce)"
+    actual_label = doc.get("label")
+    label_ok = actual_label == expected_label if expected_mode == "baseline" else actual_label in (expected_label, "unconfined//&" + expected_label)
+    result_ids = set()
+    try:
+        expected, _targets = verifier.expected_checks(matrix, profile, peers, "post")
+        result_ids = set(expected)
+    except Exception:
+        expected = {}
+    results = doc.get("results")
+    if not isinstance(results, list) or len(results) > 2048:
+        return {"filename": name, "status": "INVALID_SCHEMA"}, None, "invalid-schema"
+    safe_results = []
+    seen = set()
+    duplicate_ids = False
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        raw_id = row.get("id")
+        id_safe = raw_id if isinstance(raw_id, str) and raw_id in result_ids else "UNKNOWN_RESULT"
+        if id_safe != "UNKNOWN_RESULT" and id_safe in seen:
+            duplicate_ids = True
+        if id_safe != "UNKNOWN_RESULT":
+            seen.add(id_safe)
+        safe_results.append({
+            "id": id_safe,
+            "state": _bounded_token(row.get("state"), RESULT_STATES),
+            "stage": _bounded_token(row.get("stage"), RESULT_STAGES),
+            "errno": row.get("errno") if type(row.get("errno")) is int else None,
+            "pid": row.get("pid") if type(row.get("pid")) is int else None,
+            "t0": row.get("t0") if type(row.get("t0")) is int else None,
+            "t1": row.get("t1") if type(row.get("t1")) is int else None,
+            "child": row.get("child") if type(row.get("child")) is int else None,
+        })
+    boot = doc.get("boot_id")
+    boot_ok = isinstance(boot, str) and BOOT_ID.fullmatch(boot) is not None
+    expected_matrix = PINNED_PACKAGE_FILES["acceptance/matrix.json"]
+    schema_ok = set(doc) == PROBE_REQUIRED_KEYS and type(doc.get("schema")) is int and doc.get("schema") == 2
+    mode_ok = doc.get("mode") == expected_mode
+    profile_ok = doc.get("profile") == profile
+    identity = {
+        "filename": name,
+        "status": "PARSED",
+        "schema": doc.get("schema") if type(doc.get("schema")) is int else None,
+        "schema_ok": schema_ok,
+        "mode": expected_mode if mode_ok else "UNKNOWN",
+        "mode_match": mode_ok,
+        "profile": profile if profile_ok else "UNKNOWN",
+        "profile_match": profile_ok,
+        "label_class": ("expected-baseline" if expected_mode == "baseline" else "expected-confined") if label_ok else "unexpected-redacted",
+        "label_match": label_ok,
+        "pid": doc.get("pid") if type(doc.get("pid")) is int else None,
+        "starttime_ticks": doc.get("starttime_ticks") if type(doc.get("starttime_ticks")) is int else None,
+        "kernel_start_ns": doc.get("kernel_start_ns") if type(doc.get("kernel_start_ns")) is int else None,
+        "started_ns": doc.get("started_ns") if type(doc.get("started_ns")) is int else None,
+        "ended_ns": doc.get("ended_ns") if type(doc.get("ended_ns")) is int else None,
+        "matrix_sha256": doc.get("matrix_sha256") if isinstance(doc.get("matrix_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", doc.get("matrix_sha256")) else None,
+        "matrix_match": doc.get("matrix_sha256") == expected_matrix,
+        "boot_id_valid": boot_ok,
+        "boot_id_sha256": hashlib.sha256(boot.encode()).hexdigest() if boot_ok else None,
+        "results_count": len(results),
+        "duplicate_result_ids": duplicate_ids,
+        "results": safe_results,
+        "fd0": _state_fields(doc.get("fd0")),
+        "scm": _state_fields(doc.get("scm")),
+    }
+    return identity, doc, "parsed"
+
+
+def _state_fields(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {"state": "UNKNOWN", "errno": None, "t0": None, "t1": None}
+    return {
+        "state": _bounded_token(value.get("state"), RESULT_STATES),
+        "errno": value.get("errno") if type(value.get("errno")) is int else None,
+        "t0": value.get("t0") if type(value.get("t0")) is int else None,
+        "t1": value.get("t1") if type(value.get("t1")) is int else None,
+    }
+
+
+def _stderr_class(data: bytes | None) -> str:
+    if data is None or not data:
+        return "empty"
+    text = data.decode("utf-8", "replace").lower()
+    if "label" in text and ("refus" in text or "mismatch" in text or "expected" in text):
+        return "label-refusal"
+    if "fixture" in text and ("refus" in text or "mismatch" in text or "does not match" in text):
+        return "fixture-refusal"
+    if "traceback (most recent call last)" in text or "exception" in text or "error:" in text:
+        return "traceback"
+    return "other"
+
+
+def _preflight_summary(data: bytes | None) -> dict:
+    if data is None:
+        return {"status": "ABSENT_OR_UNBOUND"}
+    try:
+        doc = json.loads(data)
+    except (ValueError, json.JSONDecodeError):
+        return {"status": "INVALID_JSON"}
+    if not isinstance(doc, dict):
+        return {"status": "INVALID_SCHEMA"}
+    checks = doc.get("pin_checks", {})
+    rcs = doc.get("service_rcs", {})
+    route = doc.get("route_closure", {})
+    return {
+        "status": "PARSED",
+        "pin_checks": {k: checks[k] is True for k in sorted(PREFLIGHT_PIN_KEYS) if k in checks} if isinstance(checks, dict) else {},
+        "service_rcs": {k: rcs[k] for k in sorted(PREFLIGHT_SERVICE_KEYS) if k in rcs and type(rcs[k]) is int} if isinstance(rcs, dict) else {},
+        "fixture_count": doc.get("fixture_count") if type(doc.get("fixture_count")) is int else None,
+        "parent_ok": doc.get("parent_ok") is True,
+        "socket_absent": doc.get("socket_absent") is True,
+        "parser_ok": doc.get("parser_ok") is True,
+        "route_closure_attested": route.get("attested") is True if isinstance(route, dict) else False,
+        "origin_app_upstreams": route.get("origin_app_upstreams") if isinstance(route, dict) and type(route.get("origin_app_upstreams")) is int else None,
+        "attestation_sha256": route.get("attestation_sha256") if isinstance(route, dict) and isinstance(route.get("attestation_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", route.get("attestation_sha256")) else None,
+    }
+
+
+def _inventory_summary(data: bytes | None, baseline: dict | None, confined: dict | None) -> dict:
+    if data is None:
+        return {"status": "ABSENT_OR_UNBOUND"}
+    try:
+        doc = json.loads(data)
+    except (ValueError, json.JSONDecodeError):
+        return {"status": "INVALID_JSON"}
+    if not isinstance(doc, dict):
+        return {"status": "INVALID_SCHEMA"}
+    processes, units = doc.get("processes"), doc.get("units")
+    boot = doc.get("boot_id")
+    baseline_boot = baseline.get("boot_id") if isinstance(baseline, dict) else None
+    confined_boot = confined.get("boot_id") if isinstance(confined, dict) else None
+    return {
+        "status": "PARSED",
+        "schema": doc.get("schema") if type(doc.get("schema")) is int else None,
+        "complete": doc.get("complete") is True,
+        "scans": doc.get("scans") if type(doc.get("scans")) is int else None,
+        "process_count": len(processes) if isinstance(processes, list) else None,
+        "unit_count": len(units) if isinstance(units, dict) else None,
+        "matrix_match": doc.get("matrix_sha256") == PINNED_PACKAGE_FILES["acceptance/matrix.json"],
+        "boot_id_valid": isinstance(boot, str) and BOOT_ID.fullmatch(boot) is not None,
+        "baseline_boot_match": isinstance(baseline_boot, str) and boot == baseline_boot,
+        "confined_boot_match": isinstance(confined_boot, str) and boot == confined_boot,
+        "collected_start_ns": doc.get("collected_start_ns") if type(doc.get("collected_start_ns")) is int else None,
+        "collected_end_ns": doc.get("collected_end_ns") if type(doc.get("collected_end_ns")) is int else None,
+        "reason_count": len(doc.get("reasons", [])) if isinstance(doc.get("reasons"), list) else None,
+    }
+
+
+def _ops_target(verifier: types.ModuleType, matrix: dict, ident: str, kind: str, item: dict, result: dict):
+    profile = "wpcaregrid-nginx"
+    role_profile = matrix.get("role_profiles", {})
+    if kind in ("file", "symlink"):
+        return verifier.FILE_OPS.get(item.get("access"), set()), {"name": item.get("path")}
+    if kind == "socket":
+        return {"connect", "open", "file_perm", "sendmsg"}, {"name": item.get("path")}
+    if kind == "abstract":
+        return {"connect", "sendmsg"}, {"mention": "wpcg-probe-"}
+    if kind == "net":
+        family = {"AF_INET": "inet", "AF_INET6": "inet6", "AF_UNIX": "unix", "AF_NETLINK": "netlink"}.get(item.get("family"))
+        sock_type = str(item.get("type", "")).removeprefix("SOCK_").lower()
+        ops = {"create": {"create", "socket_create"}, "bind": {"bind", "socket_bind"}, "connect": {"connect", "socket_connect"}}.get(item.get("action"), set())
+        return ops, {"fields": {"family": family, "sock_type": sock_type}}
+    if kind == "peer":
+        target = f"/proc/{item['pid']}/{item['entry']}"
+        return {"open", "readlink", "file_perm", "getattr"}, {"name": {target, target.rstrip("/"), target.rstrip("/") + "/"}}
+    if kind == "peer-signal":
+        return {"signal"}, {"peer": role_profile.get(item.get("role"), "")}
+    if kind == "peer-vm":
+        return {"ptrace"}, {"peer": role_profile.get(item.get("role"), "")}
+    if ident == "calibration:child-environ":
+        child = result.get("child")
+        return {"open"}, {"name": f"/proc/{child}/environ"}
+    if ident == "calibration:child-maps":
+        child = result.get("child")
+        return {"ptrace", "open"}, {"name_or_peer": (f"/proc/{child}/maps", matrix.get("profiles", {}).get(profile, {}).get("profile", ""))}
+    return {"ptrace"}, {"peer": profile + "-probe"}
+
+
+def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | None, matrix: dict, verifier: types.ModuleType) -> dict:
+    if data is None:
+        return {"status": "ABSENT_OR_UNBOUND", "denied_record_count": None, "check_correlation": "UNKNOWN", "reason_code": "audit-absent"}
+    try:
+        records, problems = verifier.parse_audit(data.decode("utf-8"))
+    except Exception:
+        return {"status": "INVALID_AUDIT", "denied_record_count": None, "check_correlation": "UNKNOWN", "reason_code": "audit-parse-failed"}
+    reasons = set()
+    for problem in problems:
+        if "repeated audit serial" in problem:
+            reasons.add("audit-repeat-serial")
+        elif "DENIED record without pid or audit stamp" in problem:
+            reasons.add("audit-denied-fields-missing")
+        else:
+            reasons.add("audit-record-invalid")
+    denied_count = len(records)
+    if not isinstance(confined, dict) or not isinstance(confined.get("results"), list):
+        return {"status": "PARSED", "denied_record_count": denied_count, "probe_profile_record_count": None,
+                "same_boot_count": None, "run_lifetime_count": None, "check_correlation": "UNKNOWN",
+                "reason_codes": sorted(reasons | {"confined-json-unavailable"})}
+    probe_profile = "wpcaregrid-nginx-probe"
+    boot = str(confined.get("boot_id", "")).replace("-", "")
+    start, end = confined.get("started_ns"), confined.get("ended_ns")
+    lifetime_ok = type(start) is int and type(end) is int and start <= end
+    profile_records = [r for r in records if r.get("profile") == probe_profile]
+    same_boot = sum(r.get("_boot") == boot for r in profile_records) if boot else 0
+    in_lifetime = sum(lifetime_ok and start - verifier.EPS_NS <= r.get("_ts_ns", -1) <= end + verifier.EPS_NS for r in profile_records)
+    journal_sane = sum(abs(r.get("_ts_ns", 0) - r.get("_journal_ns", 0)) <= 60_000_000_000 for r in profile_records)
+    if profile_records and same_boot != len(profile_records):
+        reasons.add("audit-other-boot")
+    if profile_records and in_lifetime != len(profile_records):
+        reasons.add("audit-stale-or-outside-run")
+    if profile_records and journal_sane != len(profile_records):
+        reasons.add("audit-journal-time-mismatch")
+    try:
+        expected, _targets = verifier.expected_checks(matrix, "wpcaregrid-nginx", confined.get("peers", {}), "post")
+    except Exception:
+        expected = {}
+        reasons.add("expected-checks-unavailable")
+    conf_by_id = {r.get("id"): r for r in confined["results"] if isinstance(r, dict) and isinstance(r.get("id"), str)}
+    base_by_id = {r.get("id"): r for r in baseline.get("results", []) if isinstance(r, dict) and isinstance(r.get("id"), str)} if isinstance(baseline, dict) and isinstance(baseline.get("results"), list) else {}
+    consumed = set()
+    checks = []
+    duplicate_ids = len(conf_by_id) != len([r for r in confined["results"] if isinstance(r, dict) and isinstance(r.get("id"), str)])
+    if duplicate_ids:
+        reasons.add("duplicate-result-id")
+    for result in confined["results"]:
+        if not isinstance(result, dict):
+            continue
+        ident = result.get("id")
+        if not isinstance(ident, str) or ident not in expected:
+            checks.append({"id": "UNKNOWN_RESULT", "status": "UNKNOWN", "reason_code": "result-id-not-in-matrix"})
+            continue
+        kind, item = expected[ident]
+        if kind == "control":
+            checks.append({"id": ident, "status": "NOT_A_DENIAL_CHECK", "reason_code": "verifier-control-check"})
+            continue
+        pid = result.get("pid")
+        child = result.get("child")
+        t0, t1 = result.get("t0"), result.get("t1")
+        ids = [ident]
+        rclass = "expected"
+        if type(pid) is not int or type(t0) is not int or type(t1) is not int or t0 > t1:
+            checks.append({"id": ident, "status": "UNKNOWN", "reason_code": "result-window-or-pid-missing"})
+            continue
+        ops, target = _ops_target(verifier, matrix, ident, kind, item, result)
+        if not ops:
+            checks.append({"id": ident, "status": "UNKNOWN", "reason_code": "operation-set-unknown"})
+            continue
+        expected_pids = {pid}
+        if type(child) is int:
+            expected_pids.add(child)
+        candidates = []
+        dimension_counts = {"profile": 0, "pid": 0, "operation": 0, "target": 0, "window": 0, "boot": 0, "journal_time": 0}
+        for index, record in enumerate(records):
+            matches = {
+                "profile": record.get("profile") == probe_profile,
+                "pid": record.get("pid") in expected_pids,
+                "operation": record.get("operation") in ops,
+                "target": False,
+                "window": verifier.EPS_NS >= 0 and t0 - verifier.EPS_NS <= record.get("_ts_ns", -1) <= t1 + verifier.EPS_NS,
+                "boot": bool(boot) and record.get("_boot") == boot,
+                "journal_time": abs(record.get("_ts_ns", 0) - record.get("_journal_ns", 0)) <= 60_000_000_000,
+            }
+            if "name" in target:
+                val = target["name"]
+                matches["target"] = record.get("name") in (val if isinstance(val, set) else {val})
+            elif "mention" in target:
+                matches["target"] = target["mention"] in " ".join(str(x) for x in record.values())
+            elif "peer" in target:
+                matches["target"] = bool(target["peer"]) and str(record.get("peer", "")).startswith(target["peer"])
+            elif "fields" in target:
+                matches["target"] = all(record.get(k) == v for k, v in target["fields"].items())
+            elif "name_or_peer" in target:
+                path, peer = target["name_or_peer"]
+                matches["target"] = record.get("name") == path or str(record.get("peer", "")).startswith(peer)
+            for key, yes in matches.items():
+                dimension_counts[key] += int(yes)
+            if all(matches.values()):
+                candidates.append((index, record))
+        if kind == "peer":
+            peer = matrix.get("role_profiles", {}).get(item.get("role"), "")
+            peer_candidates = [(i, r) for i, r in enumerate(records)
+                               if r.get("profile") == probe_profile and r.get("pid") in expected_pids
+                               and r.get("operation") == "ptrace" and str(r.get("peer", "")).startswith(peer)
+                               and t0 - verifier.EPS_NS <= r.get("_ts_ns", -1) <= t1 + verifier.EPS_NS
+                               and r.get("_boot") == boot]
+            candidates.extend(peer_candidates)
+        used_match = None
+        try:
+            args = (records, consumed, probe_profile, boot, pid, t0, t1)
+            if kind in ("file", "symlink"):
+                used_match = verifier.window_hit(*args, verifier.FILE_OPS[item["access"]], name=item["path"])
+            elif kind == "socket":
+                used_match = verifier.window_hit(*args, {"connect", "open", "file_perm", "sendmsg"}, name=item["path"])
+            elif kind == "abstract":
+                used_match = verifier.window_hit(*args, {"connect", "sendmsg"}, mention="wpcg-probe-")
+            elif kind == "net":
+                fam = {"AF_INET": "inet", "AF_INET6": "inet6", "AF_UNIX": "unix", "AF_NETLINK": "netlink"}.get(item.get("family"))
+                typ = str(item.get("type", "")).removeprefix("SOCK_").lower()
+                ops2 = {"create": {"create", "socket_create"}, "bind": {"bind", "socket_bind"}, "connect": {"connect", "socket_connect"}}.get(item.get("action"), set())
+                used_match = verifier.window_hit(*args, ops2, fields={"family": fam, "sock_type": typ})
+            elif kind == "peer":
+                targ = f"/proc/{item['pid']}/{item['entry']}"
+                used_match = verifier.window_hit(*args, {"open", "readlink", "file_perm", "getattr"}, name={targ, targ.rstrip("/"), targ.rstrip("/") + "/"})
+                if used_match is None:
+                    used_match = verifier.window_hit(*args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+            elif kind == "peer-signal":
+                used_match = verifier.window_hit(*args, {"signal"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+            elif kind == "peer-vm":
+                used_match = verifier.window_hit(*args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+            elif ident == "calibration:child-environ":
+                used_match = verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/environ")
+            elif ident == "calibration:child-maps":
+                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile) or verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/maps")
+            else:
+                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
+        except Exception:
+            reasons.add("audit-match-evaluation-failed")
+        if used_match is not None:
+            consumed.add(used_match)
+        checks.append({
+            "id": ident,
+            "confined_errno": result.get("errno") if type(result.get("errno")) is int else None,
+            "pid_or_child_present": bool(expected_pids),
+            "denied_record_count_all_dimensions": len(candidates),
+            "profile_match": dimension_counts["profile"] > 0,
+            "pid_match": dimension_counts["pid"] > 0,
+            "operation_match": dimension_counts["operation"] > 0,
+            "target_match": dimension_counts["target"] > 0,
+            "time_window_match": dimension_counts["window"] > 0,
+            "boot_match": dimension_counts["boot"] > 0,
+            "journal_time_match": dimension_counts["journal_time"] > 0,
+            "verifier_window_hit": used_match is not None,
+            "baseline_result_present": ident in base_by_id,
+        })
+    return {
+        "status": "PARSED",
+        "denied_record_count": denied_count,
+        "probe_profile_record_count": len(profile_records),
+        "same_boot_count": same_boot,
+        "run_lifetime_count": in_lifetime,
+        "journal_timestamp_sane_count": journal_sane,
+        "check_correlation": "DIAGNOSTIC_ONLY",
+        "reason_codes": sorted(reasons),
+        "checks": checks,
+    }
+
+
+def _json_file(data: bytes | None) -> dict | None:
+    if data is None:
+        return None
+    try:
+        parsed = json.loads(data)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) -> dict:
+    if os.geteuid() != 0:
+        raise DiagnosticHold("root-read-only-context-required")
+    if os.path.basename(envelope_dir) != os.path.basename(ENVELOPE_DIR):
+        raise DiagnosticHold("envelope-identity")
+    package, verifier = _load_pins(package_dir)
+    run_dir = os.path.join(envelope_dir, RUN_DIR_NAME)
+    manifest, selected, unknown = _evidence_manifest(run_dir)
+    baseline, baseline_doc, baseline_status = _probe_summary(
+        "wpcaregrid-nginx-baseline.json", selected.get("wpcaregrid-nginx-baseline.json"), package["matrix"], "baseline", verifier)
+    confined, confined_doc, confined_status = _probe_summary(
+        "wpcaregrid-nginx-confined.json", selected.get("wpcaregrid-nginx-confined.json"), package["matrix"], "confined", verifier)
+    if baseline_doc and confined_doc:
+        baseline["boot_id_match"] = baseline_doc.get("boot_id") == confined_doc.get("boot_id")
+    else:
+        baseline["boot_id_match"] = "UNKNOWN"
+    stderr = {}
+    for filename in ("wpcaregrid-nginx-confined.stderr", "wpcaregrid-nginx-derive.stderr"):
+        data = selected.get(filename)
+        stderr[filename] = {"status": "BOUND" if data is not None else "ABSENT_OR_UNKNOWN",
+                            "reason_class": _stderr_class(data),
+                            "raw_text_emitted": False}
+    conf_for_audit = confined_doc if confined_status == "parsed" else None
+    audit = _audit_summary(selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit, package["matrix"], verifier)
+    if confined_status in ("unavailable", "empty", "invalid-json", "invalid-schema"):
+        audit["check_correlation"] = "UNKNOWN"
+        if "confined-json-unavailable" not in audit.get("reason_codes", []):
+            audit.setdefault("reason_codes", []).append("confined-json-unavailable")
+            audit["reason_codes"].sort()
+        audit.pop("checks", None)
+    diagnosis = "INSUFFICIENT_BOUND_EVIDENCE"
+    stderr_class = stderr["wpcaregrid-nginx-confined.stderr"]["reason_class"]
+    if confined_status == "parsed":
+        diagnosis = "JSON_EMITTED"
+    elif confined_status == "empty" and stderr_class in ("label-refusal", "fixture-refusal"):
+        diagnosis = "PROBE_REFUSAL_BEFORE_JSON"
+    elif confined_status == "empty" and stderr_class == "traceback":
+        diagnosis = "PRE_JSON_EXCEPTION_INDICATED"
+    elif confined_status == "empty" and stderr_class == "other":
+        diagnosis = "PRE_JSON_FAILURE_UNCLASSIFIED"
+    preflight = _preflight_summary(selected.get("preflight-summary.json"))
+    inventory = _inventory_summary(selected.get("wpcaregrid-nginx-inventory-before.json"), baseline_doc, confined_doc)
+    return {
+        "schema": 1,
+        "diagnostic_only": True,
+        "acceptance_verdict": "NOT_RUN",
+        "fixture_cleanup": "NOT_RUN",
+        "run_id": RUN_DIR_NAME,
+        "package_pins": package["files"],
+        "package_tree_expected": "442fa9ab4e82652a70f997238ad5d98e11ade5b9",
+        "run_manifest": manifest,
+        "untrusted_or_unknown_files": sorted(
+            name if name in KNOWN_EVIDENCE_NAMES else "sha256:" + hashlib.sha256(name.encode("utf-8", "replace")).hexdigest()
+            for name in unknown
+        ),
+        "preflight": preflight,
+        "inventory_before": inventory,
+        "baseline": baseline,
+        "confined": confined,
+        "stderr": stderr,
+        "audit": audit,
+        "diagnostic_class": diagnosis,
+        "bridge_report_file": "ABSENT_OR_UNKNOWN",
+        "verifier_executed": False,
+        "raw_stderr_emitted": False,
+        "raw_audit_emitted": False,
+        "raw_config_emitted": False,
+    }
+
+
+def main() -> int:
+    if len(sys.argv) != 1:
+        print(json.dumps({"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN", "reason_code": "unexpected-arguments"}, sort_keys=True, separators=(",", ":")))
+        return 2
+    try:
+        report = summarize()
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+        return 0
+    except DiagnosticHold as exc:
+        print(json.dumps({"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN", "reason_code": exc.code}, sort_keys=True, separators=(",", ":")))
+        return 2
+    except Exception:
+        print(json.dumps({"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN", "reason_code": "internal-diagnostic-error"}, sort_keys=True, separators=(",", ":")))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
