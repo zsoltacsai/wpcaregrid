@@ -1,6 +1,6 @@
 {
   "schema": 1,
   "bundle_version": "1.0.16-post-watchdog-2",
-  "watchdog_sha256": "b9096decb9d0d755607fbdcee2e0e5ce02378ec529740f4e5405a245a675b635",
+  "watchdog_sha256": "7c2adde4e04b4e46fb086bb8903c5078d680d7ca1787f906abf776e0aeb030dc",
   "helper_sha256": "fb6a9fd57463a6813adaa7448b62105e07fe253fe5276316e5f3197081749f5a"
 }
