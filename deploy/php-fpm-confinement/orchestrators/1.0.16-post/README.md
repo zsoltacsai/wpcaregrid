@@ -80,3 +80,6 @@ Each sibling listener gets a fresh random nonce in its transient systemd unit
 name. The runner owns that unit only after its own `systemd-run` returns success,
 and cleanup targets only the recorded nonce unit. A failed or timed-out start is
 ambiguous: the runner leaves any late/foreign unit untouched and reports HOLD.
+The `sibling-start-<nonce>.stdout` and `.stderr` evidence files use the same
+nonce, so both CLI listener invocations can safely use the shared run directory
+with exclusive file creation.
