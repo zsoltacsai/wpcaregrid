@@ -39,13 +39,13 @@ sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 
 The route attestation requires both provider evidence and the effective origin
 Nginx configuration. Use the separately versioned review aid at
-`deploy/php-fpm-confinement/route-audit/1.0.17/`, bound to acceptance package
-1.0.16. The artifact tree is `c592abf2d65f953fec8a5d689accb9ce1220fd51` and its `SHA256SUMS` digest
-is `debc9cbc4682af5cab8d744a564e22fea307137b499a0c27de18c82a0c5e8f06`; `route_summary.py` has SHA-256
-`1591d1632ae32fecbcfe624a7f8b369f040a35a9a15dec5b0c94afefa654d669`. Select the exact protected-primary merge commit that
-contains this tree and verify the commit:path tree before staging. Route-audit
-1.0.16 is superseded and must not be used for root review capture because its
-privileged loader rejects the manifest's 0644 parser file.
+`deploy/php-fpm-confinement/route-audit/1.0.18/`, bound to acceptance package
+1.0.16. The artifact tree is `3f651e8cb6a347db12105a734f5d2053e318a55d` and its `SHA256SUMS` digest
+is `00c77bf9358d302d8ab0d9668d3e4aa509bfc4d1e99443b5a1f49261a150bf17`; `route_summary.py` has SHA-256
+`9e29d32a06fba007777f38dd85c7abf78b0160bf65253b0079dc59d96ba82269`. Select the exact protected-primary merge commit that
+contains this tree and verify the commit:path tree before staging. Route-audit 1.0.16 and 1.0.17 are superseded and must not be used for root
+review capture. The 1.0.18 policy-settings allowlist recognizes only the named
+non-route worker/TLS directives and never prints their values.
 `binding.json` identifies it as a
 review-only tool, and `pinned_deploy_priv.py` must match the embedded SHA-256.
 The source tool never returns a closed-route PASS and never creates the
