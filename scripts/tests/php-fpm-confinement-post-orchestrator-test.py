@@ -193,31 +193,46 @@ class SiblingOwnershipTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _assert_failed_start_does_not_stop_late_foreign_unit(self, outcome):
-        started = []
+        nonce_unit='wpcg-g2-sibling-'+('a'*32)+'.service'
         def fake_run(argv, **kwargs):
             self.assertIn('--unit=wpcg-g2-sibling-' + ('a' * 32), argv)
             # Model another actor activating the attempted nonce name after
             # our precheck, while this invocation's systemd-run fails/times out.
-            self.foreign['wpcg-g2-sibling-' + ('a' * 32) + '.service'] = 'active'
+            self.foreign[nonce_unit] = 'active'
             self.foreign['wpcg-sibling-canary.service'] = 'active'
             if isinstance(outcome, BaseException):
                 raise outcome
             return SimpleNamespace(returncode=outcome)
 
-        with patch.object(module, 'run', side_effect=fake_run):
-            with self.assertRaises(module.Hold) as raised:
-                module.start_sibling(self.pkg, self.matrix, self.evidence,
-                                     lambda unit: started.append(unit))
-        self.assertEqual(raised.exception.code, 'sibling-start')
-        # This is the profile_run finally contract: no callback means no owned
-        # unit, so cleanup must not call systemctl stop for any unit.
-        for unit in started:
-            module.stop_sibling(unit)
-        self.assertEqual(started, [])
+        matrix={'profiles':{'wpcaregrid-php-cli-production-build':{'peer_roles':['production']}}}
+        with patch.object(module, 'PKG', self.pkg), \
+             patch.object(module, 'capture_inventory', return_value=({},('stable',),0)), \
+             patch.object(module, 'pick_peers', return_value=[]), \
+             patch.object(module.os.path, 'lexists', return_value=False), \
+             patch.object(module.secrets, 'token_hex', side_effect=['sendernonce','a'*32]), \
+             patch.object(module, 'command_ok', side_effect=lambda argv, **kwargs: self._command(argv)), \
+             patch.object(module, 'run', side_effect=fake_run), \
+             patch.object(module, 'stop_sibling', wraps=module.stop_sibling) as stop:
+            result=module.profile_run('wpcaregrid-php-cli-production-build','{}',matrix,object(),
+                                      'bootid',self.evidence)
+        self.assertEqual(result['status'],'HOLD')
+        self.assertEqual(result['failure_code'],'sibling-start')
+        # Exercise the actual profile_run finally path: no success callback means
+        # no owned-unit token and therefore no stop operation.
+        stop.assert_not_called()
         self.assertEqual(self.foreign['wpcg-sibling-canary.service'], 'active')
-        self.assertEqual(self.foreign['wpcg-g2-sibling-' + ('a' * 32) + '.service'], 'active')
+        self.assertEqual(self.foreign[nonce_unit], 'active')
         self.assertFalse(any(command[1] == 'stop' for command in self.commands))
         self.assertFalse(any('wpcg-sibling-canary.service' in command for command in self.commands))
+
+    def _command(self, argv):
+        self.commands.append(tuple(argv))
+        if argv[1]=='is-active':
+            return 0 if self.foreign.get(argv[-1])=='active' else 3
+        if argv[1]=='stop':
+            self.foreign[argv[-1]]='inactive'
+            return 0
+        return 0
 
     def test_systemd_run_failure_does_not_stop_late_foreign_unit(self):
         self._assert_failed_start_does_not_stop_late_foreign_unit(1)
