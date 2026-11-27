@@ -523,6 +523,67 @@ def _stderr_class(data: bytes | None) -> str:
     return "other"
 
 
+_TRACEBACK_FRAME = re.compile(r'^\s+File "([^"\r\n]{1,4096})", line ([0-9]{1,8}), in ([A-Za-z0-9_<>() .-]{1,128})\s*$')
+_TRACEBACK_EXCEPTION = re.compile(r'^([A-Za-z_][A-Za-z0-9_.]{0,127})(?::|$)')
+_TRACEBACK_CLASSES = {
+    "AssertionError", "AttributeError", "BaseException", "BrokenPipeError", "ChildProcessError",
+    "FileNotFoundError", "IndexError", "KeyError", "MemoryError", "NameError", "OSError",
+    "PermissionError", "ProcessLookupError", "RuntimeError", "SystemError", "TimeoutError",
+    "TypeError", "UnicodeDecodeError", "ValueError", "ExceptionGroup",
+}
+_TRACEBACK_BASES = {"probe.py", "subprocess.py", "<string>", "runpy.py", "site.py"}
+_MAX_TRACEBACK_BYTES = 65_536
+_MAX_TRACEBACK_FRAMES = 128
+
+
+def _traceback_summary(data: bytes | None) -> dict:
+    """Return bounded traceback identifiers only; never return source, message, args, or full paths."""
+    if data is None:
+        return {"status": "ABSENT_OR_UNKNOWN"}
+    if not data:
+        return {"status": "EMPTY"}
+    if len(data) > _MAX_TRACEBACK_BYTES:
+        return {"status": "OVER_BOUND", "byte_count": len(data)}
+    try:
+        text = data.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return {"status": "UNPARSEABLE"}
+    lines = text.splitlines()
+    if not any(line.strip() == "Traceback (most recent call last):" for line in lines):
+        return {"status": "NOT_STANDARD_TRACEBACK"}
+    frames = []
+    for line in lines:
+        match = _TRACEBACK_FRAME.match(line)
+        if match:
+            raw_path, line_number, function = match.groups()
+            basename = re.split(r"[\\/]", raw_path)[-1]
+            frames.append((basename, int(line_number), function.strip()))
+            if len(frames) > _MAX_TRACEBACK_FRAMES:
+                return {"status": "OVER_FRAME_BOUND", "frame_count_capped": _MAX_TRACEBACK_FRAMES}
+    exception_class = None
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _TRACEBACK_EXCEPTION.match(stripped)
+        if match:
+            candidate = match.group(1).rsplit(".", 1)[-1]
+            exception_class = candidate if candidate in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
+            break
+    if not frames or exception_class is None:
+        return {"status": "UNPARSEABLE", "frame_count": len(frames)}
+    basename, line_number, function = frames[-1]
+    safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
+    return {
+        "status": "PARSED",
+        "exception_class": exception_class,
+        "frame_count": len(frames),
+        "thrower_basename": basename if basename in _TRACEBACK_BASES else "OTHER_BASENAME",
+        "thrower_function": safe_function,
+        "thrower_line": line_number,
+    }
+
+
 def _preflight_summary(data: bytes | None) -> dict:
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND"}
@@ -809,6 +870,7 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
         data = selected.get(filename)
         stderr[filename] = {"status": "BOUND" if data is not None else "ABSENT_OR_UNKNOWN",
                             "reason_class": _stderr_class(data),
+                            "traceback": _traceback_summary(data),
                             "raw_text_emitted": False}
     conf_for_audit = confined_doc if confined_status == "parsed" else None
     audit = _audit_summary(selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit, package["matrix"], verifier)

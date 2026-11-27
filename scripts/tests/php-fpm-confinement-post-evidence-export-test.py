@@ -252,6 +252,36 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         ):
             self.assertEqual(HELPER._stderr_class(raw), expected)
 
+
+    def test_traceback_summary_emits_only_allowlisted_metadata(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/root/private/path/probe.py", line 427, in main\n'
+               b'PermissionError: /root/private/secret/value\n')
+        summary = HELPER._traceback_summary(raw)
+        rendered = str(summary)
+        self.assertEqual(summary, {
+            "status": "PARSED", "exception_class": "PermissionError", "frame_count": 1,
+            "thrower_basename": "probe.py", "thrower_function": "main", "thrower_line": 427,
+        })
+        for forbidden in ("/root", "private", "secret", "PermissionError:"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_traceback_summary_hides_unrecognized_class_and_filename(self):
+        raw = (b'Traceback (most recent call last):\n'
+               b'  File "/etc/private/tokenized.py", line 9, in call\n'
+               b'vendor.secret.Error: sensitive-message\n')
+        summary = HELPER._traceback_summary(raw)
+        self.assertEqual(summary["exception_class"], "OTHER_EXCEPTION")
+        self.assertEqual(summary["thrower_basename"], "OTHER_BASENAME")
+        self.assertNotIn("tokenized", str(summary))
+        self.assertNotIn("sensitive", str(summary))
+
+    def test_traceback_summary_fails_closed_for_unbounded_or_malformed_input(self):
+        self.assertEqual(HELPER._traceback_summary(None), {"status": "ABSENT_OR_UNKNOWN"})
+        self.assertEqual(HELPER._traceback_summary(b""), {"status": "EMPTY"})
+        self.assertEqual(HELPER._traceback_summary(b"x" * (HELPER._MAX_TRACEBACK_BYTES + 1))["status"], "OVER_BOUND")
+        self.assertEqual(HELPER._traceback_summary(b"Traceback (most recent call last):\nnot a frame\nValueError: x")["status"], "UNPARSEABLE")
+
     def test_cli_emits_only_json_to_stdout_and_nothing_to_stderr(self):
         report = {"schema": 1, "diagnostic_only": True, "acceptance_verdict": "NOT_RUN"}
         stdout, stderr = io.StringIO(), io.StringIO()
