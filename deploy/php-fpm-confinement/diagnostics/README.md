@@ -176,8 +176,15 @@ verifier's parsing/check-list/audit-correlation helpers. It never calls
 alongside an unproven acknowledgment request, so this diagnostic does not
 create or supply an ACK and cannot change the original HOLD.
 
+The verifier-output summary is `PARSED` only when it sees a recognized terminal
+marker (`EVIDENCE-CONSISTENT` or a matching `REJECTED: N failure(s)` record),
+or a recognized acknowledgment-HOLD marker with a consistent unproven count.
+Empty, partial, traceback-only, PASS-lines-only, or otherwise unrecognized
+output remains `UNRECOGNIZED_OUTPUT`/UNKNOWN; it is never summarized as zero
+failures.
+
 Install the new three-file bundle immutably at
-`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-8` only
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-9` only
 after exact-head CI and independent review. Preserve all earlier watchdog
 versions. The bundle manifest pins both helper and watchdog; directory and
 file ownership, modes, links, hashes, and no-follow reads must pass before a

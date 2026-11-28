@@ -86,6 +86,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         stderr = (
             "ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required\n"
             f"ACK_REQUIRED=--ack-unproven={secret}\n"
+            "REJECTED: 2 failure(s)\n"
         ).encode()
         verifier = types.SimpleNamespace(
             expected_checks=lambda *_args: ({dynamic_id: ("peer", {})}, []))
@@ -120,11 +121,47 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         secret_id = "private-token-id"
         verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
         summary = HELPER._verifier_summary(
-            f"FAIL {secret_id}: unexpected secret detail\n".encode(), b"",
+            f"FAIL {secret_id}: unexpected secret detail\n".encode(), b"REJECTED: 1 failure(s)\n",
             {}, {"peers": {}}, verifier)
         self.assertEqual(summary["status"], "PARSED")
         self.assertTrue(summary["failures"][0]["check_id"].startswith("UNKNOWN_CHECK:"))
         self.assertNotIn(secret_id, __import__("json").dumps(summary))
+
+    def test_verifier_summary_requires_a_recognized_terminal_marker(self):
+        verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
+        cases = [
+            (b"", b"", "UNRECOGNIZED_OUTPUT"),
+            (b"   \n", b"\n", "UNRECOGNIZED_OUTPUT"),
+            (b"", b"Traceback (most recent call last):\nValueError: private detail\n", "INVALID_FORMAT"),
+            (b"PASS check: okay\n", b"", "UNRECOGNIZED_OUTPUT"),
+        ]
+        for stdout, stderr, expected_status in cases:
+            with self.subTest(stdout=stdout, stderr=stderr):
+                summary = HELPER._verifier_summary(stdout, stderr, {}, {"peers": {}}, verifier)
+                self.assertEqual(summary["status"], expected_status)
+                self.assertIsNone(summary["fail_count"])
+                self.assertEqual(summary["failures"], [])
+                rendered = __import__("json").dumps(summary)
+                self.assertNotIn("private detail", rendered)
+                self.assertNotIn("Traceback", rendered)
+
+    def test_verifier_summary_accepts_exact_consistent_terminal_marker(self):
+        verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
+        marker = (
+            "EVIDENCE-CONSISTENT for this run only: kernel enforcement is shown by the PASS lines above, not by this tool.\n"
+        )
+        summary = HELPER._verifier_summary(marker.encode(), b"", {}, {"peers": {}}, verifier)
+        self.assertEqual(summary["status"], "PARSED")
+        self.assertEqual(summary["fail_count"], 0)
+        self.assertEqual(summary["reason_code"], "EVIDENCE_CONSISTENT")
+
+    def test_verifier_summary_rejects_terminal_count_mismatch(self):
+        verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
+        summary = HELPER._verifier_summary(
+            b"FAIL scm-rights: unexpected outcome\n", b"REJECTED: 0 failure(s)\n",
+            {}, {"peers": {}}, verifier)
+        self.assertEqual(summary["status"], "UNRECOGNIZED_OUTPUT")
+        self.assertIsNone(summary["fail_count"])
 
     def test_probe_identity_and_result_fields_are_allowlisted_and_redacted(self):
         secret = "/private/path/raw-secret-message"

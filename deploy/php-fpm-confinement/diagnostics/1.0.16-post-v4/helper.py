@@ -1297,18 +1297,45 @@ def _verifier_summary(stdout: bytes | None, stderr: bytes | None, matrix: dict,
             unproven_count = int(match.group(1))
     ack_required = "ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required" in err_text
     ack_mismatch = "ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch" in err_text
+    ack_without_ids = "ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids" in err_text
+    rejected_match = re.search(r"(?m)^REJECTED: ([0-9]{1,6}) failure\(s\)$", err_text)
+    out_lines = [line for line in out_text.splitlines() if line]
+    err_lines = [line for line in err_text.splitlines() if line]
+    consistent_marker = (
+        "EVIDENCE-CONSISTENT for this run only: kernel enforcement is shown by the PASS lines above, not by this tool."
+    )
+    consistent = bool(out_lines) and out_lines[-1] == consistent_marker
     stderr_known = all(
-        not line.startswith(("ACCEPTANCE=", "REJECTED:"))
-        or line in {
+        line in {
             "ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required",
             "ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch",
             "ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids",
-            f"REJECTED: {len(failures)} failure(s)",
         }
-        for line in err_text.splitlines()
+        or re.fullmatch(r"ACK_REQUIRED=--ack-unproven=[A-Za-z0-9:,_./-]{1,8192}", line) is not None
+        or re.fullmatch(r"REJECTED: [0-9]{1,6} failure\(s\)", line) is not None
+        for line in err_lines
     )
     if not stderr_known:
         return {"status": "INVALID_FORMAT", "fail_count": None, "failures": [],
+                "unproven_count": None, "ack_required": None, "raw_output_emitted": False}
+    # A parse is useful only when the pinned verifier's terminal output marker is
+    # present and agrees with the records. Empty, partial, crash-only, and
+    # unrecognized output must never resemble a zero-failure summary.
+    rejected_count = int(rejected_match.group(1)) if rejected_match else None
+    terminal_ok = False
+    if rejected_match and err_lines and err_lines[-1] == rejected_match.group(0):
+        terminal_ok = rejected_count == len(failures) and rejected_count > 0
+    elif consistent:
+        terminal_ok = not failures and not ack_required and not ack_mismatch and not ack_without_ids
+    elif ack_required and not failures:
+        terminal_ok = (unproven_count is not None and unproven_count > 0
+                       and len(err_lines) == 2 and err_lines[-1].startswith("ACK_REQUIRED="))
+    elif ack_mismatch and not failures:
+        terminal_ok = len(err_lines) == 1 and err_lines[-1] == "ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch"
+    elif ack_without_ids and not failures:
+        terminal_ok = len(err_lines) == 1 and err_lines[-1] == "ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids"
+    if not terminal_ok:
+        return {"status": "UNRECOGNIZED_OUTPUT", "fail_count": None, "failures": [],
                 "unproven_count": None, "ack_required": None, "raw_output_emitted": False}
     return {
         "status": "PARSED",
@@ -1320,7 +1347,10 @@ def _verifier_summary(stdout: bytes | None, stderr: bytes | None, matrix: dict,
         "reason_code": (
             "FAILURES_AND_ACK_REQUIRED" if failures and ack_required else
             "FAILURES_AND_ACK_MISMATCH" if failures and ack_mismatch else
+            "FAILURES_AND_ACK_WITHOUT_IDS" if failures and ack_without_ids else
             "ACK_REQUIRED" if ack_required else "ACK_MISMATCH" if ack_mismatch else
+            "ACK_WITHOUT_IDS" if ack_without_ids else
+            "EVIDENCE_CONSISTENT" if consistent else
             "REJECTED" if failures else "UNKNOWN"
         ),
         "raw_output_emitted": False,
