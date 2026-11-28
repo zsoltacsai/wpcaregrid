@@ -1516,7 +1516,7 @@ def synthetic_run(profile: str, phase: str = "post"):
     peers = {role: [PIDS[role]] for role in spec["peer_roles"] if role not in excluded}
     processes = []
     for role, pid in PIDS.items():
-        if role in excluded:
+        if role in excluded or role not in matrix["role_profiles"] or role not in matrix["role_units"]:
             continue
         label = f"{matrix['role_profiles'][role]} (enforce)"
         processes.append({"pid": pid, "ppid": MASTERS.get(role, 1), "uids": [33] * 4, "gids": [33] * 4, "comm": "php-fpm", "starttime": 900 + pid,
@@ -1525,7 +1525,10 @@ def synthetic_run(profile: str, phase: str = "post"):
         if role in MASTERS:
             processes.append({"pid": MASTERS[role], "ppid": 1, "uids": [0] * 4, "gids": [0] * 4, "comm": "master", "starttime": 800 + pid,
                               "label": label, "unit": matrix["role_units"][role], "exe": "/usr/sbin/master", "fds": ["socket:[3]", "/dev/null"]})
-    units = {u: {"present": False, "pids": []} for u in matrix["role_units"].values()}
+    known_units = matrix.get("inventory_units", matrix["role_units"])
+    if isinstance(known_units, dict):
+        known_units = known_units.values()
+    units = {u: {"present": False, "pids": []} for u in known_units}
     for p in processes:
         units[p["unit"]] = {"present": True, "pids": sorted(units[p["unit"]]["pids"] + [p["pid"]])}
 
@@ -1575,11 +1578,11 @@ def synthetic_run(profile: str, phase: str = "post"):
             if run == "confined" and not allow:
                 mid = (t0 + t1) // 2
                 if kind == "file":
-                    event(mid, operation="exec" if item["access"] == "x" else "open", name=item["path"], pid=actor)
+                    event(mid, operation="exec" if item["access"] == "x" else "open", name=item.get("audit_path", item["path"]), pid=actor)
                 elif kind == "socket":
                     event(mid, operation="connect", name=item["path"], pid=actor)
                 elif kind == "symlink":
-                    event(mid, operation="open", name=item["path"], pid=actor)
+                    event(mid, operation="open", name=item.get("audit_path", item["path"]), pid=actor)
                 elif kind == "abstract":
                     event(mid, operation="connect", addr="@wpcg-probe-x", pid=actor)
                 elif kind == "net":
