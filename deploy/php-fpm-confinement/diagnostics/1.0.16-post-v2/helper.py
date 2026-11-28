@@ -491,10 +491,17 @@ def _probe_summary(name: str, data: bytes | None, matrix: dict, expected_mode: s
         })
     boot = doc.get("boot_id")
     boot_ok = isinstance(boot, str) and BOOT_ID.fullmatch(boot) is not None
+    started_ns, ended_ns = doc.get("started_ns"), doc.get("ended_ns")
+    window_ok = type(started_ns) is int and type(ended_ns) is int and 0 < started_ns <= ended_ns
+    pid_ok = type(doc.get("pid")) is int and doc["pid"] > 0
+    starttime_ok = type(doc.get("starttime_ticks")) is int and doc["starttime_ticks"] > 0
     expected_matrix = PINNED_PACKAGE_FILES["acceptance/matrix.json"]
+    matrix_match = doc.get("matrix_sha256") == expected_matrix
     schema_ok = set(doc) == PROBE_REQUIRED_KEYS and type(doc.get("schema")) is int and doc.get("schema") == 2
     mode_ok = doc.get("mode") == expected_mode
     profile_ok = doc.get("profile") == profile
+    audit_eligible = all((schema_ok, mode_ok, profile_ok, label_ok, matrix_match,
+                          boot_ok, window_ok, pid_ok, starttime_ok))
     identity = {
         "filename": name,
         "status": "PARSED",
@@ -509,11 +516,16 @@ def _probe_summary(name: str, data: bytes | None, matrix: dict, expected_mode: s
         "pid": doc.get("pid") if type(doc.get("pid")) is int else None,
         "starttime_ticks": doc.get("starttime_ticks") if type(doc.get("starttime_ticks")) is int else None,
         "kernel_start_ns": doc.get("kernel_start_ns") if type(doc.get("kernel_start_ns")) is int else None,
-        "started_ns": doc.get("started_ns") if type(doc.get("started_ns")) is int else None,
-        "ended_ns": doc.get("ended_ns") if type(doc.get("ended_ns")) is int else None,
+        "started_ns": started_ns if type(started_ns) is int else None,
+        "ended_ns": ended_ns if type(ended_ns) is int else None,
         "matrix_sha256": doc.get("matrix_sha256") if isinstance(doc.get("matrix_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", doc.get("matrix_sha256")) else None,
-        "matrix_match": doc.get("matrix_sha256") == expected_matrix,
+        "matrix_match": matrix_match,
         "boot_id_valid": boot_ok,
+        "window_valid": window_ok,
+        "pid_valid": pid_ok,
+        "starttime_valid": starttime_ok,
+        "audit_correlation_eligible": audit_eligible,
+        "audit_correlation_reason": "IDENTITY_AND_WINDOW_MATCH" if audit_eligible else "IDENTITY_OR_WINDOW_MISMATCH",
         "boot_id_sha256": hashlib.sha256(boot.encode()).hexdigest() if boot_ok else None,
         "results_count": len(results),
         "duplicate_result_ids": duplicate_ids,
@@ -841,7 +853,8 @@ def _ops_target(verifier: types.ModuleType, matrix: dict, ident: str, kind: str,
     return {"ptrace"}, {"peer": profile + "-probe"}
 
 
-def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | None, matrix: dict, verifier: types.ModuleType) -> dict:
+def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | None, matrix: dict, verifier: types.ModuleType,
+                   *, unavailable_reason: str = "confined-json-unavailable") -> dict:
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND", "denied_record_count": None, "check_correlation": "UNKNOWN",
                 "pid_profile_window": {"status": "UNKNOWN", "reason_code": "audit-absent"}, "reason_code": "audit-absent"}
@@ -880,7 +893,7 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
                     "probe_pid_correlation": "UNKNOWN_CONFINED_JSON_UNAVAILABLE",
                     "probe_window_correlation": "UNKNOWN_CONFINED_JSON_UNAVAILABLE",
                 },
-                "reason_codes": sorted(reasons | {"confined-json-unavailable"})}
+                "reason_codes": sorted(reasons | {unavailable_reason})}
     probe_profile = "wpcaregrid-nginx-probe"
     boot = str(confined.get("boot_id", "")).replace("-", "")
     start, end = confined.get("started_ns"), confined.get("ended_ns")
@@ -1004,6 +1017,30 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
                 used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile) or verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/maps")
             else:
                 used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
+            if used_match is None and type(child) is int and child > 0 and child != pid:
+                child_args = (records, consumed, probe_profile, boot, child, t0, t1)
+                if kind in ("file", "symlink"):
+                    used_match = verifier.window_hit(*child_args, verifier.FILE_OPS[item["access"]], name=item["path"])
+                elif kind == "socket":
+                    used_match = verifier.window_hit(*child_args, {"connect", "open", "file_perm", "sendmsg"}, name=item["path"])
+                elif kind == "abstract":
+                    used_match = verifier.window_hit(*child_args, {"connect", "sendmsg"}, mention="wpcg-probe-")
+                elif kind == "net":
+                    used_match = verifier.window_hit(*child_args, ops2, fields={"family": fam, "sock_type": typ})
+                elif kind == "peer":
+                    used_match = verifier.window_hit(*child_args, {"open", "readlink", "file_perm", "getattr"}, name={targ, targ.rstrip("/"), targ.rstrip("/") + "/"})
+                    if used_match is None:
+                        used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+                elif kind == "peer-signal":
+                    used_match = verifier.window_hit(*child_args, {"signal"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+                elif kind == "peer-vm":
+                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
+                elif ident == "calibration:child-environ":
+                    used_match = verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/environ")
+                elif ident == "calibration:child-maps":
+                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile) or verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/maps")
+                else:
+                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile)
         except Exception:
             reasons.add("audit-match-evaluation-failed")
         if used_match is not None:
@@ -1021,6 +1058,7 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
             "boot_match": dimension_counts["boot"] > 0,
             "journal_time_match": dimension_counts["journal_time"] > 0,
             "verifier_window_hit": used_match is not None,
+            "verifier_window_hit_scope": "PARENT_OR_CHILD_DIAGNOSTIC",
             "baseline_result_present": ident in base_by_id,
         })
     return {
@@ -1084,12 +1122,20 @@ def summarize(package_dir: str = PACKAGE_DIR, envelope_dir: str = ENVELOPE_DIR) 
     ):
         data = selected.get(filename)
         stderr[filename] = _stderr_summary(data)
-    conf_for_audit = confined_doc if confined_status == "parsed" else None
-    audit = _audit_summary(selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit, package["matrix"], verifier)
-    if confined_status in ("unavailable", "empty", "invalid-json", "invalid-schema"):
+    conf_audit_eligible = confined_status == "parsed" and confined.get("audit_correlation_eligible") is True
+    conf_for_audit = confined_doc if conf_audit_eligible else None
+    unavailable_reason = (
+        "confined-identity-or-window-invalid" if confined_status == "parsed"
+        else "confined-json-unavailable"
+    )
+    audit = _audit_summary(
+        selected.get("wpcaregrid-nginx-audit.jsonl"), baseline_doc, conf_for_audit,
+        package["matrix"], verifier, unavailable_reason=unavailable_reason,
+    )
+    if not conf_audit_eligible:
         audit["check_correlation"] = "UNKNOWN"
-        if "confined-json-unavailable" not in audit.get("reason_codes", []):
-            audit.setdefault("reason_codes", []).append("confined-json-unavailable")
+        if unavailable_reason not in audit.get("reason_codes", []):
+            audit.setdefault("reason_codes", []).append(unavailable_reason)
             audit["reason_codes"].sort()
         audit.pop("checks", None)
     diagnosis = "INSUFFICIENT_BOUND_EVIDENCE"
