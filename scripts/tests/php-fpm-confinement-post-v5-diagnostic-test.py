@@ -94,12 +94,48 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertTrue(by_id["file-target"]["profile_match"])
         self.assertTrue(by_id["file-target"]["name_match"])
         self.assertFalse(by_id["file-target"]["peer_match"])
+        self.assertEqual(by_id["file-target"]["denied_record_count_all_dimensions"], 1)
         self.assertTrue(by_id["peer-target"]["peer_match"])
         self.assertFalse(by_id["peer-target"]["name_match"])
+        self.assertEqual(by_id["peer-target"]["denied_record_count_all_dimensions"], 1)
         self.assertEqual(summary["probe_profile_label_counts"]["accepted_stack"], 2)
         rendered = __import__("json").dumps(summary, sort_keys=True)
         self.assertNotIn(raw_path, rendered)
         self.assertNotIn(resolved_path, rendered)
+
+    def test_all_dimensions_count_requires_real_target_match_including_peer_fallback(self):
+        boot = "a" * 32
+        probe_profile = "wpcaregrid-nginx-probe"
+        production_profile = "wpcaregrid-php-fpm-production"
+        matrix = {"role_profiles": {"production": production_profile},
+                  "profiles": {"wpcaregrid-nginx": {"peer_roles": ["production"], "checks": [],
+                      "sockets": [], "network_checks": [], "live_symlink_escape_targets": [], "layout": {"symlinks": {}}}}}
+        expected = {"peer:production:3001:mem": ("peer", {"role": "production", "pid": 3001, "entry": "mem"})}
+
+        def summarize(peer_name):
+            records = [{"profile": probe_profile, "pid": 200, "operation": "ptrace", "peer": peer_name,
+                        "name": "/wrong/target", "_boot": boot, "_ts_ns": 150, "_journal_ns": 150,
+                        "_serial": ("0", "0", "1")}]
+            verifier = types.SimpleNamespace(
+                parse_audit=lambda _text: (records, []),
+                expected_checks=lambda *_args: (expected, set()),
+                window_hit=lambda *_args, **_kwargs: None,
+                FILE_OPS={"r": {"open"}}, EPS_NS=0,
+            )
+            confined = {"pid": 200, "started_ns": 100, "ended_ns": 200, "boot_id": boot,
+                        "peers": {}, "results": [{"id": "peer:production:3001:mem", "pid": 200,
+                                                          "t0": 100, "t1": 200, "errno": 13}]}
+            report = HELPER._audit_summary(b"synthetic", {"results": []}, confined, matrix, verifier)
+            return report["checks"][0]
+
+        wrong_peer = summarize("unconfined//&unrelated-profile")
+        self.assertFalse(wrong_peer["name_match"])
+        self.assertFalse(wrong_peer["peer_match"])
+        self.assertEqual(wrong_peer["denied_record_count_all_dimensions"], 0)
+        valid_fallback = summarize("unconfined//&" + production_profile)
+        self.assertFalse(valid_fallback["name_match"])
+        self.assertTrue(valid_fallback["peer_match"])
+        self.assertEqual(valid_fallback["denied_record_count_all_dimensions"], 1)
 
     def test_unconsumed_summary_includes_exact_accepted_stack_label(self):
         stack = "unconfined//&wpcaregrid-nginx-probe"
@@ -586,6 +622,19 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             with self.assertRaises(HELPER.DiagnosticHold) as caught:
                 HELPER._read_regular_at(123, "input")
             self.assertEqual(caught.exception.code, "input-size-bound")
+
+    def test_directory_and_file_openers_reject_nul_before_syscalls(self):
+        with mock.patch.object(HELPER.os, "stat") as stat_mock, mock.patch.object(HELPER.os, "open") as open_mock:
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._open_dir_at(77, "bad\x00component")
+            self.assertEqual(caught.exception.code, "directory-component-invalid")
+            stat_mock.assert_not_called()
+            open_mock.assert_not_called()
+            with self.assertRaises(HELPER.DiagnosticHold) as caught:
+                HELPER._read_regular_at(77, "bad\x00name")
+            self.assertEqual(caught.exception.code, "input-name-invalid")
+            stat_mock.assert_not_called()
+            open_mock.assert_not_called()
 
     def test_dirfd_open_detects_directory_replacement(self):
         before = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0,

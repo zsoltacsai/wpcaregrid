@@ -178,7 +178,7 @@ def _directory_flags() -> int:
 
 def _open_dir_at(parent_fd: int, name: str, *, expected_mode: int | None = None) -> int:
     """Open and verify a root-owned directory relative to an already pinned parent fd."""
-    if not name or name in (".", "..") or "/" in name or "\\x00" in name:
+    if not name or name in (".", "..") or "/" in name or "\x00" in name:
         raise DiagnosticHold("directory-component-invalid")
     try:
         before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -234,7 +234,7 @@ def _open_absolute_directory(path: str, *, expected_mode: int) -> int:
 def _read_regular_at(directory_fd: int, name: str, expected_sha256: str | None = None,
                      *, expected_mode: int | None = None, display_name: str | None = None) -> tuple[bytes, dict]:
     """Read one file by basename relative to a pinned directory fd; never follow links."""
-    if not name or name in (".", "..") or "/" in name or "\\x00" in name:
+    if not name or name in (".", "..") or "/" in name or "\x00" in name:
         raise DiagnosticHold("input-name-invalid")
     try:
         before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
@@ -1162,12 +1162,17 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
         target_peer = target.get("peer")
         accepted_peer_names = _accepted_audit_profile_names(target_peer) if isinstance(target_peer, str) and target_peer else set()
         for index, record in enumerate(records):
+            peer_fallback_match = False
+            if kind == "peer" and record.get("operation") == "ptrace":
+                role = item.get("role")
+                peer_profile = matrix.get("role_profiles", {}).get(role, "")
+                peer_fallback_match = bool(peer_profile) and record.get("peer") in _accepted_audit_profile_names(peer_profile)
             matches = {
                 "profile": record.get("profile") in accepted_profiles,
                 "pid": record.get("pid") in expected_pids,
-                "operation": record.get("operation") in ops,
+                "operation": record.get("operation") in ops or peer_fallback_match,
                 "name": False,
-                "peer": False,
+                "peer": peer_fallback_match,
                 "fields": False,
                 "mention": False,
                 "window": verifier.EPS_NS >= 0 and t0 - verifier.EPS_NS <= record.get("_ts_ns", -1) <= t1 + verifier.EPS_NS,
@@ -1190,16 +1195,8 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
             matches["target"] = matches["name"] or matches["peer"] or matches["fields"] or matches["mention"]
             for key, yes in matches.items():
                 dimension_counts[key] += int(yes)
-            if all(matches.values()):
+            if all(matches[key] for key in ("profile", "pid", "operation", "target", "window", "boot", "journal_time")):
                 candidates.append((index, record))
-        if kind == "peer":
-            peer = matrix.get("role_profiles", {}).get(item.get("role"), "")
-            peer_candidates = [(i, r) for i, r in enumerate(records)
-                               if r.get("profile") in accepted_profiles and r.get("pid") in expected_pids
-                               and r.get("operation") == "ptrace" and r.get("peer") in _accepted_audit_profile_names(peer)
-                               and t0 - verifier.EPS_NS <= r.get("_ts_ns", -1) <= t1 + verifier.EPS_NS
-                               and r.get("_boot") == boot]
-            candidates.extend(peer_candidates)
         used_match = None
         try:
             args = (records, consumed, probe_profile, boot, pid, t0, t1)
