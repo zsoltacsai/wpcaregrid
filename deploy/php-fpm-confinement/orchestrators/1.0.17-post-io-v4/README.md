@@ -125,10 +125,13 @@ Owner-attested file
 parent as `--evidence-envelope` and the exact file as
 `--route-closure-evidence`. It binds the Owner-accepted provider export
 `ef4dd4e7886e1e6957bda86e062556ad4f47c5cae5a00f5a47d44893d1907966` and the
-redacted effective-origin summary `41cc3cc22968d08eabceceb648ae0370e8df35da82cc91b190e8ef00f76d8d44`
-(effective configuration fingerprint
-`065847ebcbedcfc7d4cc448e92a5db936cfa99a88725a2a2b89e0aba03b1cb83`). The
-route-review aid's `acceptance_package_version: 1.0.16` records the package
+redacted effective-origin summary artifact, SHA-256
+`41cc3cc22968d08eabceceb648ae0370e8df35da82cc91b190e8ef00f76d8d44`. Its
+reported effective-configuration fingerprint is
+`065847ebcbedcfc7d4cc448e92a5db936cfa99a88725a2a2b89e0aba03b1cb83`; this is
+not the summary file's SHA-256. The attestation's `origin_config_sha256` must
+bind the reviewed origin evidence artifact, not substitute its fingerprint.
+The route-review aid's `acceptance_package_version: 1.0.16` records the package
 context of that review; it is not the 1.0.17 acceptance-package pin. The route
 attestation is independent of the verifier-only 1.0.17 change because the
 runtime profiles and route configuration inputs are unchanged. The parser's
@@ -140,9 +143,11 @@ summary.
 
 The runner deliberately does not synthesize or accept an Owner acknowledgment.
 If a profile verifier returns 3, the run stops with HOLD before later profiles
-and fixture cleanup. Its preserved verifier output contains the exact
+and fixture cleanup. Its preserved `<profile>-verifier.stdout` contains the
+per-check records and unproven summary; `<profile>-verifier.stderr` contains
+the exact `ACK_REQUIRED` request. The request is
 `--ack-unproven=<matrix-sha>:<boot-id>:<phase>:<profile>:<evidence-sha>:<sorted-ids>`
-payload requested by the pinned verifier. The Owner may review that exact
+requested by the pinned verifier. The Owner may review that exact
 evidence set and, if warranted, run the pinned verifier against those same
 files with that payload; this is a verifier-only review of preserved evidence,
 not a probe or acceptance rerun. That standalone result does not change the

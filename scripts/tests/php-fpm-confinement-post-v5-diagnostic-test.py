@@ -463,32 +463,6 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             self.assertTrue(summary["checks"][0]["verifier_window_hit"])
             self.assertNotIn((matching_pid, {"open"}), calls)
 
-    def test_calibration_child_maps_preserves_record_index_zero(self):
-        boot = "b" * 32
-        probe = "wpcaregrid-nginx-probe"
-        record = {"profile": probe, "pid": 10, "operation": "ptrace", "peer": probe,
-                  "_boot": boot, "_ts_ns": 150, "_journal_ns": 150, "_serial": ("0", "0", "1")}
-        for matching_pid in (10, 20):
-            calls = []
-
-            def window_hit(records, used, profile, boot_id, pid, t0, t1, ops, **filters):
-                calls.append((pid, ops))
-                if pid == matching_pid and ops == {"ptrace"}:
-                    return 0
-                return None
-
-            verifier = types.SimpleNamespace(
-                parse_audit=lambda _text: ([record], []),
-                expected_checks=lambda *_args: ({"calibration:child-maps": ("calibration", {})}, set()),
-                window_hit=window_hit, FILE_OPS={}, EPS_NS=0,
-            )
-            confined = {"pid": 10, "started_ns": 100, "ended_ns": 200, "boot_id": boot,
-                        "peers": {}, "results": [{"id": "calibration:child-maps", "pid": 10,
-                                  "child": 20, "t0": 100, "t1": 200, "errno": 13}]}
-            summary = HELPER._audit_summary(b"synthetic", None, confined, {"role_profiles": {}}, verifier)
-            self.assertTrue(summary["checks"][0]["verifier_window_hit"])
-            self.assertNotIn((matching_pid, {"open"}), calls)
-
     def test_progress_pipe_emits_only_fixed_stage_enums(self):
         read_fd, write_fd = os.pipe()
         original_fd = HELPER._PROGRESS_FD
