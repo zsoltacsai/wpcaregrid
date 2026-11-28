@@ -609,6 +609,9 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 self.assertEqual(summary["next_line_category"], expected)
                 self.assertEqual(summary["exception_class"], "ValueError")
                 self.assertEqual(summary["frame_count"], 0)
+                self.assertEqual(summary["last_valid_frame"], {
+                    "basename": "probe.py", "function": "call", "line": 8,
+                })
                 rendered = __import__("json").dumps(summary)
                 for forbidden in (raw_line.decode(), "raw-exception-secret", "/root/private", "raw-secret", "raw-path", "raw-error"):
                     self.assertNotIn(forbidden, rendered)
@@ -618,6 +621,9 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         )
         self.assertEqual(unknown_exception["exception_class"], "OTHER_EXCEPTION")
         self.assertEqual(unknown_exception["next_line_category"], "OTHER_NONBLANK")
+        self.assertEqual(unknown_exception["last_valid_frame"], {
+            "basename": "probe.py", "function": "call", "line": 8,
+        })
         rendered = __import__("json").dumps(unknown_exception)
         for forbidden in ("PrivateExceptionNameError", "raw-exception-message", "mystery raw-next-line", "/root/private"):
             self.assertNotIn(forbidden, rendered)
@@ -671,6 +677,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
             "frame_count": 0, "exception_class": "ValueError", "next_line_category": "OTHER_NONBLANK",
+            "last_valid_frame": {"basename": "probe.py", "function": "call", "line": 8},
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-message", "raw-suffix-secret", "/root", raw.decode()):
@@ -721,6 +728,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
             "frame_count": 0, "exception_class": "ValueError", "next_line_category": "EXACT_TRACEBACK_HEADER",
+            "last_valid_frame": {"basename": "probe.py", "function": "call", "line": 8},
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-one", "raw-two", "/root", raw.decode()):
