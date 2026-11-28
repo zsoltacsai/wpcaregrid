@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only, one-run diagnostic summary for one 2026-11-28 v2 post HOLD.
+"""Read-only, one-run diagnostic summary for the 2026-11-28 post-io-v3 HOLD.
 
 This is not an acceptance verifier. It reads only the pinned package inputs and
 the allowlisted direct children of one exact evidence directory. It emits one
