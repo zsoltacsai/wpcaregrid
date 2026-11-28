@@ -115,3 +115,21 @@ not be run before exact-head CI and independent review pass. Do not use it to
 retry acceptance, a probe, verifier, or cleanup, and do not alter or create
 evidence. The result is diagnostic evidence only and cannot establish Gate 2
 acceptance.
+
+## One-run v2 last-frame diagnostic follow-up
+
+The side-by-side `1.0.16-post-watchdog-6` bundle adds one field only for the
+existing c90b29 run's `EXPECTED_SEPARATOR_AFTER_EXCEPTION` parse failure:
+`last_valid_frame`, containing the basename classification, validated function
+token, and line number of the last fully parsed frame preceding the failure.
+This is a parser observation, not a causal throw-site claim. Failure reports
+still have `frame_count=0`; no raw line, source text, full path, or exception
+message is emitted. Other traceback parse paths are unchanged.
+
+The install path is
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-6`, using
+the v2 `watchdog.py`, `helper.py`, and `bundle-manifest.json`. Install it
+side-by-side only after exact-head review and CI. Preserve watchdog-2 through
+watchdog-5 installations. The helper may read only the already-existing
+c90b29 evidence once; it must not rerun acceptance, probes, verifier, or
+cleanup. Its result remains diagnostic and cannot establish Gate 2 PASS.

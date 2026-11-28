@@ -626,6 +626,17 @@ def _traceback_suffix_failure(status: str, substage: str) -> dict:
     return _traceback_failure(status, "FIRST_HEADER_SUFFIX_INVALID", substage=substage)
 
 
+def _safe_frame_summary(frame: tuple[str, int, str]) -> dict:
+    """Reduce one already-parsed traceback frame to fixed, non-path metadata."""
+    basename, line_number, function = frame
+    safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
+    return {
+        "basename": basename if basename in _TRACEBACK_BASES else "OTHER_BASENAME",
+        "function": safe_function,
+        "line": line_number,
+    }
+
+
 def _traceback_next_line_category(line: str) -> str:
     """Classify only the structural shape of one rejected nonblank line."""
     if line in _TRACEBACK_CHAIN_MARKERS:
@@ -762,6 +773,10 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
             failure["exception_class"] = (
                 exception_name if exception_name in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
             )
+            # This is the last frame fully parsed before the separator failure,
+            # not a claim that it is necessarily the causal throw site. Keep the
+            # failure frame_count at zero and expose no raw path/source/message.
+            failure["last_valid_frame"] = _safe_frame_summary(final_frame)
             category = _traceback_next_line_category(lines[index])
             if category in _TRACEBACK_NEXT_LINE_CATEGORIES:
                 failure["next_line_category"] = category
@@ -778,15 +793,14 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
 
     if not blocks or final_frame is None or final_exception is None:
         return _traceback_suffix_failure("UNPARSEABLE", "NO_FRAME_AFTER_HEADER")
-    basename, line_number, function = final_frame
-    safe_function = function if re.fullmatch(r"[A-Za-z0-9_<>() .-]{1,128}", function) else "UNKNOWN"
+    safe_frame = _safe_frame_summary(final_frame)
     return {
         "status": "PARSED",
         "exception_class": final_exception,
         "frame_count": total_frames,
-        "thrower_basename": basename if basename in _TRACEBACK_BASES else "OTHER_BASENAME",
-        "thrower_function": safe_function,
-        "thrower_line": line_number,
+        "thrower_basename": safe_frame["basename"],
+        "thrower_function": safe_frame["function"],
+        "thrower_line": safe_frame["line"],
     }
 
 
