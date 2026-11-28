@@ -1,0 +1,25 @@
+{
+  "acceptance_package_tree": "beaf9f9e88b2c1fdf71b71bb40eee22c411c8615",
+  "acceptance_package_version": "1.0.18",
+  "artifact_kind": "commit-pinned-acceptance-orchestrator-io-v5-isolated-probe-startup-and-unproven-collection",
+  "binding_json": "b165359cff0ce415458c98ac6588f34b267553687db9d0289d0e0a4d2d75cc5c",
+  "minimum_systemd_major": 249,
+  "package_sha256sums": "e7a13d9fcc824f38bbf5f63f1c838546188f73ce71a7fdcb143e3e85868933ae",
+  "probe_output_model": "systemd-append-files-v1",
+  "probe_profile_overlay": {
+    "ptrace_policy": "unchanged; deny ptrace remains",
+    "rule": "owner @{PROC}/@{pid}/stat r,",
+    "scope": "derived probe profile only"
+  },
+  "schema": 1,
+  "tools": {
+    "collect-peers.py": "ff70498c54223c2d533c352cd422835bcc9c1354a29c5e96269010c61e4fbba7",
+    "derive-probe-profile.py": "22503809027074cce467ab8651531b1d9b5d75732af165be7f8cafcc83202a8a",
+    "fd-sender.py": "76940755668615cc7e2fbdcd236b04019f084d8ea7ac3599158dffcb7b9a85ac",
+    "fixtures.py": "e5cc5ee6dc8c60549bb4b8acd63ab6a22487e3edf288b67d1e3bc640191e8ebd",
+    "matrix.json": "211872a8cf04b21a964ac06a07ddde46f43d6eab88aea9131eec4be1b2b28b24",
+    "probe.py": "5cde081b25341f804f828f18615bc868b30bba1c70454dc1cbf6bc09ac9ff0af",
+    "sibling-listener.py": "88046b95ef7eeaae3984c77d17a1abf5be969654556e32a8ad21fe8b0de95ea0",
+    "verify-acceptance.py": "1d22c8dd9f25524382af4b84ceb3b263bfb10c56524219e3b0abadad52ff05ac"
+  }
+}
