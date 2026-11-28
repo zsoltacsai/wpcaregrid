@@ -17,6 +17,7 @@ spec = importlib.util.spec_from_file_location('acceptance_post_io_v2_under_test'
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+REAL_MANAGER_LABEL_CHECK = module.system_manager_is_unconfined
 
 
 class ProbeOutputTests(unittest.TestCase):
@@ -36,6 +37,9 @@ class ProbeOutputTests(unittest.TestCase):
         self.owner_patch.start()
         self.addCleanup(self.owner_patch.stop)
         self.commands = []
+        self.manager_patch = patch.object(module, 'system_manager_is_unconfined', return_value=True)
+        self.manager_patch.start()
+        self.addCleanup(self.manager_patch.stop)
 
     def tearDown(self):
         os.umask(self.old_umask)
@@ -142,6 +146,18 @@ class ProbeOutputTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 'probe-unit-existing')
         fake_run.assert_not_called()
 
+    def test_non_unconfined_manager_holds_before_creating_outputs_or_spawning(self):
+        out = self.root / 'nginx-baseline.json'
+        with (patch.object(module, 'system_manager_is_unconfined', return_value=False),
+              patch.object(module.subprocess, 'run') as fake_run):
+            with self.assertRaises(module.Hold) as raised:
+                module.launch_probe(self.package, '{}', 'wpcaregrid-nginx',
+                                    'baseline', {}, False, out,
+                                    self.root / 'nginx-baseline.stderr')
+        self.assertEqual(raised.exception.code, 'system-manager-apparmor-label')
+        fake_run.assert_not_called()
+        self.assertFalse(out.exists())
+
     def test_systemd_version_gate_fails_closed_and_accepts_documented_versions(self):
         for version, expected in ((248, False), (249, True), (255, True)):
             proc = SimpleNamespace(returncode=0, stdout=f'systemd {version} (test)\n'.encode())
@@ -151,6 +167,45 @@ class ProbeOutputTests(unittest.TestCase):
                      SimpleNamespace(returncode=0, stdout=b'not-systemd\n')):
             with patch.object(module.subprocess, 'run', return_value=proc):
                 self.assertFalse(module.systemd_append_io_supported())
+
+    def _manager_label_result(self, label, comm=b'systemd\n', *, open_error=None):
+        with (
+            patch.object(module.pathlib.Path, 'read_bytes', return_value=comm),
+            patch.object(module.os, 'open', side_effect=open_error or (lambda *a, **k: 123)),
+            patch.object(module.os, 'fstat', return_value=SimpleNamespace(
+                st_mode=0o100444, st_uid=0, st_gid=0)),
+            patch.object(module.os, 'read', return_value=label),
+            patch.object(module.os, 'close'),
+        ):
+            return REAL_MANAGER_LABEL_CHECK()
+
+    def test_manager_label_preflight_accepts_only_exact_unconfined_label(self):
+        self.assertTrue(self._manager_label_result(b'unconfined'))
+        self.assertTrue(self._manager_label_result(b'unconfined\n'))
+        for label in (b'wpcaregrid (enforce)', b'unconfined (enforce)', b'unknown', b''):
+            with self.subTest(label=label):
+                self.assertFalse(self._manager_label_result(label))
+
+    def test_manager_label_preflight_fails_closed_on_identity_encoding_and_size_errors(self):
+        self.assertFalse(self._manager_label_result(b'unconfined', comm=b'not-systemd\n'))
+        self.assertFalse(self._manager_label_result(b'unconfined', comm=b'\xff'))
+        self.assertFalse(self._manager_label_result(b'x' * 129))
+        self.assertFalse(self._manager_label_result(b'unconfined', open_error=OSError('denied')))
+
+    def test_manager_label_path_is_opened_read_only(self):
+        with (
+            patch.object(module.pathlib.Path, 'read_bytes', return_value=b'systemd\n'),
+            patch.object(module.os, 'open', return_value=123) as open_mock,
+            patch.object(module.os, 'fstat', return_value=SimpleNamespace(
+                st_mode=0o100444, st_uid=0, st_gid=0)),
+            patch.object(module.os, 'read', return_value=b'unconfined'),
+            patch.object(module.os, 'close'),
+        ):
+            self.assertTrue(REAL_MANAGER_LABEL_CHECK())
+        path, flags = open_mock.call_args.args
+        self.assertEqual(path, module.SYSTEM_MANAGER_LABEL_PATH)
+        self.assertEqual(flags, os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0))
+        self.assertFalse(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
 
     def test_parent_log_open_rejects_replaced_symlink(self):
         path = self.root / 'launcher.stderr'

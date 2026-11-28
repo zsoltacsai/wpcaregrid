@@ -94,7 +94,13 @@ versioned 1.0.16 `fd-sender.py` published and pinned, and the dedicated
 `/run/mysqld/wpcaregrid-acceptance` parent present as root:root 0755. The
 orchestrator verifies package bytes/modes/ownership/links, all 21 fixtures,
 services, parser, sockets, probe-label absence, and a root-only route attestation
-before creating any probe profile or listener. It never creates or repairs a
+before creating any probe profile or listener. Before the first probe it also
+requires PID 1 to be `systemd` and `/proc/1/attr/current` to equal exactly
+`unconfined` (allowing one trailing newline); every other or unreadable value is
+HOLD. The redacted preflight summary records only the boolean
+`pin_checks.system_manager_unconfined`, never the raw label. This host check is
+required because systemd must open the append targets before the service's
+AppArmor profile transition. It never creates or repairs a
 fixture/canary parent and never changes `/run/mysqld` ownership or mode.
 
 The route attestation is a separate root:root 0600 regular file with one link,
@@ -137,7 +143,7 @@ path before extraction. Run as root from the trusted existing checkout, with
 set -euo pipefail
 ORCH_COMMIT='<exact reviewed merge commit>'
 ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2'
-ORCH_TREE='2a8c748f72299ec1361b68f6acd801c167fba281'
+ORCH_TREE='c10e1112a463add9012381c54ead3ff291d6b931'
 test "$(git -C /home/deploy/wpcaregrid rev-parse "$ORCH_COMMIT:$ORCH_REL")" = "$ORCH_TREE"
 DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v2'
 BASE='/usr/local/libexec/wpcg-gate2-orchestrators'
@@ -173,9 +179,9 @@ for file in "$DEST"/*; do
 done
 cd "$DEST"
 sha256sum -c --strict SHA256SUMS
-test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = 'bdeb239e7dd22062ec18559ef3f032deddaea7eabe4880f75a3e8bf856dde5c7'
+test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '1216b8b761492843c0b4cec4e5a899bc4623c995350531f65e4faaae98578177'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
-test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'c093cfb38c823d3e34c8f331ac657714513190d1ebe4d064e9416c84692fe2a0'
+test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'f429350dac392f619530cd28bdbf2bdac0dc618a4c8e8fe760fb20d0ea03e4c2'
 ```
 
 Before proceeding, compare the staged file names to the exact artifact tree,

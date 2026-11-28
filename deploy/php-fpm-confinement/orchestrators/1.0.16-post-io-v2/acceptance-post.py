@@ -34,6 +34,7 @@ GATE_STATE = {'package_pin_ok':False,'fixture_pre_match':False,'host_preflight_o
 PROBE_PROFILE_OWNER = (0,0)
 PROBE_OUTPUT_OWNER = (0,0)
 SYSTEMD_APPEND_MIN_VERSION = 249
+SYSTEM_MANAGER_LABEL_PATH = pathlib.Path('/proc/1/attr/current')
 STALE_PARTIAL_PROFILE = pathlib.Path('/')
 EXCEPTION_CLASSES = {
     'AttributeError', 'CalledProcessError', 'FileNotFoundError', 'ImportError',
@@ -220,6 +221,30 @@ def systemd_append_io_supported():
         return False
 
 
+def system_manager_is_unconfined():
+    """Fail closed unless PID 1 is systemd and its AppArmor label is unconfined."""
+    fd=None
+    try:
+        comm=pathlib.Path('/proc/1/comm').read_bytes()
+        if comm not in (b'systemd',b'systemd\n'):
+            return False
+        fd=os.open(SYSTEM_MANAGER_LABEL_PATH,os.O_RDONLY|getattr(os,'O_CLOEXEC',0)|getattr(os,'O_NONBLOCK',0))
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_gid!=0:
+            return False
+        label=os.read(fd,129)
+        if len(label)>128:
+            return False
+        # Do not strip arbitrary whitespace or accept mode suffixes/profile names.
+        return label in (b'unconfined',b'unconfined\n')
+    except OSError:
+        return False
+    finally:
+        if fd is not None:
+            try: os.close(fd)
+            except OSError: pass
+
+
 def _create_probe_output(path):
     """Create one empty root-only output target without following or replacing a path."""
     path=pathlib.Path(path)
@@ -348,6 +373,8 @@ def service_preflight(matrix, evidence):
     # Services and legacy/sentinel units.
     set_phase('preflight.service-state')
     append_io_ok=systemd_append_io_supported()
+    manager_unconfined=system_manager_is_unconfined()
+    checks['system_manager_unconfined']=manager_unconfined
     checks_rc={
       'nginx':command_ok(['/usr/bin/systemctl','is-active','--quiet','nginx.service']),
       'production_fpm':command_ok(['/usr/bin/systemctl','is-active','--quiet',matrix['role_units']['production']]),
@@ -356,6 +383,7 @@ def service_preflight(matrix, evidence):
     }
     php84=subprocess.run(['/usr/bin/systemctl','show','php8.4-fpm.service','--property=UnitFileState','--value'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=False)
     if not append_io_ok: raise Hold('systemd-append-output')
+    if not manager_unconfined: raise Hold('system-manager-apparmor-label')
     if (checks_rc['nginx']!=0 or checks_rc['production_fpm']!=0
             or checks_rc['php84_active'] not in (3,4)
             or checks_rc['stock_php85_active'] not in (3,4)
@@ -514,6 +542,7 @@ def wait_sender_end(unit, nonce, evidence, timeout=135):
 
 
 def launch_probe(pkg,matrix_text,profile,mode,env,confined,out,err):
+    if not system_manager_is_unconfined(): raise Hold('system-manager-apparmor-label')
     out=pathlib.Path(out); err=pathlib.Path(err)
     launcher_err=err.with_name(err.name+'.systemd-run')
     outputs=(out,err,launcher_err)

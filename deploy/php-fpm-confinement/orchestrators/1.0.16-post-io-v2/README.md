@@ -45,14 +45,25 @@ manuals. The target's Ubuntu 24.04 systemd baseline is 255;
 the runtime version check fails closed if the host reports an older or
 unparseable version.
 
+The runner also requires `/proc/1/comm` to identify PID 1 as `systemd`, then
+reads `/proc/1/attr/current`. It accepts the exact AppArmor label `unconfined` (with
+an optional final newline); missing, oversized, malformed, differently
+confined, or unreadable values fail closed as HOLD before any probe launch.
+Only the boolean `system_manager_unconfined` is added to the bounded
+`preflight_summary.pin_checks`; the label text is never copied into evidence.
+The fake child tests this decision logic, but does not emulate the kernel's
+systemd descriptor opening or AppArmor profile transition. The target host
+must pass and record this preflight before first use.
+
 For each baseline/confined probe, the runner creates three distinct empty
 root-owned mode-0600 regular files with exclusive, no-follow creation inside
 the root-owned mode-0700 evidence directory. The transient service receives
 separate `StandardOutput=append:<json-path>` and
 `StandardError=append:<stderr-path>` properties, and `--pipe` is omitted. The
 system manager opens these paths before invoking the service executable and
-passes the resulting descriptors into the unit. The `www-data` process writes
-only through those descriptors; it does not need pathname access to the
+passes the resulting descriptors into the unit. This depends on the system
+manager being `unconfined`; the check above is mandatory. The `www-data`
+process writes only through those descriptors; it does not need pathname access to the
 root-only evidence directory. The `systemd-run` parent's own stderr is captured
 to the separate `<probe-stderr>.systemd-run` file, so launcher diagnostics
 cannot be mixed into the probe's traceback stream. All three paths are
