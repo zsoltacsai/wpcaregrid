@@ -73,6 +73,7 @@ jobs:
           python3 -B scripts/tests/production-route-audit-1-0-18-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-orchestrator-integrity-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-orchestrator-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-io-v2-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-report-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-bridge-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-evidence-export-test.py

@@ -13,7 +13,7 @@ import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post'
+ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2'
 PACKAGE = ROOT / 'deploy/php-fpm-confinement/1.0.16'
 EXPECTED = {
     'package_tree': '442fa9ab4e82652a70f997238ad5d98e11ade5b9',
@@ -51,8 +51,10 @@ class OrchestratorIntegrityTests(unittest.TestCase):
         pins = json.loads((ARTIFACT / 'PINNED_INPUTS.json').read_text())
         self.assertEqual(pins, {
             'schema': 1,
-            'artifact_kind': 'commit-pinned-acceptance-orchestrator',
+            'artifact_kind': 'commit-pinned-acceptance-orchestrator-io-v2',
             'acceptance_package_version': '1.0.16',
+            'probe_output_model': 'systemd-append-files-v1',
+            'minimum_systemd_major': 249,
             'acceptance_package_tree': EXPECTED['package_tree'],
             'package_sha256sums': EXPECTED['package_sha256sums'],
             'binding_json': EXPECTED['binding_json'],
@@ -75,6 +77,14 @@ class OrchestratorIntegrityTests(unittest.TestCase):
                     'PINNED_INPUTS.json', 'README.md'}
         self.assertEqual(set(manifest), expected)
         runbook = (ROOT / 'docs/PHP_FPM_CONFINEMENT_GO20_PHP85_1_0_16.md').read_text()
+        rel_artifact = ARTIFACT.relative_to(ROOT).as_posix()
+        artifact_tree = subprocess.run(
+            ['git', '-C', str(ROOT), 'rev-parse', f'HEAD:{rel_artifact}'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        tree_match = re.search(r"^ORCH_TREE='([0-9a-f]{40})'$", runbook, re.M)
+        self.assertIsNotNone(tree_match)
+        self.assertEqual(tree_match.group(1), artifact_tree)
         for name in ('acceptance-post.py', 'one_shot_bridge.py'):
             match = re.search(
                 rf"test \"\$\(sha256sum {re.escape(name)} \| cut -d' ' -f1\)\" = '([0-9a-f]{{64}})'",
