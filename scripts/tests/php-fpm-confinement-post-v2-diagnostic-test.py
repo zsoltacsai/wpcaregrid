@@ -529,6 +529,10 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         over_bound = HELPER._traceback_summary(b"x" * (HELPER._MAX_TRACEBACK_BYTES + 1))
         self.assertEqual(over_bound["status"], "OVER_BOUND")
         self.assertEqual(over_bound["parse_failure_stage"], "OVER_BOUND")
+        self.assertEqual(over_bound["next_line_category"], "OVER_BOUND")
+        malformed_utf8 = HELPER._traceback_summary(b"\xffraw-secret")
+        self.assertEqual(malformed_utf8["next_line_category"], "MALFORMED_UTF8")
+        self.assertNotIn("raw-secret", __import__("json").dumps(malformed_utf8))
         malformed = HELPER._traceback_summary(b"Traceback (most recent call last):\nnot a frame\nValueError: x")
         self.assertEqual(malformed["status"], "UNPARSEABLE")
         self.assertEqual(malformed["parse_failure_stage"], "FIRST_HEADER_SUFFIX_INVALID")
@@ -584,6 +588,26 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 self.assertNotIn("/root", rendered)
                 self.assertNotIn(raw.decode("utf-8"), rendered)
 
+    def test_rejected_post_exception_line_has_only_fixed_structural_category(self):
+        header = b"Traceback (most recent call last):\n"
+        frame = b'  File "/root/private/probe.py", line 8, in call\n'
+        exception = b"ValueError: raw-exception-secret\n"
+        cases = (
+            (b"During handling of the above exception, another exception occurred:", "EXACT_CHAIN_MARKER"),
+            (b"Traceback (most recent call last):", "EXACT_TRACEBACK_HEADER"),
+            (b"TypeError: raw-next-exception-secret", "VALID_EXCEPTION_SUMMARY"),
+            (b"launcher raw-next-line-secret", "OTHER_NONBLANK"),
+        )
+        for raw_line, expected in cases:
+            with self.subTest(category=expected):
+                summary = HELPER._traceback_summary(header + frame + exception + raw_line + b"\n")
+                self.assertEqual(summary["parse_failure_substage"], "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
+                self.assertEqual(summary["next_line_category"], expected)
+                self.assertEqual(summary["frame_count"], 0)
+                rendered = __import__("json").dumps(summary)
+                for forbidden in (raw_line.decode(), "raw-exception-secret", "/root/private"):
+                    self.assertNotIn(forbidden, rendered)
+
     def test_traceback_summary_accepts_only_complete_chained_suffix_after_prefix(self):
         prefix = b"systemd-run diagnostic prefix raw-prefix-secret\n"
         header = b"Traceback (most recent call last):\n"
@@ -632,7 +656,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
-            "frame_count": 0,
+            "frame_count": 0, "next_line_category": "OTHER_NONBLANK",
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-message", "raw-suffix-secret", "/root", raw.decode()):
@@ -682,7 +706,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
-            "frame_count": 0,
+            "frame_count": 0, "next_line_category": "EXACT_TRACEBACK_HEADER",
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-one", "raw-two", "/root", raw.decode()):
@@ -692,6 +716,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         invalid_encoding = HELPER._traceback_summary(b"\xffraw-secret")
         self.assertEqual(invalid_encoding, {
             "status": "UNPARSEABLE", "parse_failure_stage": "INVALID_ENCODING", "frame_count": 0,
+            "next_line_category": "MALFORMED_UTF8",
         })
         frame = b'  File "/safe/probe.py", line 1, in f\n'
         too_many_frames = HELPER._traceback_summary(
