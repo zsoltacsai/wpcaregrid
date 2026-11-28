@@ -98,9 +98,9 @@ those cases. Every failure keeps `frame_count=0`; no rejected line, path, or
 message is emitted.
 
 The immutable three-file bundle is installed side by side at
-`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-3`, using
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-4`, using
 `watchdog.py`, `helper.py`, and `bundle-manifest.json`. Do not replace the
-existing watchdog-2 installation. Verify the manifest, ownership, modes,
+existing watchdog-2 or watchdog-3 installation. Verify the manifest, ownership, modes,
 single-link regular files, and directory tree before any installation or use.
 The watchdog binds and executes the helper bytes it verified, enforces its
 hard deadline and output bounds, and rejects any report whose run id differs
