@@ -1323,17 +1323,32 @@ def _verifier_summary(stdout: bytes | None, stderr: bytes | None, matrix: dict,
     # unrecognized output must never resemble a zero-failure summary.
     rejected_count = int(rejected_match.group(1)) if rejected_match else None
     terminal_ok = False
-    if rejected_match and err_lines and err_lines[-1] == rejected_match.group(0):
+    ack_reason_count = sum((ack_required, ack_mismatch, ack_without_ids))
+    if ack_reason_count == 1 and ack_required:
+        terminal_ok = (
+            unproven_count is not None and unproven_count > 0
+            and len(err_lines) == 2
+            and err_lines[0] == "ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required"
+            and err_lines[1].startswith("ACK_REQUIRED=")
+        )
+    elif ack_reason_count == 1 and ack_mismatch:
+        terminal_ok = (
+            unproven_count is not None and unproven_count > 0
+            and len(err_lines) == 1
+            and err_lines[0] == "ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch"
+        )
+    elif ack_reason_count == 1 and ack_without_ids:
+        terminal_ok = (
+            unproven_count is None and len(err_lines) == 1
+            and err_lines[0] == "ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids"
+        )
+    elif rejected_match and not ack_reason_count and err_lines and err_lines[-1] == rejected_match.group(0):
         terminal_ok = rejected_count == len(failures) and rejected_count > 0
     elif consistent:
-        terminal_ok = not failures and not ack_required and not ack_mismatch and not ack_without_ids
-    elif ack_required and not failures:
-        terminal_ok = (unproven_count is not None and unproven_count > 0
-                       and len(err_lines) == 2 and err_lines[-1].startswith("ACK_REQUIRED="))
-    elif ack_mismatch and not failures:
-        terminal_ok = len(err_lines) == 1 and err_lines[-1] == "ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch"
-    elif ack_without_ids and not failures:
-        terminal_ok = len(err_lines) == 1 and err_lines[-1] == "ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids"
+        terminal_ok = (
+            not failures and not ack_reason_count and not err_lines
+            and len(out_lines) >= 2 and any(line.startswith("PASS ") for line in out_lines[:-1])
+        )
     if not terminal_ok:
         return {"status": "UNRECOGNIZED_OUTPUT", "fail_count": None, "failures": [],
                 "unproven_count": None, "ack_required": None, "raw_output_emitted": False}

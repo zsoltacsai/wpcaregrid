@@ -86,7 +86,6 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         stderr = (
             "ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required\n"
             f"ACK_REQUIRED=--ack-unproven={secret}\n"
-            "REJECTED: 2 failure(s)\n"
         ).encode()
         verifier = types.SimpleNamespace(
             expected_checks=lambda *_args: ({dynamic_id: ("peer", {})}, []))
@@ -134,6 +133,10 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             (b"   \n", b"\n", "UNRECOGNIZED_OUTPUT"),
             (b"", b"Traceback (most recent call last):\nValueError: private detail\n", "INVALID_FORMAT"),
             (b"PASS check: okay\n", b"", "UNRECOGNIZED_OUTPUT"),
+            (
+                b"EVIDENCE-CONSISTENT for this run only: kernel enforcement is shown by the PASS lines above, not by this tool.\n",
+                b"", "UNRECOGNIZED_OUTPUT",
+            ),
         ]
         for stdout, stderr, expected_status in cases:
             with self.subTest(stdout=stdout, stderr=stderr):
@@ -150,7 +153,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         marker = (
             "EVIDENCE-CONSISTENT for this run only: kernel enforcement is shown by the PASS lines above, not by this tool.\n"
         )
-        summary = HELPER._verifier_summary(marker.encode(), b"", {}, {"peers": {}}, verifier)
+        summary = HELPER._verifier_summary(b"PASS check: okay\n" + marker.encode(), b"", {}, {"peers": {}}, verifier)
         self.assertEqual(summary["status"], "PARSED")
         self.assertEqual(summary["fail_count"], 0)
         self.assertEqual(summary["reason_code"], "EVIDENCE_CONSISTENT")
@@ -165,7 +168,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 "ACK_REQUIRED",
             ),
             (
-                b"",
+                b"UNPROVEN_COUNT=1\nUNPROVEN_IDS=private-check\n",
                 b"ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch\n",
                 "ACK_MISMATCH",
             ),

@@ -177,11 +177,13 @@ alongside an unproven acknowledgment request, so this diagnostic does not
 create or supply an ACK and cannot change the original HOLD.
 
 The verifier-output summary is `PARSED` only when it sees a recognized terminal
-marker (`EVIDENCE-CONSISTENT` or a matching `REJECTED: N failure(s)` record),
-or a recognized acknowledgment-HOLD marker with a consistent unproven count.
-Empty, partial, traceback-only, PASS-lines-only, or otherwise unrecognized
-output remains `UNRECOGNIZED_OUTPUT`/UNKNOWN; it is never summarized as zero
-failures.
+marker (`EVIDENCE-CONSISTENT`, a matching `REJECTED: N failure(s)` record, or
+one of the exact acknowledgment-HOLD forms from the pinned verifier). The
+verifier returns from the acknowledgment gate before it emits `REJECTED`, so
+an ACK-HOLD may coexist with parsed hard FAIL records; the summary preserves
+both without treating the HOLD as acceptance. Empty, partial, traceback-only,
+PASS-lines-only, or otherwise unrecognized output remains
+`UNRECOGNIZED_OUTPUT`/UNKNOWN; it is never summarized as zero failures.
 
 Install the new three-file bundle immutably at
 `/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-9` only
