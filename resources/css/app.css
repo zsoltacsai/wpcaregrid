@@ -17,6 +17,8 @@
 @import 'tailwindcss';
 
 @source '../../storage/framework/views/*.php';
+/* Operational toolkit comments (frozen evidence scripts) are not class sources; keep them out of the committed bundle. */
+@source not '../../scripts/production-g1-go20-39';
 
 /*
  * WP CareGrid design tokens — source of truth: design/brand/DESIGN_TOKENS.css.

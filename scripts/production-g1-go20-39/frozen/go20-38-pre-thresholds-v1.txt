@@ -1,0 +1,141 @@
+# GO-20.38 Pre-Start / G-R1 Frozen Threshold Set v1.0 (thresholds.v1)
+# Document Reference: go20-38-prestart-poststart-DESIGN-v1.1.md Section 2 (PRE-5, B-B11)
+# Operating Rule: This file defines the frozen threshold set for the PRE-START / G-R1 script.
+# It is compiled into go20-38-pre-script.sh with NO argument or environment overrides.
+# Any unknown or unreadable source is UNKNOWN, and UNKNOWN is never green.
+# Every placeholder is explicitly marked 'OWNER TO RATIFY' and cross-referenced to Owner Checklist Q1-Q15.
+
+THRESHOLD_SET_NAME=thresholds.v1
+THRESHOLD_PLACEHOLDERS=10
+
+# -----------------------------------------------------------------------------
+# 1. Memory Headroom (PRE-5.1, PRE-5.7)
+# -----------------------------------------------------------------------------
+# Formula: MemAvailable >= G1_est + max(512 MiB, 15% of MemTotal)
+# where G1_est = innodb-buffer-pool-size + innodb-log-buffer-size + 512 MiB
+# Unit: Bytes (or MiB as specified)
+# Fallback constants if resolved server settings cannot be queried:
+#   default innodb-buffer-pool-size = 134217728 B (128 MiB)
+#   default innodb-log-buffer-size = 16777216 B (16 MiB)
+#   overhead constant = 536870912 B (512 MiB)
+#   safety margin floor = 536870912 B (512 MiB)
+#   safety margin pct = 15 %
+THRESHOLD_ID=T1_MEM_AVAILABLE
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Q11 RAM (MemTotal); resolved G1 MySQL parameters; 512 MiB overhead constant ratification
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 2. Swap Utilization (PRE-5.1)
+# -----------------------------------------------------------------------------
+# Rule: Swap in use <= 50%
+# where swap_in_use_pct = ((SwapTotal - SwapFree) * 100) / SwapTotal (if SwapTotal > 0)
+THRESHOLD_ID=T2_SWAP_USAGE_PCT
+THRESHOLD_VALUE_MAX_PCT=50
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Q11 Swap size; Owner ratification of 50% ceiling
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 3. Pressure Stall Information - Memory (PRE-5.2)
+# -----------------------------------------------------------------------------
+# Rule: /proc/pressure/memory: some avg60 <= 5.00, full avg60 <= 1.00
+# If PSI is absent from kernel/cgroup: result is UNKNOWN (not green -> STOP)
+THRESHOLD_ID=T3_PSI_MEMORY
+THRESHOLD_SOME_AVG60_MAX=5.00
+THRESHOLD_FULL_AVG60_MAX=1.00
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Owner ratification (no historical evidence base); PSI availability check
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 4. Pressure Stall Information - I/O (PRE-5.2)
+# -----------------------------------------------------------------------------
+# Rule: /proc/pressure/io: some avg60 <= 20.00
+# If PSI is absent from kernel/cgroup: result is UNKNOWN (not green -> STOP)
+THRESHOLD_ID=T4_PSI_IO
+THRESHOLD_SOME_AVG60_MAX=20.00
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Owner ratification (no historical evidence base); PSI availability check
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 5. Linux Asynchronous I/O Handles (PRE-5.5)
+# -----------------------------------------------------------------------------
+# Rule: /proc/sys/fs/aio-nr < 50% of /proc/sys/fs/aio-max-nr
+# (Addresses unresolved 2026-11-09 initialisation stall hypothesis)
+THRESHOLD_ID=T5_AIO_NR_PCT
+THRESHOLD_VALUE_MAX_PCT=50
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Owner ratification
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 6. CPU Load Average (PRE-5.2)
+# -----------------------------------------------------------------------------
+# Rule: loadavg1 < nproc
+# where loadavg1 is 1-minute load average from /proc/loadavg, nproc is available CPU threads
+THRESHOLD_ID=T6_LOADAVG1
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Q11 vCPU count (nproc)
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 7. Filesystem Capacity and Inodes (PRE-5.6)
+# -----------------------------------------------------------------------------
+# Rules:
+#   /var/lib: free space >= 2147483648 B (2 GiB), free inodes >= 10%
+#   /var/log: free space >= 524288000 B (500 MiB), free inodes >= 10%
+#   /var/tmp: free space >= 524288000 B (500 MiB), free inodes >= 10%
+#   /run:     free space >= 10485760 B (10 MiB), free inodes >= 10%
+THRESHOLD_ID=T7_DISK_AND_INODES
+THRESHOLD_VAR_LIB_MIN_BYTES=2147483648
+THRESHOLD_VAR_LOG_MIN_BYTES=524288000
+THRESHOLD_VAR_TMP_MIN_BYTES=524288000
+THRESHOLD_RUN_MIN_BYTES=10485760
+THRESHOLD_INODES_MIN_PCT=10
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Filesystem mount layout (H2/H4); cold archive size (evaluated after archive)
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 8. Background Timer Collision Window (PRE-7)
+# -----------------------------------------------------------------------------
+# Rule: NextElapseUSecRealtime of all systemd timers must not fall in [T0 - 5 min, T0 + 30 min]
+# Evaluates timers including apt-daily, apt-daily-upgrade, logrotate, systemd-tmpfiles-clean, fstrim.
+THRESHOLD_ID=T8_TIMER_COLLISION_WINDOW_SEC
+THRESHOLD_WINDOW_PRE_SEC=300
+THRESHOLD_WINDOW_POST_SEC=1800
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Planned execution window (PRE-9)
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 9. Temporary Directory Age (PRE-8)
+# -----------------------------------------------------------------------------
+# Rule: /var/tmp/wpcaregrid-production mtime age < 25 days
+# (Derived from systemd-tmpfiles 30-day cleanup cycle; directory created 2026-11-09)
+THRESHOLD_ID=T9_TMPDIR_MAX_AGE_DAYS
+THRESHOLD_VALUE_MAX_DAYS=25
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Planned execution date
+FAILURE_ACTION=STOP
+
+# -----------------------------------------------------------------------------
+# 10. Containment Triggers and Timing Limits (Doc B Section 3)
+# -----------------------------------------------------------------------------
+# Rules:
+#   Memory trigger: MemAvailable < 268435456 B (256 MiB) during start attempt -> immediate stop
+#   Helper command timeout: 120 s
+#   Helper poll timeout: 30 s
+#   Decision window cutoff: T_start_cmd + 150 s
+#   Postcheck containment stop timeout: 120 s
+THRESHOLD_ID=T10_CONTAINMENT_LIMITS
+THRESHOLD_CONTAINMENT_MEM_MIN_BYTES=268435456
+THRESHOLD_HELPER_TIMEOUT_SEC=120
+THRESHOLD_HELPER_POLL_SEC=30
+THRESHOLD_DECISION_CUTOFF_SEC=150
+THRESHOLD_CONTAINMENT_STOP_TIMEOUT_SEC=120
+STATUS=OWNER TO RATIFY (PLACEHOLDER)
+NEEDS=Q11 RAM; Owner ratification of containment timings
+FAILURE_ACTION=STOP
