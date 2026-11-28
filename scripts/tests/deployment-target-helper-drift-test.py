@@ -50,7 +50,17 @@ class HelperDriftTests(unittest.TestCase):
         for path in sorted((ROOT / "scripts").glob("staging_next_deploy_backend*.py")):
             text = path.read_text(encoding="utf-8")
             self.assertIn(f'DATABASE = "{NEXT.database}"', text, path.name)
-            self.assertIn(f'application_link=Path("{NEXT.app_dir}")', text, path.name)
+            if path.name == "staging_next_deploy_backend_1_4_12.py":
+                self.assertIn('APPLICATION_ROOT = Path(_TARGET.app_dir)', text, path.name)
+                self.assertIn('APPLICATION_LINK = Path(_TARGET.application_link)', text, path.name)
+                contract = (ROOT / "scripts" / "deployment_environment_contract_1_4_12.py").read_text(encoding="utf-8")
+                self.assertIn(f'app_root="{NEXT.app_dir}"', contract, path.name)
+                self.assertIn('application_link="/var/www/wpcaregrid-staging-next-current"',
+                              contract, path.name)
+                self.assertIn("application_root=APPLICATION_ROOT", text, path.name)
+                self.assertIn("application_link=APPLICATION_LINK", text, path.name)
+            else:
+                self.assertIn(f'application_link=Path("{NEXT.app_dir}")', text, path.name)
 
     def test_latest_backend_directories_stay_inside_the_binding_state_root(self):
         text = (ROOT / "scripts" / "staging_next_deploy_backend_1_4_8.py").read_text(encoding="utf-8")
