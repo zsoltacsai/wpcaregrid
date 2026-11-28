@@ -1,0 +1,135 @@
+# wpcaregrid-php-fpm-confinement 1.0.12 -- nginx (nginx.service), edge peer on the shared www-data UID
+# Install as /etc/apparmor.d/wpcaregrid-nginx. Selected only by AppArmorProfile= in the
+# nginx.service drop-in; no attachment path. Allowlist profile.
+# nginx workers run as www-data like every FPM pool, so an unconfined nginx could read either
+# environment's group-readable .env and storage. This profile lets nginx read only public web
+# roots (resolved paths), its configuration/TLS material, its logs and the FastCGI sockets, and
+# denies both environments' secrets, config caches, application code and storage.
+# `public/storage` (Laravel storage link) is intentionally NOT served: the target is denied.
+# Sibling vhost roots outside the patterns below fail closed (403/404) until a reviewed addition.
+# The packaged nginx.service helper commands (for example start-stop-daemon) run under this
+# profile; record `systemctl cat nginx.service` first and do not widen without complain-mode evidence.
+# Source artifact: not installed or loaded by the repository.
+#include <tunables/global>
+
+profile wpcaregrid-nginx flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  capability net_bind_service,
+  capability setuid,
+  capability setgid,
+  capability chown,
+  capability kill,
+  capability sys_resource,
+
+  /usr/sbin/nginx mrix,
+  /usr/sbin/start-stop-daemon ix,
+  /usr/lib/nginx/modules/{,**} mr,
+  /usr/lib/x86_64-linux-gnu/** mr,
+  /usr/share/nginx/{,**} r,
+  /etc/nginx/nginx.conf r,
+  /etc/nginx/mime.types r,
+  /etc/nginx/fastcgi_params r,
+  /etc/nginx/modules-enabled/{,**} r,
+  # Ubuntu's packaged nginx.conf always globs conf.d; permit directory enumeration only.
+  /etc/nginx/conf.d/ r,
+  /etc/nginx/snippets/ r,
+  /etc/nginx/sites-enabled/ r,
+  /etc/nginx/sites-enabled/wpcaregrid-production r,
+  /etc/nginx/sites-available/wpcaregrid-production r,
+  /etc/mime.types r,
+  /etc/localtime r,
+  /etc/letsencrypt/live/wpcaregrid.com/{fullchain.pem,privkey.pem} r,
+  /etc/letsencrypt/archive/wpcaregrid.com/{fullchain[0-9]*.pem,privkey[0-9]*.pem} r,
+  /run/nginx.pid rw,
+  /var/log/nginx/{,**} rw,
+  /var/lib/nginx/{,**} rwk,
+  /proc/sys/net/core/somaxconn r,
+
+  # Public web roots only, on resolved paths. `current` and legacy symlinks resolve into these.
+  /var/www/wpcaregrid-production/releases/*/public/{,**} r,
+
+
+  # FastCGI upstream sockets only.
+  /run/php/wpcaregrid-production-php8.5-fpm.sock rw,
+
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  network netlink raw,
+
+  signal (send, receive) peer=wpcaregrid-nginx,
+  signal (receive) peer=unconfined,
+
+  # Explicit audited denials: both environments' secrets, config caches, code and storage.
+  audit deny /var/www/**/.env* rwklm,
+  audit deny /var/www/*/{storage,bootstrap,config,database,app,routes}/{,**} rwklm,
+  audit deny /var/www/*/releases/*/{storage,bootstrap,config,database,app,routes}/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/*/releases/*/{storage,bootstrap,config,database,app,routes}/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/*/shared/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid-deploy/*/{incoming,inbox,receipts,database-backups}/{,**} rwklm,
+  audit deny /var/lib/wpcaregrid/{,**} w,
+  audit deny /var/log/wpcaregrid-production/{,**} rwklm,
+  audit deny /etc/wpcaregrid-deploy/{,**} rwklm,
+  audit deny /home/{,**} rwklm,
+  audit deny /root/{,**} rwklm,
+  audit deny /etc/mysql/{,**} rwklm,
+  audit deny /var/lib/mysql*/{,**} rwklm,
+  audit deny /run/mysqld/{,**} rwklm,
+  audit deny /etc/shadow* rwklm,
+  audit deny /run/php/php-fpm.sock rwklm,
+  audit deny /run/php/php8.4-fpm.{sock,pid} rwklm,
+
+  # Process inspection, tracing and abstract sockets, as in the FPM profiles.
+  audit deny ptrace,
+  audit deny capability sys_ptrace,
+  deny capability sys_admin,
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability net_admin,
+  deny capability net_raw,
+  deny mount,
+  deny umount,
+  deny remount,
+  deny pivot_root,
+  deny dbus,
+  deny network inet raw,
+  deny network inet6 raw,
+  deny network packet,
+  audit deny unix (connect, send, receive) peer=(addr=@**),
+  audit deny unix (bind, listen, accept) addr=@**,
+  audit deny /proc/[0-9]*/cmdline r,
+  audit deny /proc/[0-9]*/environ r,
+  audit deny /proc/[0-9]*/mem rw,
+  audit deny /proc/[0-9]*/{fd,fdinfo,ns,task}/{,**} rw,
+  audit deny /proc/[0-9]*/{cwd,root,exe} rwklm,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-fpm-production,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-fpm-production,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-fpm-production,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-fpm-staging-next,
+  audit deny signal (send) peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-fpm-staging-legacy,
+  audit deny signal (send) peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-cli-staging,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-cli-staging,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-cli-staging,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-deploy,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-cli-production-deploy,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-cli-production-deploy,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-cli-production-deploy,
+  audit deny signal (send) peer=wpcaregrid-php-cli-production-build,
+  audit deny signal (send) peer=unconfined//&wpcaregrid-php-cli-production-build,
+  audit deny signal (send) set=("exists") peer=wpcaregrid-php-cli-production-build,
+  audit deny signal (send) set=("exists") peer=unconfined//&wpcaregrid-php-cli-production-build,
+}
