@@ -155,6 +155,35 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary["fail_count"], 0)
         self.assertEqual(summary["reason_code"], "EVIDENCE_CONSISTENT")
 
+    def test_verifier_summary_accepts_ack_hold_terminal_shapes_without_exposing_payload(self):
+        verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
+        ack_payload = "a" * 64 + ":" + "b" * 32 + ":post:nginx:" + "c" * 64 + ":check-one"
+        cases = [
+            (
+                f"UNPROVEN_COUNT=1\nUNPROVEN_IDS=private-check\n".encode(),
+                f"ACCEPTANCE=HOLD;REASON=owner_unproven_ack_required\nACK_REQUIRED=--ack-unproven={ack_payload}\n".encode(),
+                "ACK_REQUIRED",
+            ),
+            (
+                b"",
+                b"ACCEPTANCE=HOLD;REASON=unproven_ack_mismatch\n",
+                "ACK_MISMATCH",
+            ),
+            (
+                b"",
+                b"ACCEPTANCE=HOLD;REASON=unproven_ack_without_unproven_ids\n",
+                "ACK_WITHOUT_IDS",
+            ),
+        ]
+        for stdout, stderr, reason_code in cases:
+            with self.subTest(reason_code=reason_code):
+                summary = HELPER._verifier_summary(stdout, stderr, {}, {"peers": {}}, verifier)
+                self.assertEqual(summary["status"], "PARSED")
+                self.assertEqual(summary["reason_code"], reason_code)
+                self.assertEqual(summary["fail_count"], 0)
+                self.assertNotIn(ack_payload, __import__("json").dumps(summary))
+                self.assertNotIn("private-check", __import__("json").dumps(summary))
+
     def test_verifier_summary_rejects_terminal_count_mismatch(self):
         verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
         summary = HELPER._verifier_summary(
