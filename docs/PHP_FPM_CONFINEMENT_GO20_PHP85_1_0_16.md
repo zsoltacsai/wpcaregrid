@@ -26,7 +26,7 @@ The 1.0.16 regression test checks package checksums and binding, the exact matri
 
 The complete four-profile live procedure is implemented by the separate
 commit-pinned artifact at
-`deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v3/`. This is not package
+`deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v4/`. This is not package
 1.0.17: the 1.0.16 acceptance inputs, runtime files, profiles, units, route,
 and verifier contract do not change. The Git commit containing this artifact,
 its artifact-tree object, and the artifact `SHA256SUMS` are the outer
@@ -35,7 +35,7 @@ immutable pins. The artifact's `PINNED_INPUTS.json` binds it to the exact
 sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 `/tmp` copy or a runner from a mutable worktree.
 
-The `1.0.16-post-io-v3` runner is a side-by-side successor; the installed
+The `1.0.16-post-io-v4` runner is a side-by-side successor; the installed
 `1.0.16-post` and `1.0.16-post-io-v2` bundles remain untouched. It avoids merging systemd-run's own
 stderr with the probe traceback by routing the transient service's stdout and
 stderr through separate pre-created root-only append files, while capturing
@@ -43,7 +43,7 @@ the systemd-run client's stderr in its own evidence file. It requires
 systemd 249+ (`append:` stream support) and bounds each transient probe unit
 with `TimeoutStartSec=10s`, `RuntimeMaxSec=75s`, and `TimeoutStopSec=5s`. It leaves every installed production profile and unit unchanged. Its fixed probe-only overlay is documented below.
 
-The v3 runner also applies the narrowly scoped fix for the observed confined-probe `PermissionError` in `starttime_ticks()`: it appends `owner @{PROC}/@{pid}/stat r,` only to the generated, run-scoped probe profile. The owner qualifier restricts access to same-UID proc entries; the existing `audit deny ptrace` remains unchanged and no ptrace grant is added. No adaptive permission grant is used. The v2 runner remains immutable and must not be used for a retry after this failure.
+The v4 runner retains the narrowly scoped fix for the observed confined-probe `PermissionError` in `starttime_ticks()`: it appends `owner @{PROC}/@{pid}/stat r,` only to the generated, run-scoped probe profile. The owner qualifier restricts access to same-UID proc entries; the existing `audit deny ptrace` remains unchanged and no ptrace grant is added. No adaptive permission grant is used. The v2 and v3 runners remain immutable. For the existing v3 run, the bounded diagnostic found two probe-profile `open` events before Python entered `main`; v4 adds `-S` to the transient interpreter command so Python does not initialize `site` or site customizations before the probe window begins. This does not relax the verifier: any unexplained event still fails the run.
 
 ### Read-only origin route review artifact
 
@@ -143,10 +143,10 @@ path before extraction. Run as root from the trusted existing checkout, with
 ```sh
 set -euo pipefail
 ORCH_COMMIT='<exact reviewed merge commit>'
-ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v3'
-ORCH_TREE='598e876877c69783bb81507919c88cfd1f57657b'
+ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v4'
+ORCH_TREE='afae8ec6dfc612e697e8bfd741764749c84997f7'
 test "$(git -C /home/deploy/wpcaregrid rev-parse "$ORCH_COMMIT:$ORCH_REL")" = "$ORCH_TREE"
-DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v3'
+DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v4'
 BASE='/usr/local/libexec/wpcg-gate2-orchestrators'
 test -d /usr/local/libexec && test ! -L /usr/local/libexec
 test "$(stat -c '%u:%g:%a' /usr/local/libexec)" = '0:0:755'
@@ -180,9 +180,9 @@ for file in "$DEST"/*; do
 done
 cd "$DEST"
 sha256sum -c --strict SHA256SUMS
-test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = 'e05902253fe76acb55552b7326bc6eb8577ba2ff8f50cefe282a3514ed554c1e'
+test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '67dedb06dc4be0845f874d0b9da993ecf4c2eea21e2c6f600085b72a4bcc7f47'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
-test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'd99dd4b3f5a02ba98edaf6b75f17770645fdc8417ec1756a59f9666c7b00bb53'
+test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = '8e209c8d8bd8d26647e72c6d406fe3c0436d353859a7fbc1fa870ffd74fff712'
 ```
 
 Before proceeding, compare the staged file names to the exact artifact tree,
@@ -207,7 +207,7 @@ logs, or evidence. Example invocation (replace the file capability and the three
 already approved, exact host paths):
 
 ```sh
-python3 -B /usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v3/one_shot_bridge.py \
+python3 -B /usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v4/one_shot_bridge.py \
   --root-card-file '<one-use private-card file capability>' \
   --package-dir '/root/<existing staged package-1.0.16 path>' \
   --evidence-envelope '/root/<new 0700 evidence envelope>' \
