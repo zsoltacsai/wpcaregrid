@@ -13,11 +13,11 @@ import subprocess
 import sys
 import time
 
-TRUSTED_BUNDLE_DIR = "/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-3"
+TRUSTED_BUNDLE_DIR = "/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-4"
 WATCHDOG_NAME = "watchdog.py"
 HELPER_NAME = "helper.py"
 MANIFEST_NAME = "bundle-manifest.json"
-BUNDLE_VERSION = "1.0.16-post-watchdog-3"
+BUNDLE_VERSION = "1.0.16-post-watchdog-4"
 TRUSTED_FILE_MODE = 0o444
 MAX_BUNDLE_FILE_BYTES = 128_000
 HARD_DEADLINE_SECONDS = 90.0

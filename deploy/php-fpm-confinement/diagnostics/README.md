@@ -88,10 +88,19 @@ checks both the probe PID and its reported child PID, and labels that scope
 explicitly without changing verifier behavior. The
 report always fixes acceptance, verifier, and fixture cleanup to NOT_RUN.
 
+The follow-up traceback summary uses `next_line_category` for the rejected
+nonblank line when the separator after an exception summary was expected. Its
+line categories are `EXACT_CHAIN_MARKER`, `EXACT_TRACEBACK_HEADER`,
+`VALID_EXCEPTION_SUMMARY`, and `OTHER_NONBLANK`. For invalid UTF-8 or input
+beyond the fixed byte bound, the same field instead identifies the input
+condition as `MALFORMED_UTF8` or `OVER_BOUND`; no next line is classified in
+those cases. Every failure keeps `frame_count=0`; no rejected line, path, or
+message is emitted.
+
 The immutable three-file bundle is installed side by side at
-`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-3`, using
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-4`, using
 `watchdog.py`, `helper.py`, and `bundle-manifest.json`. Do not replace the
-existing watchdog-2 installation. Verify the manifest, ownership, modes,
+existing watchdog-2 or watchdog-3 installation. Verify the manifest, ownership, modes,
 single-link regular files, and directory tree before any installation or use.
 The watchdog binds and executes the helper bytes it verified, enforces its
 hard deadline and output bounds, and rejects any report whose run id differs

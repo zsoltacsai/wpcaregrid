@@ -574,6 +574,10 @@ _TRACEBACK_CHAIN_MARKERS = {
     "During handling of the above exception, another exception occurred:",
     "The above exception was the direct cause of the following exception:",
 }
+_TRACEBACK_NEXT_LINE_CATEGORIES = {
+    "EXACT_CHAIN_MARKER", "EXACT_TRACEBACK_HEADER", "VALID_EXCEPTION_SUMMARY",
+    "OTHER_NONBLANK", "MALFORMED_UTF8", "OVER_BOUND",
+}
 _MAX_TRACEBACK_BYTES = 65_536
 _MAX_TRACEBACK_FRAMES = 128
 _MAX_TRACEBACK_CONTEXT_LINES_PER_FRAME = 2
@@ -621,6 +625,17 @@ def _traceback_suffix_failure(status: str, substage: str) -> dict:
     return _traceback_failure(status, "FIRST_HEADER_SUFFIX_INVALID", substage=substage)
 
 
+def _traceback_next_line_category(line: str) -> str:
+    """Classify only the structural shape of one rejected nonblank line."""
+    if line in _TRACEBACK_CHAIN_MARKERS:
+        return "EXACT_CHAIN_MARKER"
+    if line == _TRACEBACK_HEADER:
+        return "EXACT_TRACEBACK_HEADER"
+    if _looks_like_exception_summary(line):
+        return "VALID_EXCEPTION_SUMMARY"
+    return "OTHER_NONBLANK"
+
+
 def _looks_like_frame_line(line: str) -> bool:
     return line.lstrip(" \t").startswith("File ")
 
@@ -643,12 +658,16 @@ def _traceback_summary(data: bytes | None) -> dict:
     if not data:
         return {"status": "EMPTY"}
     if len(data) > _MAX_TRACEBACK_BYTES:
-        return _traceback_failure("OVER_BOUND", "OVER_BOUND")
+        result = _traceback_failure("OVER_BOUND", "OVER_BOUND")
+        result["next_line_category"] = "OVER_BOUND"
+        return result
     try:
         _progress("TRACEBACK_PARSE")
         text = data.decode("utf-8", "strict")
     except UnicodeDecodeError:
-        return _traceback_failure("UNPARSEABLE", "INVALID_ENCODING")
+        result = _traceback_failure("UNPARSEABLE", "INVALID_ENCODING")
+        result["next_line_category"] = "MALFORMED_UTF8"
+        return result
     lines = text.splitlines()
     first_nonempty = next((i for i, line in enumerate(lines) if line.strip()), None)
     header_indexes = [i for i, line in enumerate(lines) if line == _TRACEBACK_HEADER]
@@ -730,7 +749,11 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
         # Python's formatter puts exactly one blank separator before and
         # after the exception-chain marker. Do not skip arbitrary lines.
         if lines[index] != "":
-            return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
+            failure = _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
+            category = _traceback_next_line_category(lines[index])
+            if category in _TRACEBACK_NEXT_LINE_CATEGORIES:
+                failure["next_line_category"] = category
+            return failure
         index += 1
         if index >= len(lines) or lines[index] not in _TRACEBACK_CHAIN_MARKERS:
             return _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_CHAIN_MARKER")
