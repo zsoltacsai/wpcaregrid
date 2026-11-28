@@ -561,7 +561,11 @@ def check_audit_hit(records: list, used: set, probe_profile: str, boot: str, res
                          name={target, target.rstrip("/"), target.rstrip("/") + "/"})
         return hit if hit is not None else window_hit(*args, {"ptrace"}, peer=role_profile[item["role"]])
     if kind == "peer-signal":
-        return window_hit(*args, {"signal"}, peer=role_profile[item["role"]])
+        # This result is specifically kill(pid, 0), represented by AppArmor's
+        # `exists` signal. Do not let a different denied signal to the same peer
+        # satisfy the PID-existence check.
+        return window_hit(*args, {"signal"}, peer=role_profile[item["role"]],
+                          fields={"signal": "exists", "requested_mask": "send"})
     if kind == "peer-vm":
         return window_hit(*args, {"ptrace"}, peer=role_profile[item["role"]])
     if ident == "calibration:child-environ":

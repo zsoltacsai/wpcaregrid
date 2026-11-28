@@ -59,6 +59,7 @@ class Gate218VerifierTests(unittest.TestCase):
         new_files = {p.relative_to(PKG).as_posix() for p in PKG.rglob("*") if p.is_file()}
         self.assertEqual(new_files, previous_files)
         permitted = {"binding.json", "acceptance/matrix.json", "SHA256SUMS",
+                     "acceptance/verify-acceptance.py",
                      "apparmor/wpcaregrid-nginx", "apparmor/wpcaregrid-php-fpm-production",
                      "apparmor/wpcaregrid-php-cli-production-build", "apparmor/wpcaregrid-php-cli-production-deploy"}
         for rel in sorted(new_files):
@@ -106,7 +107,9 @@ class Gate218VerifierTests(unittest.TestCase):
                 if not line.startswith("  audit deny signal (send) peer="):
                     continue
                 peer = line.split("peer=", 1)[1].removesuffix(",")
-                if peer == "unconfined":
+                # Stacked rules are asserted from their bare peer below; do not
+                # derive a second, doubly-stacked peer from them.
+                if peer == "unconfined" or peer.startswith("unconfined//&"):
                     continue
                 expected = f'  audit deny signal (send) set=("exists") peer={peer},'
                 self.assertIn(expected, text, (profile.name, peer))
@@ -239,6 +242,19 @@ class Gate218VerifierTests(unittest.TestCase):
             result["errno"] = 0
         verdict, _ = verify_all(mutate=signal_allowed)
         self.assertTrue(any("confined access not refused" in f for f in verdict.failures), verdict.failures[:8])
+
+    def test_peer_signal_check_cannot_bind_a_different_denied_signal(self):
+        def wrong_signal(state):
+            rows = []
+            for line in state["audit"].splitlines():
+                entry = json.loads(line)
+                if 'operation="signal"' in entry.get("MESSAGE", ""):
+                    entry["MESSAGE"] = entry["MESSAGE"].replace('signal="exists"', 'signal="term"')
+                rows.append(json.dumps(entry))
+            state["audit"] = "\n".join(rows)
+        verdict, _ = verify_all(mutate=wrong_signal)
+        self.assertTrue(any("no AppArmor DENIED record binds" in f for f in verdict.failures),
+                        verdict.failures[:8])
 
     def test_matrix_rejects_symlink_loop_and_unsupported_deny_contract(self):
         bad = json.loads(MATRIX_TEXT)

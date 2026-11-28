@@ -7,8 +7,8 @@ PKG = pathlib.Path('/')
 ENVELOPE = pathlib.Path('/')
 ROUTE_CLOSURE_EVIDENCE = pathlib.Path('/')
 EXPECTED = {
- 'package_tree':'beaf9f9e88b2c1fdf71b71bb40eee22c411c8615',
- 'sums':'e7a13d9fcc824f38bbf5f63f1c838546188f73ce71a7fdcb143e3e85868933ae',
+ 'package_tree':'c7af9368f04b2d37b4212207bd98bbcae016a691',
+ 'sums':'64ead7d9965f80cb0eca3c430c540f7e65aaf96d2a120df6010a33e8c1ec29ab',
  'binding':'b165359cff0ce415458c98ac6588f34b267553687db9d0289d0e0a4d2d75cc5c',
  'matrix':'211872a8cf04b21a964ac06a07ddde46f43d6eab88aea9131eec4be1b2b28b24',
  'collector':'ff70498c54223c2d533c352cd422835bcc9c1354a29c5e96269010c61e4fbba7',
@@ -16,7 +16,7 @@ EXPECTED = {
  'probe':'5cde081b25341f804f828f18615bc868b30bba1c70454dc1cbf6bc09ac9ff0af',
  'sender':'76940755668615cc7e2fbdcd236b04019f084d8ea7ac3599158dffcb7b9a85ac',
  'listener':'88046b95ef7eeaae3984c77d17a1abf5be969654556e32a8ad21fe8b0de95ea0',
- 'verifier':'1d22c8dd9f25524382af4b84ceb3b263bfb10c56524219e3b0abadad52ff05ac',
+ 'verifier':'ab60a828a3d778fecc3798a7931b98d5db0ac1ab1244967dcb234262192c0b12',
  'fixtures':'e5cc5ee6dc8c60549bb4b8acd63ab6a22487e3edf288b67d1e3bc640191e8ebd',
 }
 SENDER = pathlib.Path('/usr/local/libexec/wpcaregrid-php-fpm-harness/1.0.18/fd-sender.py')

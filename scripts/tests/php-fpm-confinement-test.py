@@ -1592,7 +1592,8 @@ def synthetic_run(profile: str, phase: str = "post"):
                 elif kind in ("peer", "peer-vm"):
                     event(mid, operation="ptrace", peer=matrix["role_profiles"][item["role"]], pid=actor)
                 elif kind == "peer-signal":
-                    event(mid, operation="signal", peer=matrix["role_profiles"][item["role"]], pid=actor)
+                    event(mid, operation="signal", peer=matrix["role_profiles"][item["role"]],
+                          signal="exists", requested_mask="send", denied_mask="send", pid=actor)
                 elif ident == "calibration:child-environ":
                     event(mid, operation="open", name=f"/proc/{child}/environ", pid=actor)
                 else:

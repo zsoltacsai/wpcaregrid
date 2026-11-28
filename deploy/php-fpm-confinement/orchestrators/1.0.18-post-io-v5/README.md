@@ -108,7 +108,7 @@ remains HOLD and requires its own reviewed change.
 ## Inputs
 
 * `--package-dir`: the independently staged, root-owned 1.0.18 package whose
-  package tree is `1311127fcc379c27f154c61bfcf3b439a5099356`.
+  package tree is `c7af9368f04b2d37b4212207bd98bbcae016a691`.
 * `--evidence-envelope`: an existing root:root mode-0700 directory. The
   runner creates a unique 0700 evidence subdirectory and writes raw evidence
   there only.
