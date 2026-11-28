@@ -127,7 +127,9 @@ class Gate218VerifierTests(unittest.TestCase):
                 if not line.startswith("  audit deny signal (send) peer="):
                     continue
                 peer = line.split("peer=", 1)[1].removesuffix(",")
-                if peer == "unconfined":
+                # The profile may already contain the explicit stacked-peer
+                # rule. Check stacked coverage from the bare rule only.
+                if peer == "unconfined" or peer.startswith("unconfined//&"):
                     continue
                 self.assertIn(f"  audit deny signal (send) peer=unconfined//&{peer},", text)
                 self.assertIn(f'  audit deny signal (send) set=("exists") peer={peer},', text)
