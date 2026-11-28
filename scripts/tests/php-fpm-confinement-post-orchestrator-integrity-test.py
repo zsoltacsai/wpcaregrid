@@ -6,7 +6,6 @@ import hashlib
 import importlib.util
 import json
 import pathlib
-import re
 import stat
 import subprocess
 import sys
@@ -76,22 +75,15 @@ class OrchestratorIntegrityTests(unittest.TestCase):
         expected = {'acceptance-post.py', 'one_shot_bridge.py', 'pty_io.py',
                     'PINNED_INPUTS.json', 'README.md'}
         self.assertEqual(set(manifest), expected)
-        runbook = (ROOT / 'docs/PHP_FPM_CONFINEMENT_GO20_PHP85_1_0_16.md').read_text()
         rel_artifact = ARTIFACT.relative_to(ROOT).as_posix()
         artifact_tree = subprocess.run(
             ['git', '-C', str(ROOT), 'rev-parse', f'HEAD:{rel_artifact}'],
             check=True, capture_output=True, text=True,
         ).stdout.strip()
-        tree_match = re.search(r"^ORCH_TREE='([0-9a-f]{40})'$", runbook, re.M)
-        self.assertIsNotNone(tree_match)
-        self.assertEqual(tree_match.group(1), artifact_tree)
-        for name in ('acceptance-post.py', 'one_shot_bridge.py'):
-            match = re.search(
-                rf"test \"\$\(sha256sum {re.escape(name)} \| cut -d' ' -f1\)\" = '([0-9a-f]{{64}})'",
-                runbook,
-            )
-            self.assertIsNotNone(match, name)
-            self.assertEqual(match.group(1), manifest[name], name)
+        # This is an immutable historical v2 bundle. The current runbook pins
+        # the v3 successor, so its active-runner pins are checked by the v3
+        # integrity test rather than compared to this retired bundle.
+        self.assertEqual(artifact_tree, 'c10e1112a463add9012381c54ead3ff291d6b931')
         self.assertEqual({p.name for p in ARTIFACT.iterdir()} - {'SHA256SUMS'}, expected)
         for name in sorted(expected):
             path = ARTIFACT / name
