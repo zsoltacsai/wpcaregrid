@@ -956,12 +956,14 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
                    *, unavailable_reason: str = "confined-json-unavailable") -> dict:
     if data is None:
         return {"status": "ABSENT_OR_UNBOUND", "denied_record_count": None, "check_correlation": "UNKNOWN",
+                "unconsumed_profile_records": {"status": "UNKNOWN", "record_count": None, "groups": []},
                 "pid_profile_window": {"status": "UNKNOWN", "reason_code": "audit-absent"}, "reason_code": "audit-absent"}
     try:
         _progress("AUDIT_SUMMARY")
         records, problems = verifier.parse_audit(data.decode("utf-8"))
     except Exception:
         return {"status": "INVALID_AUDIT", "denied_record_count": None, "check_correlation": "UNKNOWN",
+                "unconsumed_profile_records": {"status": "UNKNOWN", "record_count": None, "groups": []},
                 "pid_profile_window": {"status": "UNKNOWN", "reason_code": "audit-parse-failed"}, "reason_code": "audit-parse-failed"}
     reasons = set()
     for problem in problems:
@@ -984,6 +986,7 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
         )
         return {"status": "PARSED", "denied_record_count": denied_count, "probe_profile_record_count": None,
                 "same_boot_count": None, "run_lifetime_count": None, "check_correlation": "UNKNOWN",
+                "unconsumed_profile_records": {"status": "UNKNOWN", "record_count": None, "groups": []},
                 "pid_profile_window": {
                     "status": "PARTIAL_RUN_ENVELOPE_ONLY",
                     "profile_record_count": len(profile_records),

@@ -165,8 +165,19 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         report = HELPER._audit_summary(b"synthetic", None, None, {}, verifier)
         self.assertEqual(report["pid_profile_window"]["probe_pid_correlation"], "UNKNOWN_CONFINED_JSON_UNAVAILABLE")
         self.assertEqual(report["pid_profile_window"]["probe_window_correlation"], "UNKNOWN_CONFINED_JSON_UNAVAILABLE")
+        self.assertEqual(report["unconsumed_profile_records"], {
+            "status": "UNKNOWN", "record_count": None, "groups": [],
+        })
         self.assertNotIn(secret, __import__("json").dumps(report))
         self.assertNotIn("42", __import__("json").dumps(report))
+
+    def test_unconsumed_audit_field_is_stable_for_absent_or_invalid_input(self):
+        expected = {"status": "UNKNOWN", "record_count": None, "groups": []}
+        absent = HELPER._audit_summary(None, None, None, {}, types.SimpleNamespace())
+        invalid = HELPER._audit_summary(b"raw-private", None, None, {},
+                                        types.SimpleNamespace(parse_audit=lambda _text: (_ for _ in ()).throw(ValueError())))
+        self.assertEqual(absent["unconsumed_profile_records"], expected)
+        self.assertEqual(invalid["unconsumed_profile_records"], expected)
 
     def test_audit_window_correlation_checks_parent_then_child_pid(self):
         boot = "a" * 32
