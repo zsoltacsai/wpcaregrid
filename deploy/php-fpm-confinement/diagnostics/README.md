@@ -91,16 +91,20 @@ report always fixes acceptance, verifier, and fixture cleanup to NOT_RUN.
 The follow-up traceback summary uses `next_line_category` for the rejected
 nonblank line when the separator after an exception summary was expected. Its
 line categories are `EXACT_CHAIN_MARKER`, `EXACT_TRACEBACK_HEADER`,
-`VALID_EXCEPTION_SUMMARY`, and `OTHER_NONBLANK`. For invalid UTF-8 or input
-beyond the fixed byte bound, the same field instead identifies the input
-condition as `MALFORMED_UTF8` or `OVER_BOUND`; no next line is classified in
-those cases. Every failure keeps `frame_count=0`; no rejected line, path, or
-message is emitted.
+`VALID_EXCEPTION_SUMMARY`, `EXCEPTION_IGNORED_PREFIX`, `FRAME_LIKE_LINE`,
+`INDENTED_LINE`, `GENERIC_ERROR_PREFIX`, and `OTHER_NONBLANK`. For invalid
+UTF-8 or input beyond the fixed byte bound, the same field instead identifies
+the input condition as `MALFORMED_UTF8` or `OVER_BOUND`; no next line is
+classified in those cases. On this separator failure only, the parser also
+returns the exception class if it is in its fixed class allowlist, otherwise
+`OTHER_EXCEPTION`. This identifies the parsed exception summary, not its
+message or cause. Every failure keeps `frame_count=0`; no rejected line, path,
+message, source line, or arbitrary exception class is emitted.
 
 The immutable three-file bundle is installed side by side at
-`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-4`, using
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-5`, using
 `watchdog.py`, `helper.py`, and `bundle-manifest.json`. Do not replace the
-existing watchdog-2 or watchdog-3 installation. Verify the manifest, ownership, modes,
+existing watchdog-2, watchdog-3, or watchdog-4 installation. Verify the manifest, ownership, modes,
 single-link regular files, and directory tree before any installation or use.
 The watchdog binds and executes the helper bytes it verified, enforces its
 hard deadline and output bounds, and rejects any report whose run id differs
