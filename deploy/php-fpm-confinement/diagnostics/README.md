@@ -133,3 +133,23 @@ side-by-side only after exact-head review and CI. Preserve watchdog-2 through
 watchdog-5 installations. The helper may read only the already-existing
 c90b29 evidence once; it must not rerun acceptance, probes, verifier, or
 cleanup. Its result remains diagnostic and cannot establish Gate 2 PASS.
+
+## One-run v3 audit-window diagnostic
+
+The side-by-side `1.0.16-post-v3` bundle is pinned to the existing run
+`acceptance-1.0.16-post-20261128T113529Z-2267ca` in envelope
+`/root/wpcg-gate2-post-io-v3-20261128.dPGRP6`. It adds only a redacted summary
+of unconsumed audit rows for the pinned probe profile. Rows are grouped by
+fixed process class (`PROBE`, `CHILD`, `OTHER_PID`), relation to the confined
+probe window, and an allowlisted operation token (otherwise
+`OTHER_OPERATION`). It never emits PID values, target names, peers, audit
+serials, raw lines, or exception text. The grouping is diagnostic only and
+does not alter audit input or verifier behavior; the acceptance verdict and
+fixture cleanup remain `NOT_RUN`.
+
+Install the three-file bundle at
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-7` only
+after exact-head CI and independent review. Keep watchdog-2 through watchdog-6
+immutable. The helper reads only the exact v3 run and pinned 1.0.16 package,
+uses the pinned verifier's parse/correlation helpers without calling
+`verify()`, and is not a substitute for a complete acceptance run.
