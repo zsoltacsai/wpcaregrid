@@ -1223,7 +1223,9 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
             elif ident == "calibration:child-environ":
                 used_match = verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/environ")
             elif ident == "calibration:child-maps":
-                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile) or verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/maps")
+                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
+                if used_match is None:
+                    used_match = verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/maps")
             else:
                 used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
             if used_match is None and type(child) is int and child > 0 and child != pid:
@@ -1247,7 +1249,9 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
                 elif ident == "calibration:child-environ":
                     used_match = verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/environ")
                 elif ident == "calibration:child-maps":
-                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile) or verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/maps")
+                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile)
+                    if used_match is None:
+                        used_match = verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/maps")
                 else:
                     used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile)
         except Exception:

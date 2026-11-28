@@ -225,6 +225,16 @@ class Gate217VerifierTests(unittest.TestCase):
         bad["role_profiles"]["orphan"] = "unused-profile"
         self.assertTrue(any("no corresponding systemd unit" in p for p in verifier.identity_problems(bad)))
 
+    def test_matrix_rejects_shared_or_undeclared_role_profiles(self):
+        bad = json.loads(MATRIX_TEXT)
+        bad["role_profiles"]["nginx"] = bad["role_profiles"]["production"]
+        self.assertTrue(any("two roles share one AppArmor profile" in p
+                            for p in verifier.identity_problems(bad)))
+        bad = json.loads(MATRIX_TEXT)
+        bad["role_profiles"]["nginx"] = "ghost-profile"
+        self.assertTrue(any("not declared in matrix profiles" in p
+                            for p in verifier.identity_problems(bad)))
+
     def test_malformed_null_layout_and_socket_path_fail_closed(self):
         bad = json.loads(MATRIX_TEXT)
         bad["profiles"]["wpcaregrid-nginx"]["layout"] = None

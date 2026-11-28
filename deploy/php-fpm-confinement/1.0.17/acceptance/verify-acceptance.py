@@ -142,12 +142,13 @@ def identity_problems(matrix: dict) -> list:
         return problems + ["matrix role profile map is malformed"]
     if not set(profiles).issubset(units):
         problems.append("a role profile has no corresponding systemd unit")
-    fpm_roles = [r for r in runtime if r in profiles]
-    if len({profiles[r] for r in fpm_roles}) != len(fpm_roles):
-        problems.append("two FPM roles share one AppArmor profile")
+    if len(set(profiles.values())) != len(profiles):
+        problems.append("two roles share one AppArmor profile")
     matrix_profiles = matrix.get("profiles")
     if not isinstance(matrix_profiles, dict) or not matrix_profiles:
         return problems + ["matrix profiles map is malformed"]
+    if not set(profiles.values()).issubset(matrix_profiles):
+        problems.append("a role profile is not declared in matrix profiles")
     for profile, spec in matrix_profiles.items():
         if not isinstance(spec, dict):
             problems.append(f"profile {profile!r} is not an object")

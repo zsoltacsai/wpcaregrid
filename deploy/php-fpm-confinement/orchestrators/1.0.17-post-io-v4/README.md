@@ -1,14 +1,15 @@
 # Gate 2 post orchestrator for package 1.0.17 (I/O v4, isolated probe startup)
 
-This is a separate, commit-pinned operations artifact. It is not a new
-confinement-package version: it does not change the 1.0.17 matrix, probes,
-profiles, units, runtime bytes, fixture semantics, or verifier contract. A new
-package such as 1.0.17 would be appropriate only if one of those acceptance
-inputs changed. The source commit and this directory's `SHA256SUMS` pin this
-orchestrator; `PINNED_INPUTS.json` binds it to immutable package 1.0.17.
+This is a separate, commit-pinned operations artifact bound to the immutable
+1.0.17 acceptance package. Package 1.0.17 is a verifier-only successor to
+1.0.16: it changes the binding, matrix package version, verifier, and checksum
+manifest while preserving the runtime profiles, service units, probes, fixture
+tools, and production configuration. This orchestrator does not modify those
+package inputs. The source commit and this directory's `SHA256SUMS` pin the
+orchestrator; `PINNED_INPUTS.json` binds it to the exact package tree.
 
-This side-by-side runner leaves the prior `1.0.16-post`, `1.0.16-post-io-v2`, and `1.0.16-post-io-v3`
-artifacts untouched. It
+This side-by-side runner leaves the prior `1.0.16-post`, `1.0.16-post-io-v2`,
+`1.0.16-post-io-v3`, and `1.0.16-post-io-v4` artifacts untouched. It
 is for one controlled `post` acceptance. It does not install the
 production helper, provision secrets, run the later PHP build/DB commands,
 open a route, or modify production configuration. The only listener is the
@@ -93,7 +94,7 @@ remains HOLD and requires its own reviewed change.
 ## Inputs
 
 * `--package-dir`: the independently staged, root-owned 1.0.17 package whose
-  package tree is `3788b573ee66daad437ef3c286c31900e69d17f5`.
+  package tree is `1311127fcc379c27f154c61bfcf3b439a5099356`.
 * `--evidence-envelope`: an existing root:root mode-0700 directory. The
   runner creates a unique 0700 evidence subdirectory and writes raw evidence
   there only.
@@ -114,6 +115,43 @@ orchestrator from that same bundle. The bridge requires a real outer TTY, verifi
 captures only a schema-checked final JSON report, closes the root shell, and
 reaps the `su` child. Raw PTY output is never forwarded. A missing marker,
 invalid report, timeout, nonzero command report, or failed reap is HOLD.
+
+### Route-closure evidence provenance
+
+For the currently approved Gate 2 route decision, the input is the existing
+Owner-attested file
+`/root/wpcg-route-attestation-20261127.KbA7hY/route-closure.json`, SHA-256
+`bece4c615ca8995ddb71828da8dd189fe166c8899d0ad87f18112a423752629d`. Use its
+parent as `--evidence-envelope` and the exact file as
+`--route-closure-evidence`. It binds the Owner-accepted provider export
+`ef4dd4e7886e1e6957bda86e062556ad4f47c5cae5a00f5a47d44893d1907966` and the
+redacted effective-origin summary `41cc3cc22968d08eabceceb648ae0370e8df35da82cc91b190e8ef00f76d8d44`
+(effective configuration fingerprint
+`065847ebcbedcfc7d4cc448e92a5db936cfa99a88725a2a2b89e0aba03b1cb83`). The
+route-review aid's `acceptance_package_version: 1.0.16` records the package
+context of that review; it is not the 1.0.17 acceptance-package pin. The route
+attestation is independent of the verifier-only 1.0.17 change because the
+runtime profiles and route configuration inputs are unchanged. The parser's
+`REVIEW_REQUIRED` output is not itself a closure decision; the separate Owner
+attestation is required. Do not regenerate or infer this file from the parser
+summary.
+
+### Unproven-check acknowledgment
+
+The runner deliberately does not synthesize or accept an Owner acknowledgment.
+If a profile verifier returns 3, the run stops with HOLD before later profiles
+and fixture cleanup. Its preserved verifier output contains the exact
+`--ack-unproven=<matrix-sha>:<boot-id>:<phase>:<profile>:<evidence-sha>:<sorted-ids>`
+payload requested by the pinned verifier. The Owner may review that exact
+evidence set and, if warranted, run the pinned verifier against those same
+files with that payload; this is a verifier-only review of preserved evidence,
+not a probe or acceptance rerun. That standalone result does not change the
+orchestrator's HOLD report and does not authorize cleanup. Completing Gate 2
+after any unproven result requires a separately versioned, reviewed
+finalization procedure that verifies all four profiles and performs cleanup
+only after all four verifier passes. Until that exists, an unproven result
+remains HOLD; never treat an acknowledgment request or a standalone verifier
+pass as Gate 2 PASS.
 
 ## Run behavior
 
