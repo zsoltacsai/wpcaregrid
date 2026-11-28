@@ -72,6 +72,16 @@ and exact-head CI and the Owner separately authorizes that diagnostic run. Its
 output never replaces the pinned orchestrator or verifier result and cannot
 establish acceptance.
 
+## One-run 1.0.18 post-HOLD audit diagnostic
+
+`1.0.18-post-v1/` is pinned to the existing
+`acceptance-1.0.18-post-20261128T204310Z-f4b8d2` run and exact 1.0.18 package.
+It emits bounded, redacted audit-dimension summaries for the Nginx profile
+only. It never runs acceptance, the verifier, a probe, or cleanup; acceptance
+and cleanup remain `NOT_RUN`. Exact-head CI and independent review are required
+before immutable installation, followed by separate Owner authorization for
+this one read-only evidence read. See the versioned README.
+
 ## One-run v2 I/O diagnostic
 
 `1.0.16-post-v2/` contains a separate diagnostic-only bundle for the existing
