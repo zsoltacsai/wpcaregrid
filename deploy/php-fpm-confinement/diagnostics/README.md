@@ -71,3 +71,30 @@ This source must not be run on the host until it has passed versioned review
 and exact-head CI and the Owner separately authorizes that diagnostic run. Its
 output never replaces the pinned orchestrator or verifier result and cannot
 establish acceptance.
+
+## One-run v2 I/O diagnostic
+
+`1.0.16-post-v2/` contains a separate diagnostic-only bundle for the existing
+run `acceptance-1.0.16-post-20261128T065928Z-c90b29` in envelope
+`/root/wpcg-route-attestation-20261128.t1cs092z`. It reads the pinned package
+and only the allowlisted Nginx evidence files for that run. It reports probe
+JSON identity and matrix-result fields through fixed allowlists, keeps the
+probe's `*.stderr` and `*.stderr.systemd-run` summaries separate, and emits
+only aggregate audit profile/PID/time-window correlations. Audit data that
+cannot be correlated to a parsed confined probe is explicitly UNKNOWN. The
+report always fixes acceptance, verifier, and fixture cleanup to NOT_RUN.
+
+The immutable three-file bundle is installed side by side at
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-3`, using
+`watchdog.py`, `helper.py`, and `bundle-manifest.json`. Do not replace the
+existing watchdog-2 installation. Verify the manifest, ownership, modes,
+single-link regular files, and directory tree before any installation or use.
+The watchdog binds and executes the helper bytes it verified, enforces its
+hard deadline and output bounds, and rejects any report whose run id differs
+from the exact run above.
+
+This bundle is for one bounded read of already-existing evidence only. It must
+not be run before exact-head CI and independent review pass. Do not use it to
+retry acceptance, a probe, verifier, or cleanup, and do not alter or create
+evidence. The result is diagnostic evidence only and cannot establish Gate 2
+acceptance.
