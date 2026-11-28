@@ -7,21 +7,29 @@ allowlisted Nginx evidence files for that run. It does not execute acceptance,
 the verifier, a probe, fixture cleanup, or any host mutation. Every report fixes
 `acceptance_verdict=NOT_RUN` and `fixture_cleanup=NOT_RUN`.
 
-The helper verifies the exact 1.0.18 package hashes and modes, then loads only
-the pinned verifier's pure `parse_audit`, `expected_checks`, and `window_hit`
-helpers. It never calls `verify()` or `main()`. Evidence reads use descriptor
+The helper verifies hashes and modes for the six 1.0.18 package inputs it
+loads, then calls only the pinned verifier's pure `parse_audit`,
+`expected_checks`, and `check_audit_hit` helpers. The package tree OID is
+recorded from the pinned runner preflight; this helper does not recompute a Git
+tree. It never calls `verify()` or `main()`. Evidence reads use descriptor
 anchoring from `/`, `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, bounded sizes, and
 root-owner/mode/link-count and pre/post identity checks. Output contains only
 allowlisted IDs, enums, booleans, counts, and digests. It does not emit paths,
 raw audit rows, exception messages, verifier detail text, or ACK payloads.
 
 The audit section reports independent dimension matches and the conjunctive
-all-dimensions candidate count for each expected Nginx check. It also shows
-whether the pinned verifier's historical window matcher found a record for the
-probe parent or child. These are diagnostic correlations; they do not alter or
-replace the verifier's HOLD result.
+all-dimensions candidate count for each expected Nginx check. Its
+`verifier_window_hit` is calculated by the pinned 1.0.18
+`check_audit_hit` matcher using the probe parent PID. A separate
+`diagnostic_child_window_hit` may show a match when the same matcher is applied
+to the reported child PID. These are diagnostic correlations; they do not
+alter or replace the verifier's HOLD result. Dimension candidates are
+independent across checks and are not a claim that the verifier consumed a
+record for each row.
 
-Install the three files side-by-side at
+The configured package path is
+`/usr/local/libexec/wpcaregrid-php-fpm-confinement/1.0.18`; its directory was
+confirmed on stg1 as root:root mode 0755. Install the three files side-by-side at
 `/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.18-post-watchdog-1` only
 after exact-head CI and independent review pass. The bundle directory must be
 root-owned mode 0555; each regular file root-owned mode 0444, single-link. The

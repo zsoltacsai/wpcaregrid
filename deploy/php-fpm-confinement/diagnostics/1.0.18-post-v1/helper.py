@@ -117,7 +117,7 @@ def _kind(mode: int) -> str:
 
 
 def _safe_name(name: str) -> tuple[str, str | None]:
-    if name in KNOWN_EVIDENCE_NAMES:
+    if name in KNOWN_EVIDENCE_NAMES or name in PINNED_PACKAGE_FILES:
         return name, None
     return "UNKNOWN_BASENAME", hashlib.sha256(name.encode("utf-8", "replace")).hexdigest()
 
@@ -905,9 +905,13 @@ def _ops_target(verifier: types.ModuleType, matrix: dict, ident: str, kind: str,
     profile = "wpcaregrid-nginx"
     role_profile = matrix.get("role_profiles", {})
     if kind in ("file", "symlink"):
-        return verifier.FILE_OPS.get(item.get("access"), set()), {"name": item.get("path")}
+        target = item.get("audit_path", item.get("path"))
+        names = {target, target.rstrip("/"), target.rstrip("/") + "/"} if isinstance(target, str) else set()
+        return verifier.FILE_OPS.get(item.get("access"), set()), {"name": names}
     if kind == "socket":
-        return {"connect", "open", "file_perm", "sendmsg"}, {"name": item.get("path")}
+        target = item.get("path")
+        names = {target, target.rstrip("/"), target.rstrip("/") + "/"} if isinstance(target, str) else set()
+        return {"connect", "open", "file_perm", "sendmsg"}, {"name": names}
     if kind == "abstract":
         return {"connect", "sendmsg"}, {"mention": "wpcg-probe-"}
     if kind == "net":
@@ -919,7 +923,8 @@ def _ops_target(verifier: types.ModuleType, matrix: dict, ident: str, kind: str,
         target = f"/proc/{item['pid']}/{item['entry']}"
         return {"open", "readlink", "file_perm", "getattr"}, {"name": {target, target.rstrip("/"), target.rstrip("/") + "/"}}
     if kind == "peer-signal":
-        return {"signal"}, {"peer": role_profile.get(item.get("role"), "")}
+        return {"signal"}, {"peer": role_profile.get(item.get("role"), ""),
+                            "fields": {"signal": "exists", "requested_mask": "send"}}
     if kind == "peer-vm":
         return {"ptrace"}, {"peer": role_profile.get(item.get("role"), "")}
     if ident == "calibration:child-environ":
@@ -1157,8 +1162,6 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
         dimension_counts = {"profile": 0, "pid": 0, "operation": 0, "name": 0, "peer": 0,
                             "fields": 0, "mention": 0, "target": 0, "window": 0, "boot": 0, "journal_time": 0}
         actual_name = target.get("name")
-        if kind in ("file", "symlink"):
-            actual_name = _resolve_matrix_audit_path(matrix, "wpcaregrid-nginx", item.get("path", ""))
         target_peer = target.get("peer")
         accepted_peer_names = _accepted_audit_profile_names(target_peer) if isinstance(target_peer, str) and target_peer else set()
         for index, record in enumerate(records):
@@ -1182,82 +1185,39 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
             if "name" in target:
                 val = actual_name
                 matches["name"] = val is not None and record.get("name") in (val if isinstance(val, set) else {val})
-            elif "mention" in target:
+            if "mention" in target:
                 matches["mention"] = target["mention"] in " ".join(str(x) for x in record.values())
-            elif "peer" in target:
+            if "peer" in target:
                 matches["peer"] = bool(accepted_peer_names) and record.get("peer") in accepted_peer_names
-            elif "fields" in target:
+            if "fields" in target:
                 matches["fields"] = all(record.get(k) == v for k, v in target["fields"].items())
-            elif "name_or_peer" in target:
+            if "name_or_peer" in target:
                 path, peer = target["name_or_peer"]
-                matches["name"] = record.get("name") == path
-                matches["peer"] = record.get("peer") in _accepted_audit_profile_names(peer) if peer else False
+                matches["name"] = matches["name"] or record.get("name") == path
+                matches["peer"] = matches["peer"] or (record.get("peer") in _accepted_audit_profile_names(peer) if peer else False)
             matches["target"] = matches["name"] or matches["peer"] or matches["fields"] or matches["mention"]
             for key, yes in matches.items():
                 dimension_counts[key] += int(yes)
             if all(matches[key] for key in ("profile", "pid", "operation", "target", "window", "boot", "journal_time")):
                 candidates.append((index, record))
-        used_match = None
+        verifier_match = None
+        child_match = None
         try:
-            args = (records, consumed, probe_profile, boot, pid, t0, t1)
-            if kind in ("file", "symlink"):
-                used_match = verifier.window_hit(*args, verifier.FILE_OPS[item["access"]], name=item["path"])
-            elif kind == "socket":
-                used_match = verifier.window_hit(*args, {"connect", "open", "file_perm", "sendmsg"}, name=item["path"])
-            elif kind == "abstract":
-                used_match = verifier.window_hit(*args, {"connect", "sendmsg"}, mention="wpcg-probe-")
-            elif kind == "net":
-                fam = {"AF_INET": "inet", "AF_INET6": "inet6", "AF_UNIX": "unix", "AF_NETLINK": "netlink"}.get(item.get("family"))
-                typ = str(item.get("type", "")).removeprefix("SOCK_").lower()
-                ops2 = {"create": {"create", "socket_create"}, "bind": {"bind", "socket_bind"}, "connect": {"connect", "socket_connect"}}.get(item.get("action"), set())
-                used_match = verifier.window_hit(*args, ops2, fields={"family": fam, "sock_type": typ})
-            elif kind == "peer":
-                targ = f"/proc/{item['pid']}/{item['entry']}"
-                used_match = verifier.window_hit(*args, {"open", "readlink", "file_perm", "getattr"}, name={targ, targ.rstrip("/"), targ.rstrip("/") + "/"})
-                if used_match is None:
-                    used_match = verifier.window_hit(*args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-            elif kind == "peer-signal":
-                used_match = verifier.window_hit(*args, {"signal"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-            elif kind == "peer-vm":
-                used_match = verifier.window_hit(*args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-            elif ident == "calibration:child-environ":
-                used_match = verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/environ")
-            elif ident == "calibration:child-maps":
-                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
-                if used_match is None:
-                    used_match = verifier.window_hit(*args, {"open"}, name=f"/proc/{child}/maps")
+            matcher = getattr(verifier, "check_audit_hit", None)
+            if not callable(matcher):
+                reasons.add("pinned-audit-matcher-unavailable")
             else:
-                used_match = verifier.window_hit(*args, {"ptrace"}, peer=probe_profile)
-            if used_match is None and type(child) is int and child > 0 and child != pid:
-                child_args = (records, consumed, probe_profile, boot, child, t0, t1)
-                if kind in ("file", "symlink"):
-                    used_match = verifier.window_hit(*child_args, verifier.FILE_OPS[item["access"]], name=item["path"])
-                elif kind == "socket":
-                    used_match = verifier.window_hit(*child_args, {"connect", "open", "file_perm", "sendmsg"}, name=item["path"])
-                elif kind == "abstract":
-                    used_match = verifier.window_hit(*child_args, {"connect", "sendmsg"}, mention="wpcg-probe-")
-                elif kind == "net":
-                    used_match = verifier.window_hit(*child_args, ops2, fields={"family": fam, "sock_type": typ})
-                elif kind == "peer":
-                    used_match = verifier.window_hit(*child_args, {"open", "readlink", "file_perm", "getattr"}, name={targ, targ.rstrip("/"), targ.rstrip("/") + "/"})
-                    if used_match is None:
-                        used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-                elif kind == "peer-signal":
-                    used_match = verifier.window_hit(*child_args, {"signal"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-                elif kind == "peer-vm":
-                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=matrix.get("role_profiles", {}).get(item["role"], ""))
-                elif ident == "calibration:child-environ":
-                    used_match = verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/environ")
-                elif ident == "calibration:child-maps":
-                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile)
-                    if used_match is None:
-                        used_match = verifier.window_hit(*child_args, {"open"}, name=f"/proc/{child}/maps")
-                else:
-                    used_match = verifier.window_hit(*child_args, {"ptrace"}, peer=probe_profile)
+                verifier_match = matcher(records, consumed, probe_profile, boot, result, ident, kind,
+                                         item, matrix.get("role_profiles", {}))
+                if verifier_match is not None:
+                    consumed.add(verifier_match)
+                elif type(child) is int and child > 0 and child != pid:
+                    child_result = dict(result)
+                    child_result["pid"] = child
+                    child_match = matcher(records, set(consumed), probe_profile, boot, child_result,
+                                          ident, kind, item, matrix.get("role_profiles", {}))
         except Exception:
             reasons.add("audit-match-evaluation-failed")
-        if used_match is not None:
-            consumed.add(used_match)
         checks.append({
             "id": _verifier_failure_id(ident, set(expected), matrix),
             "confined_errno": result.get("errno") if type(result.get("errno")) is int else None,
@@ -1274,8 +1234,9 @@ def _audit_summary(data: bytes | None, baseline: dict | None, confined: dict | N
             "time_window_match": dimension_counts["window"] > 0,
             "boot_match": dimension_counts["boot"] > 0,
             "journal_time_match": dimension_counts["journal_time"] > 0,
-            "verifier_window_hit": used_match is not None,
-            "verifier_window_hit_scope": "PARENT_OR_CHILD_DIAGNOSTIC",
+            "verifier_window_hit": verifier_match is not None,
+            "verifier_window_hit_scope": "PINNED_CHECK_AUDIT_HIT_PARENT_PID",
+            "diagnostic_child_window_hit": child_match is not None,
             "baseline_result_present": ident in base_by_id,
         })
     return {

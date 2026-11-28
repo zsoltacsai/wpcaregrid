@@ -17,6 +17,10 @@ HELPER_PATH = ROOT / "deploy/php-fpm-confinement/diagnostics/1.0.18-post-v1/help
 SPEC = importlib.util.spec_from_file_location("evidence_export", HELPER_PATH)
 HELPER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HELPER)
+VERIFIER_PATH = ROOT / "deploy/php-fpm-confinement/1.0.18/acceptance/verify-acceptance.py"
+VERIFIER = types.ModuleType("pinned_1_0_18_verifier_for_test")
+VERIFIER.__file__ = str(VERIFIER_PATH)
+exec(compile(VERIFIER_PATH.read_bytes(), str(VERIFIER_PATH), "exec"), VERIFIER.__dict__)
 
 
 class EvidenceExportSafetyTests(unittest.TestCase):
@@ -71,16 +75,18 @@ class EvidenceExportSafetyTests(unittest.TestCase):
              "name": resolved_path, "_boot": "a" * 32, "_ts_ns": 150, "_journal_ns": 150, "_serial": ("0", "0", "1")},
             {"profile": "unconfined//&wpcaregrid-nginx-probe", "pid": 200, "operation": "signal",
              "peer": "unconfined//&wpcaregrid-php-fpm-production", "_boot": "a" * 32,
+             "signal": "exists", "requested_mask": "send",
              "_ts_ns": 250, "_journal_ns": 250, "_serial": ("0", "0", "2")},
         ]
         expected = {
-            "file-target": ("file", {"access": "r", "path": raw_path}),
+            "file-target": ("file", {"access": "r", "path": raw_path, "audit_path": resolved_path}),
             "peer-target": ("peer-signal", {"role": "production", "pid": 3001}),
         }
         fake_verifier = types.SimpleNamespace(
             parse_audit=lambda _text: (records, []),
             expected_checks=lambda *_args: (expected, set()),
             window_hit=lambda *_args, **_kwargs: None,
+            check_audit_hit=lambda *_args, **_kwargs: None,
             FILE_OPS={"r": {"open"}}, EPS_NS=0,
         )
         confined = {"pid": 200, "started_ns": 100, "ended_ns": 300, "boot_id": "a" * 32,
@@ -103,6 +109,55 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertNotIn(raw_path, rendered)
         self.assertNotIn(resolved_path, rendered)
 
+    def test_audit_correlation_matches_pinned_1_0_18_matcher(self):
+        boot = "a" * 32
+        probe = "wpcaregrid-nginx-probe"
+        production = "wpcaregrid-php-fpm-production"
+        matrix = {"role_profiles": {"production": production}, "profiles": {"wpcaregrid-nginx": {}}}
+
+        def summarize(ident, kind, item, record):
+            record = {"profile": probe, "pid": 200, "_boot": boot, "_ts_ns": 150,
+                      "_journal_ns": 150, "_serial": ("0", "0", "1"), **record}
+            expected = {ident: (kind, item)}
+            verifier = types.SimpleNamespace(
+                parse_audit=lambda _text: ([record], []),
+                expected_checks=lambda *_args: (expected, set()),
+                check_audit_hit=VERIFIER.check_audit_hit,
+                FILE_OPS=VERIFIER.FILE_OPS, EPS_NS=VERIFIER.EPS_NS,
+            )
+            confined = {"pid": 200, "started_ns": 100, "ended_ns": 200, "boot_id": boot,
+                        "peers": {}, "results": [{"id": ident, "pid": 200, "t0": 100, "t1": 200, "errno": 13}]}
+            report = HELPER._audit_summary(b"synthetic", {"results": []}, confined, matrix, verifier)
+            return report["checks"][0]
+
+        audit_path = "/var/lib/wpcaregrid-deploy/production/shared/.env"
+        symlink_item = {"access": "r", "expect": "deny", "path": "/var/www/wpcaregrid-production/current/.env",
+                        "audit_path": audit_path}
+        symlink_match = summarize("production-env-via-link", "file", symlink_item,
+                                  {"operation": "open", "name": audit_path})
+        self.assertTrue(symlink_match["verifier_window_hit"])
+        self.assertTrue(symlink_match["target_match"])
+        symlink_impostor = summarize("production-env-via-link", "file", symlink_item,
+                                     {"operation": "open", "name": symlink_item["path"]})
+        self.assertFalse(symlink_impostor["verifier_window_hit"])
+
+        socket_path = "/run/php/test-canary.sock"
+        socket_match = summarize("socket:test", "socket", {"path": socket_path, "access": "rw"},
+                                 {"operation": "open", "name": socket_path + "/"})
+        self.assertTrue(socket_match["verifier_window_hit"])
+
+        signal_item = {"role": "production", "pid": 300}
+        wrong_signal = summarize("peer:production:300:signal", "peer-signal", signal_item,
+                                 {"operation": "signal", "peer": production,
+                                  "signal": "usr1", "requested_mask": "send"})
+        self.assertFalse(wrong_signal["verifier_window_hit"])
+        self.assertFalse(wrong_signal["fields_match"])
+        correct_signal = summarize("peer:production:300:signal", "peer-signal", signal_item,
+                                   {"operation": "signal", "peer": production,
+                                    "signal": "exists", "requested_mask": "send"})
+        self.assertTrue(correct_signal["verifier_window_hit"])
+        self.assertTrue(correct_signal["fields_match"])
+
     def test_all_dimensions_count_requires_real_target_match_including_peer_fallback(self):
         boot = "a" * 32
         probe_profile = "wpcaregrid-nginx-probe"
@@ -120,6 +175,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 parse_audit=lambda _text: (records, []),
                 expected_checks=lambda *_args: (expected, set()),
                 window_hit=lambda *_args, **_kwargs: None,
+                check_audit_hit=lambda *_args, **_kwargs: None,
                 FILE_OPS={"r": {"open"}}, EPS_NS=0,
             )
             confined = {"pid": 200, "started_ns": 100, "ended_ns": 200, "boot_id": boot,
@@ -408,24 +464,22 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         boot = "a" * 32
         record = {"profile": "wpcaregrid-nginx-probe", "pid": 202, "operation": "open",
                   "name": "/allowed", "_ts_ns": 150, "_journal_ns": 150, "_boot": boot}
-        def window_hit(records, used, profile, boot_id, pid, t0, t1, ops, **filters):
+        def check_hit(records, used, profile, boot_id, result, ident, kind, item, role_profiles):
+            pid, t0, t1 = result["pid"], result["t0"], result["t1"]
             for index, row in enumerate(records):
                 if index in used or row.get("profile") != profile or row.get("_boot") != boot_id:
                     continue
-                if row.get("pid") != pid or row.get("operation") not in ops or not t0 <= row.get("_ts_ns", -1) <= t1:
+                if row.get("pid") != pid or row.get("operation") != "open" or not t0 <= row.get("_ts_ns", -1) <= t1:
                     continue
-                if "name" in filters:
-                    expected_name = filters["name"]
-                    name_matches = row.get("name") in expected_name if isinstance(expected_name, set) else row.get("name") == expected_name
-                    if not name_matches:
-                        continue
+                if row.get("name") != item["path"]:
+                    continue
                 return index
             return None
         verifier = types.SimpleNamespace(
             parse_audit=lambda _text: ([record], []), expected_checks=lambda *_args: ({
                 "file:one": ("file", {"access": "read", "path": "/allowed"}),
             }, []),
-            window_hit=window_hit, FILE_OPS={"read": {"open"}}, EPS_NS=0,
+            check_audit_hit=check_hit, FILE_OPS={"read": {"open"}}, EPS_NS=0,
         )
         confined = {
             "boot_id": boot, "started_ns": 100, "ended_ns": 200,
@@ -434,34 +488,41 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         }
         report = HELPER._audit_summary(b"synthetic", None, confined, {"role_profiles": {}}, verifier)
         check = report["checks"][0]
-        self.assertTrue(check["verifier_window_hit"])
-        self.assertEqual(check["verifier_window_hit_scope"], "PARENT_OR_CHILD_DIAGNOSTIC")
+        self.assertFalse(check["verifier_window_hit"])
+        self.assertTrue(check["diagnostic_child_window_hit"])
+        self.assertEqual(check["verifier_window_hit_scope"], "PINNED_CHECK_AUDIT_HIT_PARENT_PID")
 
     def test_calibration_child_maps_preserves_record_index_zero(self):
         boot = "b" * 32
         probe = "wpcaregrid-nginx-probe"
-        record = {"profile": probe, "pid": 10, "operation": "ptrace", "peer": probe,
-                  "_boot": boot, "_ts_ns": 150, "_journal_ns": 150, "_serial": ("0", "0", "1")}
         for matching_pid in (10, 20):
             calls = []
+            record = {"profile": probe, "pid": matching_pid, "operation": "ptrace", "peer": probe,
+                      "_boot": boot, "_ts_ns": 150, "_journal_ns": 150, "_serial": ("0", "0", "1")}
 
-            def window_hit(records, used, profile, boot_id, pid, t0, t1, ops, **filters):
-                calls.append((pid, ops))
-                if pid == matching_pid and ops == {"ptrace"}:
+            def check_hit(records, used, profile, boot_id, result, ident, kind, item, role_profiles):
+                calls.append(result["pid"])
+                if result["pid"] == matching_pid and records[0]["pid"] == matching_pid:
                     return 0
                 return None
 
             verifier = types.SimpleNamespace(
                 parse_audit=lambda _text: ([record], []),
                 expected_checks=lambda *_args: ({"calibration:child-maps": ("calibration", {})}, set()),
-                window_hit=window_hit, FILE_OPS={}, EPS_NS=0,
+                check_audit_hit=check_hit, FILE_OPS={}, EPS_NS=0,
             )
             confined = {"pid": 10, "started_ns": 100, "ended_ns": 200, "boot_id": boot,
                         "peers": {}, "results": [{"id": "calibration:child-maps", "pid": 10,
                                   "child": 20, "t0": 100, "t1": 200, "errno": 13}]}
             summary = HELPER._audit_summary(b"synthetic", None, confined, {"role_profiles": {}}, verifier)
-            self.assertTrue(summary["checks"][0]["verifier_window_hit"])
-            self.assertNotIn((matching_pid, {"open"}), calls)
+            if matching_pid == 10:
+                self.assertTrue(summary["checks"][0]["verifier_window_hit"])
+                self.assertFalse(summary["checks"][0]["diagnostic_child_window_hit"])
+                self.assertEqual(calls, [10])
+            else:
+                self.assertFalse(summary["checks"][0]["verifier_window_hit"])
+                self.assertTrue(summary["checks"][0]["diagnostic_child_window_hit"])
+                self.assertEqual(calls, [10, 20])
 
     def test_progress_pipe_emits_only_fixed_stage_enums(self):
         read_fd, write_fd = os.pipe()
