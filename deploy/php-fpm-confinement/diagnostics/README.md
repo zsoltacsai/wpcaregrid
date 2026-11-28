@@ -88,12 +88,14 @@ checks both the probe PID and its reported child PID, and labels that scope
 explicitly without changing verifier behavior. The
 report always fixes acceptance, verifier, and fixture cleanup to NOT_RUN.
 
-The follow-up traceback summary adds `next_line_category` only when the strict
-parser rejects a nonblank line where the separator after an exception summary
-was expected. Its values are `EXACT_CHAIN_MARKER`, `EXACT_TRACEBACK_HEADER`,
-`VALID_EXCEPTION_SUMMARY`, or `OTHER_NONBLANK`. Invalid UTF-8 and input beyond
-the fixed byte bound use only `MALFORMED_UTF8` and `OVER_BOUND`. Every failure
-keeps `frame_count=0`; no rejected line, path, or message is emitted.
+The follow-up traceback summary uses `next_line_category` for the rejected
+nonblank line when the separator after an exception summary was expected. Its
+line categories are `EXACT_CHAIN_MARKER`, `EXACT_TRACEBACK_HEADER`,
+`VALID_EXCEPTION_SUMMARY`, and `OTHER_NONBLANK`. For invalid UTF-8 or input
+beyond the fixed byte bound, the same field instead identifies the input
+condition as `MALFORMED_UTF8` or `OVER_BOUND`; no next line is classified in
+those cases. Every failure keeps `frame_count=0`; no rejected line, path, or
+message is emitted.
 
 The immutable three-file bundle is installed side by side at
 `/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-3`, using
