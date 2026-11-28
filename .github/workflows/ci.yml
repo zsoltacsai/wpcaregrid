@@ -2603,7 +2603,9 @@ jobs:
 
   sqlite_regressions:
     name: Server SQLite regression gate (PHP 8.5)
-    runs-on: ubuntu-24.04
+    # Runs on the Contabo CI runner inside a pinned Docker image (the runner has no PHP, Node or Composer and no sudo).
+    # Pull requests from forks never reach the persistent runner: they fall back to a GitHub-hosted runner running the same steps.
+    runs-on: ${{ fromJSON((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","wpcaregrid-ci"]') }}
     timeout-minutes: 20
     env:
       DB_CONNECTION: sqlite
@@ -2614,53 +2616,47 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
-        with:
-          php-version: '8.5'
-          extensions: mbstring, intl, gd, zip, sodium, pdo_sqlite, sqlite3, fileinfo, openssl, curl, posix, pcntl, bcmath
-          coverage: none
-          tools: composer:v2
-
-      - name: Application environment
-        run: |
-          cp .env.example .env
-          touch database/ci-sqlite-regressions.sqlite
-
-      - name: Install PHP dependencies
-        run: composer install --no-interaction --prefer-dist --no-progress
-
-      - name: Initialize disposable SQLite database
-        run: |
-          php artisan key:generate --force
-          php artisan migrate --force
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: Frontend build for rendered feature tests
-        run: |
-          npm ci
-          npm run build
-
-      - name: Verify the actual Laravel SQLite connection
-        run: php scripts/tests/assert-ci-sqlite-driver.php
-
-      - name: Targeted fast SQLite regressions (no S3/SFTP services)
+      - name: Build the pinned PHP 8.5 CI image
         run: |
           set -euo pipefail
-          vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings tests/Unit
-          for test in \
-            tests/Feature/AuthorizationMatrixTest.php \
-            tests/Feature/Account/AuthenticationTest.php \
-            tests/Feature/Account/AuthorizationTest.php \
-            tests/Feature/Account/CustomerAreaTest.php \
-            tests/Feature/Account/OnboardingTest.php \
-            tests/Feature/CustomerLocalizationTest.php \
-            tests/Feature/LocalizedMarketingRoutesTest.php; do
-            vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
-          done
+          tag="wpcaregrid-ci-php85-sqlite:$(sha256sum .github/ci/php85-sqlite.Dockerfile | cut -c1-12)"
+          echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+          docker build --pull=false -t "$tag" -f .github/ci/php85-sqlite.Dockerfile .github/ci
+
+      - name: Server SQLite regression gate (application, migrations, frontend build, strict PHPUnit)
+        run: |
+          set -euo pipefail
+          cache="$HOME/.cache/wpcaregrid-ci"
+          mkdir -p "$cache/composer" "$cache/npm"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=4096 \
+            -e HOME=/tmp/home -e COMPOSER_HOME=/tmp/composer -e npm_config_cache=/tmp/npm \
+            -e DB_CONNECTION -e DB_DATABASE -e DB_URL -e CACHE_STORE -e CAREGRID_EXPECTED_DATABASE_DRIVER \
+            -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro \
+            -v "$cache/composer":/tmp/composer -v "$cache/npm":/tmp/npm \
+            -v "$GITHUB_WORKSPACE":/workspace -w /workspace --entrypoint bash "$IMAGE_TAG" -euo pipefail -c '
+              mkdir -p /tmp/home
+              cp .env.example .env
+              touch database/ci-sqlite-regressions.sqlite
+              composer install --no-interaction --prefer-dist --no-progress
+              php artisan key:generate --force
+              php artisan migrate --force
+              npm ci
+              npm run build
+              php scripts/tests/assert-ci-sqlite-driver.php
+              # Targeted fast SQLite regressions (no S3/SFTP services)
+              vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings tests/Unit
+              for test in \
+                tests/Feature/AuthorizationMatrixTest.php \
+                tests/Feature/Account/AuthenticationTest.php \
+                tests/Feature/Account/AuthorizationTest.php \
+                tests/Feature/Account/CustomerAreaTest.php \
+                tests/Feature/Account/OnboardingTest.php \
+                tests/Feature/CustomerLocalizationTest.php \
+                tests/Feature/LocalizedMarketingRoutesTest.php; do
+                vendor/bin/phpunit -c phpunit.xml --fail-on-skipped --display-skipped --display-warnings "$test"
+              done
+            '
 
   wordpress:
     name: ${{ matrix.legacy_check_name || format('Connector tests (PHP {0}, WordPress {1}, {2})', matrix.php, matrix.wordpress, matrix.database) }}
