@@ -95,6 +95,8 @@ jobs:
           python3 -B scripts/tests/php-fpm-confinement-post-v4-watchdog-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-v5-diagnostic-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-v5-watchdog-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-v1-0-18-diagnostic-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-v1-0-18-watchdog-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
