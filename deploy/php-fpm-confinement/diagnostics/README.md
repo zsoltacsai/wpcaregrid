@@ -153,3 +153,43 @@ after exact-head CI and independent review. Keep watchdog-2 through watchdog-6
 immutable. The helper reads only the exact v3 run and pinned 1.0.16 package,
 uses the pinned verifier's parse/correlation helpers without calling
 `verify()`, and is not a substitute for a complete acceptance run.
+
+## One-run v4 verifier-output diagnostic
+
+The side-by-side `1.0.16-post-v4` source is pinned to the existing partial run
+`acceptance-1.0.16-post-20261128T130846Z-d424f9` in envelope
+`/root/wpcg-gate2-post-20261128T130445Z-v4-7q3m`. In addition to the v3
+read-only probe and audit summaries, it reads only that run's existing
+`wpcaregrid-nginx-verifier.stdout` and `.stderr` files. It summarizes each
+`FAIL` using a pinned check identifier (normalizing peer PIDs) and a fixed
+reason enum, reports the unproven count and whether the verifier requested an
+owner acknowledgment, and never emits acknowledgment IDs/payloads, evidence
+digests, verifier detail text, or raw lines. If either file is absent,
+malformed, or not bound to the exact run metadata, the result stays UNKNOWN or
+INVALID; it does not infer acceptance from the verifier exit code.
+
+The helper verifies the exact 1.0.16 package pins and uses only the pinned
+verifier's parsing/check-list/audit-correlation helpers. It never calls
+`verify()`, the verifier CLI, acceptance, a probe, or cleanup; the report fixes
+`acceptance_verdict=NOT_RUN`, `verifier_executed=false`, and
+`fixture_cleanup=NOT_RUN`. Existing verifier output may include hard FAILs
+alongside an unproven acknowledgment request, so this diagnostic does not
+create or supply an ACK and cannot change the original HOLD.
+
+The verifier-output summary is `PARSED` only when it sees a recognized terminal
+marker (`EVIDENCE-CONSISTENT`, a matching `REJECTED: N failure(s)` record, or
+one of the exact acknowledgment-HOLD forms from the pinned verifier). The
+verifier returns from the acknowledgment gate before it emits `REJECTED`, so
+an ACK-HOLD may coexist with parsed hard FAIL records; the summary preserves
+both without treating the HOLD as acceptance. Empty, partial, traceback-only,
+PASS-lines-only, or otherwise unrecognized output remains
+`UNRECOGNIZED_OUTPUT`/UNKNOWN; it is never summarized as zero failures.
+
+Install the new three-file bundle immutably at
+`/usr/local/lib/wpcaregrid/php-fpm-confinement/1.0.16-post-watchdog-9` only
+after exact-head CI and independent review. Preserve all earlier watchdog
+versions. The bundle manifest pins both helper and watchdog; directory and
+file ownership, modes, links, hashes, and no-follow reads must pass before a
+single bounded invocation. This helper is solely for the one existing v4
+partial run and does not authorize host execution by itself. A separate Owner
+GO is required for the one-time existing-evidence read.
