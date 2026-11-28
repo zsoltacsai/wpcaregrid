@@ -47,7 +47,7 @@ jobs:
       - name: Compile production-only AppArmor profiles without loading them
         run: |
           set -euo pipefail
-          for pkg in deploy/php-fpm-confinement/1.0.12 deploy/php-fpm-confinement/1.0.13 deploy/php-fpm-confinement/1.0.14 deploy/php-fpm-confinement/1.0.15 deploy/php-fpm-confinement/1.0.16; do
+          for pkg in deploy/php-fpm-confinement/1.0.12 deploy/php-fpm-confinement/1.0.13 deploy/php-fpm-confinement/1.0.14 deploy/php-fpm-confinement/1.0.15 deploy/php-fpm-confinement/1.0.16 deploy/php-fpm-confinement/1.0.17; do
             for profile in "$pkg"/apparmor/wpcaregrid-*; do
               apparmor_parser -Q -K -I "$pkg/apparmor" "$profile"
             done
@@ -64,6 +64,7 @@ jobs:
           python3 scripts/tests/production-only-confinement-1-0-14-test.py
           python3 scripts/tests/production-only-confinement-1-0-15-test.py
           python3 scripts/tests/production-only-confinement-1-0-16-test.py
+          python3 scripts/tests/production-only-confinement-1-0-17-verifier-test.py
       - name: Test pinned 1.0.16 post orchestrator and bridge
         run: |
           set -euo pipefail
@@ -78,6 +79,7 @@ jobs:
           python3 -B scripts/tests/php-fpm-confinement-post-io-v3-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-io-v4-integrity-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-io-v4-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-io-v4-1-0-17-integrity-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-report-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-bridge-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-evidence-export-test.py
@@ -88,6 +90,8 @@ jobs:
           python3 -B scripts/tests/php-fpm-confinement-post-v3-watchdog-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-v4-diagnostic-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-v4-watchdog-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-v5-diagnostic-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-v5-watchdog-test.py
   quality:
     name: Quality (lint, style, dependencies, build, secrets)
     runs-on: ubuntu-24.04
