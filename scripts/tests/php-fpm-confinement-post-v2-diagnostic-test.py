@@ -596,6 +596,10 @@ class EvidenceExportSafetyTests(unittest.TestCase):
             (b"During handling of the above exception, another exception occurred:", "EXACT_CHAIN_MARKER"),
             (b"Traceback (most recent call last):", "EXACT_TRACEBACK_HEADER"),
             (b"TypeError: raw-next-exception-secret", "VALID_EXCEPTION_SUMMARY"),
+            (b"Exception ignored in: <function raw-secret>", "EXCEPTION_IGNORED_PREFIX"),
+            (b'  File "/private/raw-path.py", line 8, in call', "FRAME_LIKE_LINE"),
+            (b"    raw-indented-secret", "INDENTED_LINE"),
+            (b"ERROR: raw-error-secret", "GENERIC_ERROR_PREFIX"),
             (b"launcher raw-next-line-secret", "OTHER_NONBLANK"),
         )
         for raw_line, expected in cases:
@@ -603,10 +607,20 @@ class EvidenceExportSafetyTests(unittest.TestCase):
                 summary = HELPER._traceback_summary(header + frame + exception + raw_line + b"\n")
                 self.assertEqual(summary["parse_failure_substage"], "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
                 self.assertEqual(summary["next_line_category"], expected)
+                self.assertEqual(summary["exception_class"], "ValueError")
                 self.assertEqual(summary["frame_count"], 0)
                 rendered = __import__("json").dumps(summary)
-                for forbidden in (raw_line.decode(), "raw-exception-secret", "/root/private"):
+                for forbidden in (raw_line.decode(), "raw-exception-secret", "/root/private", "raw-secret", "raw-path", "raw-error"):
                     self.assertNotIn(forbidden, rendered)
+        unknown_exception = HELPER._traceback_summary(
+            header + frame + b"PrivateExceptionNameError: raw-exception-message\n"
+            + b"mystery raw-next-line\n"
+        )
+        self.assertEqual(unknown_exception["exception_class"], "OTHER_EXCEPTION")
+        self.assertEqual(unknown_exception["next_line_category"], "OTHER_NONBLANK")
+        rendered = __import__("json").dumps(unknown_exception)
+        for forbidden in ("PrivateExceptionNameError", "raw-exception-message", "mystery raw-next-line", "/root/private"):
+            self.assertNotIn(forbidden, rendered)
 
     def test_traceback_summary_accepts_only_complete_chained_suffix_after_prefix(self):
         prefix = b"systemd-run diagnostic prefix raw-prefix-secret\n"
@@ -656,7 +670,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
-            "frame_count": 0, "next_line_category": "OTHER_NONBLANK",
+            "frame_count": 0, "exception_class": "ValueError", "next_line_category": "OTHER_NONBLANK",
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-message", "raw-suffix-secret", "/root", raw.decode()):
@@ -706,7 +720,7 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary, {
             "status": "UNPARSEABLE", "parse_failure_stage": "FIRST_HEADER_SUFFIX_INVALID",
             "parse_failure_substage": "EXPECTED_SEPARATOR_AFTER_EXCEPTION",
-            "frame_count": 0, "next_line_category": "EXACT_TRACEBACK_HEADER",
+            "frame_count": 0, "exception_class": "ValueError", "next_line_category": "EXACT_TRACEBACK_HEADER",
         })
         rendered = __import__("json").dumps(summary, sort_keys=True)
         for forbidden in ("raw-prefix-secret", "raw-one", "raw-two", "/root", raw.decode()):

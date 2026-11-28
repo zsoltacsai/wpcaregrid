@@ -576,7 +576,8 @@ _TRACEBACK_CHAIN_MARKERS = {
 }
 _TRACEBACK_NEXT_LINE_CATEGORIES = {
     "EXACT_CHAIN_MARKER", "EXACT_TRACEBACK_HEADER", "VALID_EXCEPTION_SUMMARY",
-    "OTHER_NONBLANK", "MALFORMED_UTF8", "OVER_BOUND",
+    "EXCEPTION_IGNORED_PREFIX", "FRAME_LIKE_LINE", "INDENTED_LINE",
+    "GENERIC_ERROR_PREFIX", "OTHER_NONBLANK", "MALFORMED_UTF8", "OVER_BOUND",
 }
 _MAX_TRACEBACK_BYTES = 65_536
 _MAX_TRACEBACK_FRAMES = 128
@@ -633,6 +634,14 @@ def _traceback_next_line_category(line: str) -> str:
         return "EXACT_TRACEBACK_HEADER"
     if _looks_like_exception_summary(line):
         return "VALID_EXCEPTION_SUMMARY"
+    if line.startswith("Exception ignored in:"):
+        return "EXCEPTION_IGNORED_PREFIX"
+    if _looks_like_frame_line(line):
+        return "FRAME_LIKE_LINE"
+    if line.startswith(("    ", "\t")):
+        return "INDENTED_LINE"
+    if line.startswith("ERROR:"):
+        return "GENERIC_ERROR_PREFIX"
     return "OTHER_NONBLANK"
 
 
@@ -750,6 +759,9 @@ def _parse_traceback_lines(lines: list[str]) -> dict:
         # after the exception-chain marker. Do not skip arbitrary lines.
         if lines[index] != "":
             failure = _traceback_suffix_failure("UNPARSEABLE", "EXPECTED_SEPARATOR_AFTER_EXCEPTION")
+            failure["exception_class"] = (
+                exception_name if exception_name in _TRACEBACK_CLASSES else "OTHER_EXCEPTION"
+            )
             category = _traceback_next_line_category(lines[index])
             if category in _TRACEBACK_NEXT_LINE_CATEGORIES:
                 failure["next_line_category"] = category
