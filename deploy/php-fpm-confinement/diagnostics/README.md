@@ -81,7 +81,11 @@ and only the allowlisted Nginx evidence files for that run. It reports probe
 JSON identity and matrix-result fields through fixed allowlists, keeps the
 probe's `*.stderr` and `*.stderr.systemd-run` summaries separate, and emits
 only aggregate audit profile/PID/time-window correlations. Audit data that
-cannot be correlated to a parsed confined probe is explicitly UNKNOWN. The
+cannot be correlated to a confined probe with matching schema, mode, profile,
+label, matrix, boot identity, PID, and valid time window is explicitly UNKNOWN;
+per-check audit rows are omitted. Diagnostic verifier-window correlation
+checks both the probe PID and its reported child PID, and labels that scope
+explicitly without changing verifier behavior. The
 report always fixes acceptance, verifier, and fixture cleanup to NOT_RUN.
 
 The immutable three-file bundle is installed side by side at
