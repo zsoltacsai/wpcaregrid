@@ -1,5 +1,13 @@
 # WP CareGrid — Project Status
 
+## Update — 2026-11-28 (Gate 2 fast-track 1.0.18 — source only, review/CI pending)
+
+- **Source commit:** `b6f7722c4589f712611b7b16052b245324bd7dda` on `codex/gate2-fast-verifier-finalization`, based on protected primary `cb3c4c380eca90093eeffaa09fac73a920543999`. Draft PR #478 is open; this status note is a docs-only follow-up to the code commit.
+- **What:** side-by-side 1.0.18 keeps 1.0.17 unchanged, adds exact bare and `unconfined//&<profile>` cross-peer signal denials including `exists`, and binds the `kill(pid, 0)` verifier result only to AppArmor audit records with `signal=exists` and `requested_mask=send`. Signal-zero success remains a hard failure.
+- **Faster collection without relaxing acceptance:** the 1.0.18 post runner continues to later profiles only when a verifier returns rc=3 (unproven), records overall HOLD, and skips fixture cleanup. Hard failures still stop immediately. Gate 2 PASS still requires all four verifier results at rc=0, zero unproven IDs, and successful fixture cleanup/empty-state verification.
+- **Validation:** 1.0.18 verifier 24 passed / 1 environment-gated skip; 1.0.17 verifier 21 passed; new runner lifecycle 5 passed and integrity 7 passed; v5 diagnostic/watchdog 47/13 passed. Package and runner checksums pass. Initial exact-head CI exposed a test assertion that double-prefixed stacked labels; fixed in the follow-up. Exact CI and independent review on the updated head remain pending. AppArmor compilation passed on the initial head in CI; the updated head has not yet completed CI.
+- **Host status:** source-only. No profile was installed or loaded, and no staging, probe, acceptance, verifier, cleanup, or production route/runtime action ran. Gate 2 remains HOLD. The next gate is exact-head CI and independent review, then separate Owner-authorized live bare/stacked signal regression before any full acceptance run.
+
 ## Update — 2026-11-17 (GO-20: production helper 2.1.5 binds confinement package 1.0.6, PHP 8.5 — source only, review pending)
 
 - **Base:** protected primary `567b03eaf3f52274df9f7bbb940c0bc106cc602a` (merged confinement package 1.0.6, PR #421). Branch `go20/helper-2-1-5`. Source only: nothing installed, loaded, enabled or deployed; no host, service, database, sudoers or credential change.
