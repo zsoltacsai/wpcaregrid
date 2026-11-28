@@ -62,6 +62,57 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(summary["results"][0]["state"], "UNKNOWN")
         self.assertNotIn(secret, __import__("json").dumps(summary))
 
+    def test_probe_identity_mismatches_disable_audit_correlation(self):
+        matrix_sha = HELPER.PINNED_PACKAGE_FILES["acceptance/matrix.json"]
+        valid = {
+            "schema": 2, "mode": "confined", "profile": "wpcaregrid-nginx",
+            "label": "wpcaregrid-nginx-probe (enforce)", "pid": 321, "starttime_ticks": 12,
+            "kernel_start_ns": 100, "started_ns": 101, "ended_ns": 102,
+            "boot_id": "a" * 32, "matrix_sha256": matrix_sha,
+            "peers": {}, "results": [], "fd0": {}, "scm": {}, "scm_socket": {},
+        }
+        mismatches = {
+            "schema": {"schema": 3},
+            "mode": {"mode": "baseline"},
+            "profile": {"profile": "other-profile"},
+            "label": {"label": "raw-sensitive-label"},
+            "matrix": {"matrix_sha256": "0" * 64},
+            "boot": {"boot_id": "invalid"},
+            "window": {"ended_ns": 100},
+            "pid": {"pid": 0},
+            "starttime": {"starttime_ticks": 0},
+        }
+        verifier = types.SimpleNamespace(expected_checks=lambda *_args: ({}, []))
+        for case, updates in mismatches.items():
+            with self.subTest(case=case):
+                doc = {**valid, **updates}
+                summary, _parsed, status = HELPER._probe_summary(
+                    "wpcaregrid-nginx-confined.json", __import__("json").dumps(doc).encode(),
+                    {"profiles": {"wpcaregrid-nginx": {"peer_roles": []}}}, "confined", verifier,
+                )
+                self.assertEqual(status, "parsed")
+                self.assertFalse(summary["audit_correlation_eligible"])
+
+    def test_ineligible_parsed_probe_suppresses_audit_checks(self):
+        package = {"matrix": {}, "files": {}}
+        baseline_doc = {"boot_id": "a" * 32}
+        confined_doc = {"boot_id": "a" * 32}
+        def probe(name, *_args):
+            if name.endswith("baseline.json"):
+                return ({"audit_correlation_eligible": True}, baseline_doc, "parsed")
+            return ({"audit_correlation_eligible": False}, confined_doc, "parsed")
+        audit_result = {"status": "PARSED", "check_correlation": "DIAGNOSTIC_ONLY", "checks": [{"id": "x"}]}
+        with mock.patch.object(HELPER.os, "geteuid", return_value=0), \
+             mock.patch.object(HELPER, "_load_pins", return_value=(package, object())), \
+             mock.patch.object(HELPER, "_evidence_manifest", return_value=({}, {}, [])), \
+             mock.patch.object(HELPER, "_probe_summary", side_effect=probe), \
+             mock.patch.object(HELPER, "_audit_summary", return_value=audit_result) as audit:
+            report = HELPER.summarize()
+        self.assertIsNone(audit.call_args.args[2])
+        self.assertEqual(report["audit"]["check_correlation"], "UNKNOWN")
+        self.assertNotIn("checks", report["audit"])
+        self.assertIn("confined-identity-or-window-invalid", report["audit"]["reason_codes"])
+
     def test_stderr_sidecars_are_summarized_independently(self):
         probe_error = b"permission denied"
         launcher_error = b"systemd-run: transient service failed"
@@ -87,6 +138,39 @@ class EvidenceExportSafetyTests(unittest.TestCase):
         self.assertEqual(report["pid_profile_window"]["probe_window_correlation"], "UNKNOWN_CONFINED_JSON_UNAVAILABLE")
         self.assertNotIn(secret, __import__("json").dumps(report))
         self.assertNotIn("42", __import__("json").dumps(report))
+
+    def test_audit_window_correlation_checks_parent_then_child_pid(self):
+        boot = "a" * 32
+        record = {"profile": "wpcaregrid-nginx-probe", "pid": 202, "operation": "open",
+                  "name": "/allowed", "_ts_ns": 150, "_journal_ns": 150, "_boot": boot}
+        def window_hit(records, used, profile, boot_id, pid, t0, t1, ops, **filters):
+            for index, row in enumerate(records):
+                if index in used or row.get("profile") != profile or row.get("_boot") != boot_id:
+                    continue
+                if row.get("pid") != pid or row.get("operation") not in ops or not t0 <= row.get("_ts_ns", -1) <= t1:
+                    continue
+                if "name" in filters:
+                    expected_name = filters["name"]
+                    name_matches = row.get("name") in expected_name if isinstance(expected_name, set) else row.get("name") == expected_name
+                    if not name_matches:
+                        continue
+                return index
+            return None
+        verifier = types.SimpleNamespace(
+            parse_audit=lambda _text: ([record], []), expected_checks=lambda *_args: ({
+                "file:one": ("file", {"access": "read", "path": "/allowed"}),
+            }, []),
+            window_hit=window_hit, FILE_OPS={"read": {"open"}}, EPS_NS=0,
+        )
+        confined = {
+            "boot_id": boot, "started_ns": 100, "ended_ns": 200,
+            "peers": {}, "pid": 101,
+            "results": [{"id": "file:one", "pid": 101, "child": 202, "t0": 100, "t1": 200, "errno": 13}],
+        }
+        report = HELPER._audit_summary(b"synthetic", None, confined, {"role_profiles": {}}, verifier)
+        check = report["checks"][0]
+        self.assertTrue(check["verifier_window_hit"])
+        self.assertEqual(check["verifier_window_hit_scope"], "PARENT_OR_CHILD_DIAGNOSTIC")
 
     def test_progress_pipe_emits_only_fixed_stage_enums(self):
         read_fd, write_fd = os.pipe()
