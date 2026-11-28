@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the v3 runner is immutable and pinned to the unchanged 1.0.16 package."""
+"""Verify the historical v3 runner remains immutable and pinned to package 1.0.16."""
 import hashlib
 import json
 import pathlib
@@ -42,7 +42,7 @@ class IoV3BundleIntegrity(unittest.TestCase):
         for name, expected in pins['tools'].items():
             self.assertEqual(digest(PACKAGE / 'acceptance' / name), expected, name)
 
-    def test_bundle_manifest_modes_and_runbook_pins_match(self):
+    def test_historical_bundle_manifest_modes_match(self):
         manifest = {}
         for row in (ARTIFACT / 'SHA256SUMS').read_text().splitlines():
             value, name = row.split('  ', 1)
@@ -59,16 +59,6 @@ class IoV3BundleIntegrity(unittest.TestCase):
             self.assertEqual(digest(path), manifest.get(name, digest(path)), name)
             want = 0o755 if name in {'acceptance-post.py', 'one_shot_bridge.py'} else 0o644
             self.assertEqual(stat.S_IMODE(path.lstat().st_mode), want, name)
-        runbook = (ROOT / 'docs/PHP_FPM_CONFINEMENT_GO20_PHP85_1_0_16.md').read_text()
-        self.assertIn(f"ORCH_REL='{REL}'", runbook)
-        self.assertIn(f"= '{digest(ARTIFACT / 'SHA256SUMS')}'", runbook)
-        for name in ('acceptance-post.py', 'one_shot_bridge.py'):
-            self.assertRegex(runbook, rf"sha256sum {re.escape(name)}.*{manifest[name]}")
-        root_tree = subprocess.run(['git', '-C', str(ROOT), 'write-tree'],
-                                   capture_output=True, check=True, text=True).stdout.strip()
-        tree = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', f'{root_tree}:{REL}'],
-                              capture_output=True, check=True, text=True).stdout.strip()
-        self.assertIn(f"ORCH_TREE='{tree}'", runbook)
 
 
 def importlib_load_runner():

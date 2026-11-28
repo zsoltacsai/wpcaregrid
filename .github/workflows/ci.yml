@@ -76,6 +76,8 @@ jobs:
           python3 -B scripts/tests/php-fpm-confinement-post-io-v2-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-io-v3-integrity-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-io-v3-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-io-v4-integrity-test.py
+          python3 -B scripts/tests/php-fpm-confinement-post-io-v4-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-report-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-bridge-test.py
           python3 -B scripts/tests/php-fpm-confinement-post-evidence-export-test.py
