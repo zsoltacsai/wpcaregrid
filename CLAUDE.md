@@ -794,17 +794,30 @@ A new Claude must assume it has **no chat history**.
 
 ### Start of every session
 
-Read:
-- `CLAUDE.md`
-- relevant `docs/*.md`
+`AGENTS.md` is the provider-neutral entry point. It defines the minimal
+mandatory session context and the task-dependent document-loading matrix.
 
-Then run:
-- `git status`
-- `git log --oneline -12`
+Every session starts with that minimal context, including `git status` and
+`git log --oneline -12`. Read this complete file before making any repository
+change, consistent with the instruction at the top of this file. Load the
+additional documents required by the task, as defined in `AGENTS.md` §1.
 
-Inspect the current branch and recent milestone state.
+For implementation work touching `app/`, `wordpress/`, `routes/`, `scripts/`,
+migrations, authentication, backup/restore, admin access or the operator
+console, also read the Engineering Decision Protocol and relevant domain
+docs/tests. The following sections are a minimum focus, not a substitute for
+the complete-file requirement: §11–§20 (including tenant isolation in §12,
+Stripe webhooks in §13 and Connector pairing in §14) and §30.
+- Release Review Policy V3, the Release Checklist and the current CI/helper
+  implementation are mandatory for PR, release or review work;
+- infrastructure, growth and security-sensitive tasks load their own domain
+  rules.
 
-Do not guess missing context.
+Never skip a security, tenant-isolation, release or business rule relevant to
+the task merely to reduce token usage.
+
+Inspect the current branch and recent milestone state. Do not guess missing
+context.
 
 ### Before implementation
 
