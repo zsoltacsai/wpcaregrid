@@ -10,7 +10,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post'
+ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2'
 sys.path.insert(0, str(ARTIFACT))
 import one_shot_bridge
 from one_shot_bridge import run_one_shot_root_bridge

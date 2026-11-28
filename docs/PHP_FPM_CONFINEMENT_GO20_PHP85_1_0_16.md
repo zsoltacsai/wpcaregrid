@@ -26,7 +26,7 @@ The 1.0.16 regression test checks package checksums and binding, the exact matri
 
 The complete four-profile live procedure is implemented by the separate
 commit-pinned artifact at
-`deploy/php-fpm-confinement/orchestrators/1.0.16-post/`. This is not package
+`deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2/`. This is not package
 1.0.17: the 1.0.16 acceptance inputs, runtime files, profiles, units, route,
 and verifier contract do not change. The Git commit containing this artifact,
 its artifact-tree object, and the artifact `SHA256SUMS` are the outer
@@ -34,6 +34,15 @@ immutable pins. The artifact's `PINNED_INPUTS.json` binds it to the exact
 1.0.16 package tree, manifest, binding, matrix, collector, derive tool, probe,
 sender, sibling listener, verifier, and fixture tool. Do not run an unpinned
 `/tmp` copy or a runner from a mutable worktree.
+
+The `1.0.16-post-io-v2` runner is a side-by-side successor; the installed
+`1.0.16-post` bundle remains untouched. It avoids merging systemd-run's own
+stderr with the probe traceback by routing the transient service's stdout and
+stderr through separate pre-created root-only append files, while capturing
+the systemd-run client's stderr in its own evidence file. It requires
+systemd 249+ (`append:` stream support) and bounds each transient probe unit
+with `TimeoutStartSec=10s`, `RuntimeMaxSec=75s`, and `TimeoutStopSec=5s`. This
+changes no AppArmor profile or production unit.
 
 ### Read-only origin route review artifact
 
@@ -85,7 +94,13 @@ versioned 1.0.16 `fd-sender.py` published and pinned, and the dedicated
 `/run/mysqld/wpcaregrid-acceptance` parent present as root:root 0755. The
 orchestrator verifies package bytes/modes/ownership/links, all 21 fixtures,
 services, parser, sockets, probe-label absence, and a root-only route attestation
-before creating any probe profile or listener. It never creates or repairs a
+before creating any probe profile or listener. Before the first probe it also
+requires PID 1 to be `systemd` and `/proc/1/attr/current` to equal exactly
+`unconfined` (allowing one trailing newline); every other or unreadable value is
+HOLD. The redacted preflight summary records only the boolean
+`pin_checks.system_manager_unconfined`, never the raw label. This host check is
+required because systemd must open the append targets before the service's
+AppArmor profile transition. It never creates or repairs a
 fixture/canary parent and never changes `/run/mysqld` ownership or mode.
 
 The route attestation is a separate root:root 0600 regular file with one link,
@@ -127,10 +142,10 @@ path before extraction. Run as root from the trusted existing checkout, with
 ```sh
 set -euo pipefail
 ORCH_COMMIT='<exact reviewed merge commit>'
-ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post'
-ORCH_TREE='dbd8f0dad86eab587fd64a86a347a14f7c5a9d38'
+ORCH_REL='deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2'
+ORCH_TREE='c10e1112a463add9012381c54ead3ff291d6b931'
 test "$(git -C /home/deploy/wpcaregrid rev-parse "$ORCH_COMMIT:$ORCH_REL")" = "$ORCH_TREE"
-DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post'
+DEST='/usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v2'
 BASE='/usr/local/libexec/wpcg-gate2-orchestrators'
 test -d /usr/local/libexec && test ! -L /usr/local/libexec
 test "$(stat -c '%u:%g:%a' /usr/local/libexec)" = '0:0:755'
@@ -164,9 +179,9 @@ for file in "$DEST"/*; do
 done
 cd "$DEST"
 sha256sum -c --strict SHA256SUMS
-test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '7dc579e508eef5c116d6462cfde569b60d3b1eceae583f0adf5cfd736d16f866'
+test "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = '1216b8b761492843c0b4cec4e5a899bc4623c995350531f65e4faaae98578177'
 test "$(sha256sum one_shot_bridge.py | cut -d' ' -f1)" = '6fe069525fa5e0f9b4b01f96e590323be4eec2699101693426052a1d569ac634'
-test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'f3c8bcebece6e13132e29fc0172c96d9baa7c71c833642f3ada6c5d6cb257900'
+test "$(sha256sum acceptance-post.py | cut -d' ' -f1)" = 'f429350dac392f619530cd28bdbf2bdac0dc618a4c8e8fe760fb20d0ea03e4c2'
 ```
 
 Before proceeding, compare the staged file names to the exact artifact tree,
@@ -191,7 +206,7 @@ logs, or evidence. Example invocation (replace the file capability and the three
 already approved, exact host paths):
 
 ```sh
-python3 -B /usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post/one_shot_bridge.py \
+python3 -B /usr/local/libexec/wpcg-gate2-orchestrators/1.0.16-post-io-v2/one_shot_bridge.py \
   --root-card-file '<one-use private-card file capability>' \
   --package-dir '/root/<existing staged package-1.0.16 path>' \
   --evidence-envelope '/root/<new 0700 evidence envelope>' \

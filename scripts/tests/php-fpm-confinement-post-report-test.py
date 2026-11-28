@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post'
+ARTIFACT = ROOT / 'deploy/php-fpm-confinement/orchestrators/1.0.16-post-io-v2'
 SCRIPT = ARTIFACT / 'acceptance-post.py'
 spec = importlib.util.spec_from_file_location('acceptance_post_local_test', SCRIPT)
 mod = importlib.util.module_from_spec(spec)
